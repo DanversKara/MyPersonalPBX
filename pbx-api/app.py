@@ -114,7 +114,7 @@ def _migrate(c):
     # voip.ms SMS/MMS integration tables + settings (best-route)
     c.execute("""CREATE TABLE IF NOT EXISTS did_sms_routes (
       did TEXT PRIMARY KEY,
-      dest_exten TEXT NOT NULL,
+      dest_exten TEXT NOT NULL,  -- comma-separated destination extensions
       label TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""")
@@ -1636,39 +1636,45 @@ def _handle_voipms_inbound(params: dict) -> tuple[bool, str]:
                 return True, "duplicate"
             c.execute("INSERT OR IGNORE INTO voipms_sms_dedupe (voipms_id) VALUES (?)", (voipms_id,))
         dest_exten = voipms_sms.lookup_sms_route(c, did_raw)
-        if not dest_exten:
+        dests = voipms_sms.split_dest_exten(dest_exten)
+        if not dests:
             c.commit()
             return False, f"no SMS route for DID {did_raw}"
-        dest = c.execute("SELECT id, exten FROM logins WHERE exten=? AND enabled=1", (dest_exten,)).fetchone()
-        if not dest:
+        valid = [d for d in dests
+                 if c.execute("SELECT 1 FROM logins WHERE exten=? AND enabled=1", (d,)).fetchone()]
+        if not valid:
             c.commit()
-            return False, f"dest ext {dest_exten} not found/disabled"
+            return False, f"dest exts {','.join(dests)} not found/disabled"
         from_disp = voipms_sms.e164(from_raw) or from_raw.strip()[:32]
         # Store: from_ext = external E.164, to_ext = internal exten.
         # My Phone groups by correspondent, so the user sees "+1555..." thread.
         # The poller passes the original UTC timestamp via params["sent_at"].
         sent_at = (params.get("sent_at") or "").strip()
-        # Remember which DID this arrived on so replies go out from the same DID.
+        # One stored copy per destination exten, so each inbox (My Phone,
+        # ESP/HA) sees it. Replies stay conversation-aware via via_did.
         via_did = voipms_sms.normalize_did(did_raw)
         if sent_at and re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", sent_at):
-            c.execute("INSERT INTO messages (from_ext, to_ext, body, login_id, sent_at, via_did)"
-                      " VALUES (?,?,?,?,?,?)",
-                      (from_disp, dest_exten, body, None, sent_at, via_did))
+            for d in valid:
+                c.execute("INSERT INTO messages (from_ext, to_ext, body, login_id, sent_at, via_did)"
+                          " VALUES (?,?,?,?,?,?)",
+                          (from_disp, d, body, None, sent_at, via_did))
         else:
-            c.execute("INSERT INTO messages (from_ext, to_ext, body, login_id, via_did)"
-                      " VALUES (?,?,?,?,?)",
-                      (from_disp, dest_exten, body, None, via_did))
+            for d in valid:
+                c.execute("INSERT INTO messages (from_ext, to_ext, body, login_id, via_did)"
+                          " VALUES (?,?,?,?,?)",
+                          (from_disp, d, body, None, via_did))
         c.commit()
-    # Deliver to Zoiper via pbx-brain (best effort; stored anyway for My Phone/ESP)
-    try:
-        import json as _json, urllib.request as _ur
-        brain_url = os.environ.get("PBX_BRAIN_STATUS", "http://127.0.0.1:8099") + "/messages/send"
-        req = _ur.Request(brain_url,
-                          data=_json.dumps({"to": dest_exten, "from": from_disp, "body": body}).encode(),
-                          headers={"Content-Type": "application/json"}, method="POST")
-        _ur.urlopen(req, timeout=5).read()
-    except Exception:
-        pass
+    # Deliver to Zoiper/softphones via pbx-brain (best effort; stored anyway)
+    for d in valid:
+        try:
+            import json as _json, urllib.request as _ur
+            brain_url = os.environ.get("PBX_BRAIN_STATUS", "http://127.0.0.1:8099") + "/messages/send"
+            req = _ur.Request(brain_url,
+                              data=_json.dumps({"to": d, "from": from_disp, "body": body}).encode(),
+                              headers={"Content-Type": "application/json"}, method="POST")
+            _ur.urlopen(req, timeout=5).read()
+        except Exception:
+            pass
     return True, "ok"
 
 
@@ -1808,7 +1814,7 @@ def sms_routes_page(request: Request):
         cfg = voipms_sms.get_voipms_config(c)
         exts = [r["exten"] for r in c.execute("SELECT exten FROM logins WHERE enabled=1 ORDER BY exten")]
     tr = "".join(
-        f"<tr><td>{esc(voipms_sms.e164(r['did']))}</td><td>{esc(r['dest_exten'])}</td>"
+        f"<tr><td>{esc(voipms_sms.e164(r['did']))}</td><td>{esc(r['dest_exten']).replace(',', ', ')}</td>"
         f"<td>{esc(r['label'])}</td>"
         f"<td><a href='/sms-routes/{esc(r['did'])}/edit'>Edit</a> "
         f"<a href='/sms-routes/{esc(r['did'])}/delete' onclick=\"return confirm('Delete route for {esc(r['did'])}?')\">Delete</a></td></tr>"
@@ -1855,12 +1861,15 @@ def sms_route_edit_page(request: Request, did: str):
             exts = [x["exten"] for x in c.execute("SELECT exten FROM logins WHERE enabled=1 ORDER BY exten")]
     def v(k, d=""):
         return esc(r[k] if r and r[k] else d)
-    opts = "".join(f"<option value='{esc(e)}' {'selected' if r and r['dest_exten']==e else ''}>{esc(e)}</option>" for e in exts)
+    cur = set()
+    if r and r["dest_exten"]:
+        cur = set(voipms_sms.split_dest_exten(r["dest_exten"]))
+    opts = "".join(f"<label style='display:block'><input type='checkbox' name='dest_exten' value='{esc(e)}' {'checked' if e in cur else ''}> {esc(e)}</label>" for e in exts)
     body = f"""<h2>{'Edit' if r else 'Add'} DID SMS route</h2>
 <form method="post" action="/sms-routes/{esc(did)}/edit">
 {_csrf_field(s)}
 <label>DID (digits, e.g. 15551234567)<br><input name="new_did" value="{v('did', '' if did=='new' else did)}" {'readonly' if r else 'required'}></label><br>
-<label>Destination extension<br><select name="dest_exten" required>{opts}</select></label><br>
+<label>Destination extensions (check one or more)<br>{opts}</label><br>
 <label>Label<br><input name="label" value="{v('label')}" size="40" placeholder="e.g. Main line"></label><br><br>
 <button class="btn" type="submit">Save</button> <a href="/sms-routes">Cancel</a>
 </form>"""
@@ -1877,13 +1886,16 @@ async def sms_route_edit_save(request: Request, did: str):
     await _check_csrf(request, s)
     f = await request.form()
     new_did = voipms_sms.normalize_did((f.get("new_did") or did).strip())
-    dest_exten = (f.get("dest_exten") or "").strip()
+    picked = [e.strip() for e in f.getlist("dest_exten") if e.strip()]
     label = (f.get("label") or "").strip()[:80]
-    if not new_did or not dest_exten:
+    if not new_did or not picked:
         return RedirectResponse("/sms-routes", status_code=303)
     with db() as c:
-        if not c.execute("SELECT 1 FROM logins WHERE exten=? AND enabled=1", (dest_exten,)).fetchone():
+        ok_exts = {x["exten"] for x in c.execute("SELECT exten FROM logins WHERE enabled=1")}
+        dests = [e for e in dict.fromkeys(picked) if e in ok_exts]
+        if not dests:
             return RedirectResponse("/sms-routes", status_code=303)
+        dest_exten = ",".join(dests)
         c.execute("INSERT INTO did_sms_routes (did, dest_exten, label) VALUES (?,?,?) "
                   "ON CONFLICT(did) DO UPDATE SET dest_exten=excluded.dest_exten, label=excluded.label",
                   (new_did, dest_exten, label))

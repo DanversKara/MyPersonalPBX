@@ -162,6 +162,11 @@ def send_mms_via_voipms(api_username: str, api_password: str, did: str,
     return voipms_api_call(api_username, api_password, params)
 
 
+def split_dest_exten(s):
+    """Comma-separated dest_exten -> list of extension strings."""
+    return [x.strip() for x in (s or "").split(",") if x.strip()]
+
+
 def lookup_sms_route(c, did: str):
     """Find dest_exten for a DID. Tries normalized and raw forms."""
     did_norm = normalize_did(did)
@@ -185,8 +190,10 @@ def lookup_sender_did(c, from_exten: str):
     2. voipms_default_did kv_setting
     3. First did_sms_routes row
     """
-    r = c.execute("SELECT did FROM did_sms_routes WHERE dest_exten=? ORDER BY did LIMIT 1",
-                  (from_exten,)).fetchone()
+    digits = "".join(ch for ch in (from_exten or "") if ch.isdigit())
+    r = c.execute("SELECT did FROM did_sms_routes WHERE (',' || dest_exten || ',') LIKE ? "
+                  "ORDER BY did LIMIT 1",
+                  ("%,{},%".format(digits),)).fetchone()
     if r:
         return r["did"]
     try:

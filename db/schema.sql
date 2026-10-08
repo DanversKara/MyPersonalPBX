@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS message_hidden (
 -- as the sender by default.
 CREATE TABLE IF NOT EXISTS did_sms_routes (
   did TEXT PRIMARY KEY,
-  dest_exten TEXT NOT NULL,
+  dest_exten TEXT NOT NULL,  -- comma-separated destination extensions
   label TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
