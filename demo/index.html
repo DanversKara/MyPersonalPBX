@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>own-pbx — Interactive Demo</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;background:#f5f5f5;color:#222}
+.nav{background:#1a1a2e;color:#fff;padding:12px 20px;display:flex;gap:20px;align-items:center}
+.nav a{color:#aaccff;text-decoration:none}
+.nav a:hover{color:#fff}
+.nav .sp{flex:1}
+.wrap{max-width:1100px;margin:20px auto;padding:0 20px}
+.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px;border-bottom:1px solid #eee}
+th{background:#f8f8f8}
+.btn{background:#1a1a2e;color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer}
+.btn:hover{background:#2a2a4e}
+.btn.ghost{background:#fff;color:#1a1a2e;border:1px solid #1a1a2e}
+input,select,textarea{padding:8px;border:1px solid #ddd;border-radius:4px;margin:4px 0}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.tabs a{padding:8px 16px;background:#fff;border-radius:4px;text-decoration:none;color:#333}
+.tabs a.on{background:#1a1a2e;color:#fff}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:#f8f8f8;border-radius:8px;padding:14px;text-align:center}
+.stat b{font-size:26px;display:block}
+.stat span{color:#666;font-size:12px}
+.muted{color:#888;font-size:12px}
+.ok{color:#0a7d2c}.bad{color:#c22}.warn{color:#8a5a00}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#eee;color:#444}
+.pill.ok{background:#e3f5e8;color:#0a7d2c}.pill.bad{background:#fde8e8;color:#b31d1d}.pill.warn{background:#fff3d6;color:#8a5a00}
+.flash{padding:10px 14px;border-radius:6px;margin-bottom:16px;background:#f3f3f3}
+.flash.ok{background:#e3f5e8;color:#0a5a22}
+.ucp-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px}
+.ucp-head h2{margin:0 0 2px}
+.subtabs{display:flex;gap:4px;flex-wrap:wrap;margin:-4px 0 18px;border-bottom:1px solid #eee}
+.subtabs a{padding:8px 12px;text-decoration:none;color:#555;border-bottom:2px solid transparent;margin-bottom:-1px}
+.subtabs a.on{color:#1a1a2e;border-color:#1a1a2e;font-weight:600}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:22px}
+.tile{background:#f8f8f8;border-radius:8px;padding:14px;color:inherit;text-decoration:none;display:block}
+.tile .lbl{display:block;color:#666;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.tile b{font-size:28px}
+.tile.link:hover{background:#eef}
+.msgs{display:grid;grid-template-columns:220px 1fr;gap:16px;min-height:300px}
+.convs{border-right:1px solid #eee;padding-right:8px}
+.conv{display:block;padding:8px;border-radius:6px;text-decoration:none;color:inherit;cursor:pointer}
+.conv span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.conv.on{background:#eef}
+.thread{display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto;padding:4px}
+.bubble{max-width:70%;background:#f1f1f1;padding:8px 12px;border-radius:12px;align-self:flex-start}
+.bubble.mine{background:#1a1a2e;color:#fff;align-self:flex-end}
+.bubble .muted{display:block;font-size:11px;margin-top:2px}
+.bubble.mine .muted{color:#bbc}
+.panel{border:1px solid #eee;border-radius:8px;padding:16px}
+.panel h3{margin-top:0}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+tr.unread td{font-weight:600}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2856c7;margin-right:6px}
+/* demo extras */
+.demo-ribbon{background:#8a5a00;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:.06em}
+.login-wrap{max-width:420px;margin:80px auto}
+.login-wrap .card{padding:32px}
+.login-wrap label{display:block;margin:12px 0 4px;font-size:14px;font-weight:600}
+.login-wrap input,.login-wrap select{width:100%;box-sizing:border-box}
+#toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:99}
+.toast{background:#1a1a2e;color:#fff;padding:12px 16px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:320px;font-size:14px;animation:slidein .25s ease-out}
+.toast b{display:block;margin-bottom:2px}
+@keyframes slidein{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+.role-switch{display:flex;gap:6px;align-items:center;font-size:13px}
+.role-switch a{padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.12);color:#aaccff}
+.role-switch a.on{background:#fff;color:#1a1a2e;font-weight:700}
+.bars{display:flex;align-items:flex-end;gap:10px;height:160px;padding:10px 0}
+.bar{flex:1;background:#1a1a2e;border-radius:4px 4px 0 0;min-width:30px;position:relative}
+.bar span{position:absolute;bottom:-22px;left:0;right:0;text-align:center;font-size:11px;color:#666}
+.bar i{position:absolute;top:-20px;left:0;right:0;text-align:center;font-size:11px;font-style:normal}
+.mms-img{width:180px;height:120px;border-radius:8px;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;margin-bottom:4px}
+.live-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#0a7d2c;margin-right:6px;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.replybox{display:flex;gap:8px;margin-top:12px}
+.replybox input{flex:1}
+@media (max-width:640px){.msgs{grid-template-columns:1fr}.convs{border:0}table{display:block;overflow-x:auto}.wrap{padding:0 10px}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toasts"></div>
+<script>
+"use strict";
+/* ============================================================
+   own-pbx interactive demo — 100% static, all data is fictional.
+   ============================================================ */
+
+/* ---------- fake data ---------- */
+const LOGINS = [
+  {ext:"8800", name:"John Carter", role:"admin", status:"Registered", email:"john@example.com"},
+  {ext:"8801", name:"Sarah Miller", role:"user", status:"Registered", email:"sarah@example.com"},
+  {ext:"8802", name:"Mike Torres", role:"user", status:"Registered", email:"mike@example.com"},
+  {ext:"8803", name:"Lisa Chen", role:"user", status:"Unregistered", email:"lisa@example.com"},
+];
+const DIDS = [
+  {did:"(555) 019-2837", digits:"15550192837", ext:"8800", label:"Main line"},
+  {did:"(555) 222-3333", digits:"15552223333", ext:"8800", label:"Sales"},
+  {did:"(555) 444-5555", digits:"15554445555", ext:"8800", label:"Support"},
+  {did:"(555) 666-7777", digits:"15556667777", ext:"8800", label:"After hours"},
+];
+const FEATURES = [
+  {code:"*97", name:"Voicemail check", desc:"Listen to your voicemail messages", enabled:true, access:"all"},
+  {code:"*98", name:"Record greeting", desc:"Record your voicemail greeting", enabled:true, access:"all"},
+  {code:"*555", name:"ChanSpy monitor", desc:"Stay on the line and listen to calls: *555<ext> monitors one extension, bare *555 scans any call; * / # hops", enabled:true, access:"admin"},
+  {code:"*60", name:"Conference room", desc:"Join conference room 60", enabled:true, access:"all"},
+  {code:"*70", name:"DISA", desc:"Outside dial tone after entering a PIN", enabled:true, access:"all"},
+];
+let CDR = [
+  {t:"10:42:15", from:"8801", to:"8802", dur:"04:12", disp:"ANSWERED", dir:"Internal"},
+  {t:"10:31:02", from:"+1 (555) 010-7788", to:"(555) 019-2837", dur:"02:47", disp:"ANSWERED", dir:"Inbound"},
+  {t:"10:18:44", from:"8800", to:"+1 (555) 010-2233", dur:"06:03", disp:"ANSWERED", dir:"Outbound"},
+  {t:"09:57:20", from:"+1 (555) 010-4455", to:"(555) 222-3333", dur:"00:00", disp:"NO ANSWER", dir:"Inbound"},
+  {t:"09:41:09", from:"8802", to:"8803", dur:"11:26", disp:"ANSWERED", dir:"Internal"},
+  {t:"09:22:51", from:"+1 (555) 010-9901", to:"(555) 019-2837", dur:"01:15", disp:"ANSWERED", dir:"Inbound"},
+  {t:"09:05:33", from:"8803", to:"+1 (555) 010-6677", dur:"03:38", disp:"ANSWERED", dir:"Outbound"},
+  {t:"08:48:12", from:"+1 (555) 010-1122", to:"(555) 444-5555", dur:"00:00", disp:"BUSY", dir:"Inbound"},
+];
+let THREADS = [
+  {id:"t1", contact:"+1 (555) 010-2233", via:"(555) 019-2837", unread:1, msgs:[
+    {mine:false, body:"Hi! Do you have the AX-200 router in stock?", at:"10:15"},
+    {mine:true, body:"Yes, we have 12 left. Want me to hold one?", at:"10:17"},
+    {mine:false, body:"Yes please! I'll swing by after lunch.", at:"10:41"},
+  ]},
+  {id:"t2", contact:"+1 (555) 010-4455", via:"(555) 222-3333", unread:0, msgs:[
+    {mine:false, body:"What are your Saturday hours?", at:"09:12"},
+    {mine:true, body:"We're open 9am–2pm on Saturdays.", at:"09:14"},
+    {mine:false, body:"Perfect, see you then.", at:"09:15"},
+  ]},
+  {id:"t3", contact:"+1 (555) 010-7788", via:"(555) 019-2837", unread:0, mms:true, msgs:[
+    {mine:false, body:"The new sign looks great!", at:"08:52"},
+    {mine:false, body:"[MMS: photo]", mmsImg:true, at:"08:52"},
+    {mine:true, body:"Thanks! The crew finished it yesterday.", at:"08:58"},
+  ]},
+];
+let liveCalls = [
+  {from:"8801", to:"8802", dir:"Internal", start:Date.now()-182000},
+  {from:"+1 (555) 010-7788", to:"(555) 019-2837", dir:"Inbound", start:Date.now()-47000},
+];
+const VMS = [
+  {from:"+1 (555) 010-3344", at:"10:02", dur:"0:42", unread:true},
+  {from:"8802", at:"08:37", dur:"1:15", unread:true},
+  {from:"+1 (555) 010-9901", at:"Yesterday 16:20", dur:"0:31", unread:false},
+];
+const RECS = [
+  {name:"2026-10-08_8801-8802.mp3", at:"10:38", dur:"4:12", size:"3.9 MB"},
+  {name:"2026-10-08_inbound-0192837.mp3", at:"10:31", dur:"2:47", size:"2.6 MB"},
+  {name:"2026-10-08_8800-outbound.mp3", at:"10:18", dur:"6:03", size:"5.7 MB"},
+];
+const RINGGROUPS = [
+  {num:"600", name:"Sales", members:"8802, 8803", strategy:"Ring all"},
+  {num:"601", name:"Support", members:"8801, 8803", strategy:"Hunt"},
+];
+const IVRS = [
+  {num:"7000", name:"Main menu", desc:"Thank you for calling… press 1 for sales, 2 for support"},
+  {num:"7001", name:"After hours", desc:"We're closed… press 1 to leave a voicemail"},
+];
+const APIKEYS = [
+  {name:"Home Assistant", key:"pbx_sk_9f2…a41c", created:"2026-09-14", last:"2 min ago"},
+  {name:"ESP32 doorbell", key:"pbx_sk_77b…e902", created:"2026-09-20", last:"1 h ago"},
+];
+const WEEK = [["Mon",42],["Tue",55],["Wed",38],["Thu",61],["Fri",47],["Sat",18],["Sun",9]];
+
+/* ---------- state ---------- */
+const S = {
+  role: sessionStorage.getItem("pbx_demo_role") || null, // admin | user
+  route: "dashboard",
+  thread: "t1",
+  flash: "",
+};
+function me(){ return S.role==="admin" ? LOGINS[0] : LOGINS[1]; }
+function esc(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function fmtDur(ms){ const s=Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"); }
+function toast(title, body){
+  const d=document.createElement("div"); d.className="toast";
+  d.innerHTML="<b>"+esc(title)+"</b>"+esc(body);
+  document.getElementById("toasts").appendChild(d);
+  setTimeout(()=>d.remove(), 5000);
+}
+
+/* ---------- nav ---------- */
+const ADMIN_TABS = [
+  ["dashboard","Dashboard"],["logins","Logins"],["trunks","Trunks"],["routes","Routes"],
+  ["ringgroups","Ring groups"],["cdr","CDR"],["voicemail","Voicemail"],["recordings","Recordings"],
+  ["messages","Messages"],["sms","SMS"],["features","Features"],["ivr","IVR"],
+  ["billing","Billing"],["email","Email"],["network","Network"],["e911","E911"],
+  ["reports","Reports"],["apikeys","API Keys"],["ucp","My Phone"],
+];
+const USER_TABS = [["ucp","Overview"],["ucp-calls","Calls"],["ucp-vm","Voicemail"],["ucp-msgs","Messages"]];
+
+function nav(){
+  if(!S.role) return "";
+  const tabs = S.role==="admin" ? ADMIN_TABS : USER_TABS;
+  const isUcp = S.route.startsWith("ucp");
+  const links = tabs.map(([r,l])=>{
+    const on = S.route===r || (r==="ucp" && isUcp && S.role==="admin");
+    return `<a href="#/${r}" class="${on?"on":""}">${l}</a>`;
+  }).join("");
+  const who = S.role==="admin" ? "John Carter (admin)" : "Sarah Miller (8801)";
+  return `<div class="nav"><strong>PBX Panel</strong> <span class="demo-ribbon">DEMO</span>
+    <span class="role-switch">
+      <a href="#" onclick="switchRole('admin');return false" class="${S.role==="admin"?"on":""}">Admin view</a>
+      <a href="#" onclick="switchRole('user');return false" class="${S.role==="user"?"on":""}">User view</a>
+    </span><span class="sp"></span>
+    <span style="font-size:13px">${esc(who)}</span>
+    <a href="#/login" onclick="logout();return false">Logout</a></div>
+    <div class="wrap">${S.role==="admin"?`<div class="tabs">${links}</div>`:`<div class="ucp-head"><div><h2>My Phone</h2><span class="muted">Ext ${me().ext} · ${esc(me().name)}</span></div></div><div class="subtabs">${links}</div>`}`;
+}
+function switchRole(r){ S.role=r; sessionStorage.setItem("pbx_demo_role",r); S.route = r==="admin"?"dashboard":"ucp"; location.hash="#/"+S.route; }
+function logout(){ S.role=null; sessionStorage.removeItem("pbx_demo_role"); location.hash="#/login"; }
+
+/* ---------- login ---------- */
+function vLogin(){
+  return `<div class="wrap"><div class="login-wrap"><div class="card">
+    <h2 style="margin-top:0">PBX Panel <span class="demo-ribbon">DEMO</span></h2>
+    <p class="muted">Interactive demo — all data is fictional. Pick a role, password is pre-filled.</p>
+    <label>Log in as</label>
+    <select id="login-role">
+      <option value="admin" selected>Administrator — John Carter (8800)</option>
+      <option value="user">User — Sarah Miller (8801)</option>
+    </select>
+    <label>Password</label>
+    <input type="password" id="login-pw" value="demo">
+    <p style="margin-top:16px"><button class="btn" onclick="doLogin()" style="width:100%">Log in</button></p>
+    <p class="muted">Use the <b>Admin view / User view</b> toggle in the top bar to switch roles without logging out.</p>
+  </div></div></div>`;
+}
+function doLogin(){
+  const r = document.getElementById("login-role").value;
+  switchRole(r);
+  toast("Welcome to the demo", r==="admin" ? "Logged in as Administrator." : "Logged in as Sarah Miller (8801).");
+}
+
+/* ---------- router ---------- */
+const VIEWS = {};
+function render(){
+  const app = document.getElementById("app");
+  const h = location.hash || "#/login";
+  const parts = h.replace(/^#\//,"").split("/");
+  let route = parts[0] || "login";
+  if(route==="login" || !S.role){ S.route="login"; app.innerHTML = vLogin(); document.title="own-pbx — Demo login"; return; }
+  const tabs = S.role==="admin" ? ADMIN_TABS : USER_TABS;
+  if(!tabs.some(([r])=>r===route) && !(S.role==="admin" && route.startsWith("ucp"))){
+    route = S.role==="admin" ? "dashboard" : "ucp";
+  }
+  S.route = route;
+  const fn = VIEWS[route] || VIEWS.dashboard;
+  app.innerHTML = nav() + fn() + "</div>";
+  const t = document.querySelector(".thread"); if(t) t.scrollTop = t.scrollHeight;
+  document.title = "own-pbx demo — " + route;
+}
+window.addEventListener("hashchange", render);
+
+/* ---------- admin views ---------- */
+VIEWS.dashboard = function(){
+  const calls = liveCalls.map((c,i)=>`<tr><td><span class="live-dot"></span>${esc(c.from)}</td><td>${esc(c.to)}</td><td>${c.dir}</td><td data-dur="${c.start}">${fmtDur(Date.now()-c.start)}</td></tr>`).join("");
+  return `<h2>Dashboard</h2>
+  ${S.flash?`<div class="flash ok">${esc(S.flash)}</div>`:""}
+  <div class="stats">
+    <div class="stat"><b>4</b><span>Extensions</span></div>
+    <div class="stat"><b id="stat-calls">${liveCalls.length}</b><span>Active calls</span></div>
+    <div class="stat"><b>2</b><span>New voicemails</span></div>
+    <div class="stat"><b>3</b><span>SMS today</span></div>
+  </div>
+  <div class="card"><h3 style="margin-top:0">Live calls</h3>
+    <table><tr><th>From</th><th>To</th><th>Direction</th><th>Duration</th></tr>
+    <tbody id="live-body">${calls || `<tr><td colspan="4" class="muted">No active calls — dial *555 to monitor anyway.</td></tr>`}</tbody></table>
+    <p class="muted">Tip: this table updates live. New calls appear automatically every few seconds.</p>
+  </div>
+  <div class="grid2">
+    <div class="card"><h3 style="margin-top:0">Services</h3><table>
+      ${["Asterisk 22","Kamailio","pbx-brain","pbx-api"].map(s=>`<tr><td>${s}</td><td><span class="pill ok">Running</span></td></tr>`).join("")}
+    </table></div>
+    <div class="card"><h3 style="margin-top:0">Recent activity</h3><table>
+      <tr><td>10:41</td><td>SMS from +1 (555) 010-2233 → 8800</td></tr>
+      <tr><td>10:38</td><td>Call 8801 → 8802 answered</td></tr>
+      <tr><td>10:31</td><td>Inbound call on (555) 019-2837</td></tr>
+      <tr><td>10:02</td><td>Voicemail from +1 (555) 010-3344</td></tr>
+    </table></div>
+  </div>`;
+};
+
+VIEWS.logins = function(){
+  const rows = LOGINS.map(l=>`<tr><td><b>${l.ext}</b></td><td>${esc(l.name)}</td><td>${l.role}</td>
+    <td><span class="pill ${l.status==="Registered"?"ok":"warn"}">${l.status}</span></td>
+    <td class="muted">${esc(l.email)}</td></tr>`).join("");
+  return `<h2>Logins</h2><div class="card"><table>
+    <tr><th>Ext</th><th>Name</th><th>Role</th><th>Status</th><th>Email</th></tr>${rows}</table></div>`;
+};
+
+VIEWS.trunks = function(){
+  return `<h2>Trunks</h2><div class="card">
+    <h3 style="margin-top:0">voip.ms <span class="pill ok">Connected</span></h3>
+    <table class="kv">
+      <tr><td>Server</td><td>sip.voip.ms:5060</td></tr>
+      <tr><td>Username</td><td>demo trunk (masked)</td></tr>
+      <tr><td>Codecs</td><td>ulaw, alaw, g722</td></tr>
+      <tr><td>Last register</td><td>38 seconds ago</td></tr>
+    </table>
+    <p><button class="btn ghost" onclick="toast('Trunk test','Registration OK — 42ms round trip (demo).')">Test trunk</button></p>
+  </div></div>`;
+};
+
+VIEWS.routes = function(){
+  const rows = DIDS.map(d=>`<tr><td>${d.did}</td><td>${d.ext}</td><td>${esc(d.label)}</td><td><span class="pill ok">Enabled</span></td></tr>`).join("");
+  return `<h2>Inbound routes</h2><div class="card"><table>
+    <tr><th>DID</th><th>Destination ext</th><th>Label</th><th></th></tr>${rows}</table>
+    <p class="muted">Inbound calls to each DID ring the mapped extension.</p></div>`;
+};
+
+VIEWS.ringgroups = function(){
+  const rows = RINGGROUPS.map(g=>`<tr><td><b>${g.num}</b></td><td>${esc(g.name)}</td><td>${g.members}</td><td>${g.strategy}</td></tr>`).join("");
+  return `<h2>Ring groups</h2><div class="card"><table>
+    <tr><th>Number</th><th>Name</th><th>Members</th><th>Strategy</th></tr>${rows}</table></div>`;
+};
+
+VIEWS.cdr = function(){
+  const rows = CDR.map(c=>`<tr><td>${c.t}</td><td>${esc(c.from)}</td><td>${esc(c.to)}</td><td>${c.dir}</td><td>${c.dur}</td>
+    <td><span class="pill ${c.disp==="ANSWERED"?"ok":c.disp==="BUSY"?"warn":"bad"}">${c.disp}</span></td></tr>`).join("");
+  return `<h2>Call detail records</h2><div class="card"><table>
+    <tr><th>Time</th><th>From</th><th>To</th><th>Direction</th><th>Duration</th><th>Disposition</th></tr>${rows}</table></div>`;
+};
+
+VIEWS.voicemail = function(){
+  const rows = VMS.map(v=>`<tr class="${v.unread?"unread":""}"><td>${v.unread?'<span class="dot"></span>':""}${esc(v.from)}</td><td>${v.at}</td><td>${v.dur}</td>
+    <td><button class="btn ghost" onclick="toast('Voicemail','Playing demo message… (no audio in demo)')\">▶ Play</button></td></tr>`).join("");
+  return `<h2>Voicemail</h2><div class="card"><h3 style="margin-top:0">Mailbox 8800</h3><table>
+    <tr><th>From</th><th>Received</th><th>Length</th><th></th></tr>${rows}</table></div>`;
+};
+
+VIEWS.recordings = function(){
+  const rows = RECS.map(r=>`<tr><td>${r.name}</td><td>${r.at}</td><td>${r.dur}</td><td>${r.size}</td></tr>`).join("");
+  return `<h2>Recordings</h2><div class="card"><table>
+    <tr><th>File</th><th>Recorded</th><th>Length</th><th>Size</th></tr>${rows}</table>
+    <p class="muted">Call recording is enabled on all extensions in this demo.</p></div>`;
+};
+
+function threadList(){
+  return THREADS.map(t=>{
+    const last = t.msgs[t.msgs.length-1];
+    return `<div class="conv ${S.thread===t.id?"on":""}" onclick="S.thread='${t.id}';render()">
+      <span><b>${esc(t.contact)}</b> ${t.unread?'<span class="dot"></span>':""}</span>
+      <span class="muted">${esc(last.body)} · via ${esc(t.via)}</span></div>`;
+  }).join("");
+}
+function threadView(){
+  const t = THREADS.find(x=>x.id===S.thread) || THREADS[0];
+  const bubbles = t.msgs.map(m=>{
+    const img = m.mmsImg ? `<div class="mms-img">📷 photo.jpg</div>` : "";
+    return `<div class="bubble ${m.mine?"mine":""}">${img}${esc(m.body)}<span class="muted">${m.at}${m.mine?" · via "+esc(t.via):""}</span></div>`;
+  }).join("");
+  return `<h3 style="margin-top:0">${esc(t.contact)} <span class="muted">via ${esc(t.via)}</span></h3>
+    <div class="thread">${bubbles}</div>
+    <div class="replybox"><input id="reply" placeholder="Type a reply…" onkeydown="if(event.key==='Enter')sendSms('${t.id}')">
+    <button class="btn" onclick="sendSms('${t.id}')">Send</button></div>
+    <p class="muted">Replies go out from <b>${esc(t.via)}</b> — the DID the contact texted (conversation-aware routing).</p>`;
+}
+function sendSms(tid){
+  const inp = document.getElementById("reply");
+  const body = (inp.value||"").trim(); if(!body) return;
+  const t = THREADS.find(x=>x.id===tid);
+  const now = new Date(); const at = String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
+  t.msgs.push({mine:true, body, at}); t.unread = 0; inp.value="";
+  render();
+  setTimeout(()=>{
+    const replies = ["Got it, thanks!","Perfect, I'll be there soon.","Can you send me the address?","👍"];
+    const r = replies[Math.floor(Math.random()*replies.length)];
+    const n2 = new Date(); const at2 = String(n2.getHours()).padStart(2,"0")+":"+String(n2.getMinutes()).padStart(2,"0");
+    t.msgs.push({mine:false, body:r, at:at2});
+    if(S.route==="messages"||S.route==="ucp-msgs") render();
+    toast("New SMS from "+t.contact, r);
+  }, 4000);
+  toast("SMS sent", "Delivered via "+t.via+" (demo).");
+}
+VIEWS.messages = function(){
+  return `<h2>Messages</h2><div class="card"><div class="msgs">
+    <div class="convs">${threadList()}</div><div>${threadView()}</div></div></div>`;
+};
+
+VIEWS.sms = function(){
+  const rows = DIDS.map(d=>`<tr><td>${d.did}</td><td>${d.ext}</td><td>${esc(d.label)}</td>
+    <td><a href="#" onclick="toast('Route','Edit route (disabled in demo)');return false">Edit</a></td></tr>`).join("");
+  return `<h2>SMS / MMS (voip.ms)</h2>
+  <div class="card"><h3 style="margin-top:0">DID routes</h3><table>
+    <tr><th>DID</th><th>To extension</th><th>Label</th><th></th></tr>${rows}</table></div>
+  <div class="card"><h3 style="margin-top:0">Webhook URL</h3>
+    <p><code style="word-break:break-all">https://pbx.example.com/hooks/voipms-sms?token=demo_9f2k41…&amp;to={TO}&amp;from={FROM}&amp;message={MESSAGE}&amp;id={ID}&amp;date={TIMESTAMP}</code></p>
+    <p class="muted">Paste into voip.ms → DID Numbers → Manage DIDs → Message Service. Inbound SMS/MMS arrives here instantly; a 60-second poller catches anything the callback misses.</p></div>
+  <div class="card"><h3 style="margin-top:0">voip.ms API</h3><table class="kv">
+    <tr><td>API username</td><td>demo@example.com</td></tr>
+    <tr><td>API password</td><td>•••••••• (set)</td></tr>
+    <tr><td>Webhook token</td><td><code>demo_9f2k41…</code></td></tr>
+  </table></div>`;
+};
+
+VIEWS.features = function(){
+  const accName = {all:"All users", admin:"Admins only", none:"No one"};
+  const rows = FEATURES.map((f,i)=>`<tr><td><code>${f.code}</code></td>
+    <td><b>${esc(f.name)}</b><br><span class="muted">${esc(f.desc)}</span></td>
+    <td><input type="checkbox" ${f.enabled?"checked":""} onchange="FEATURES[${i}].enabled=this.checked;S.flash='Feature ${f.code} '+(this.checked?'enabled':'disabled')+' (demo).';render()" style="width:18px;height:18px"></td>
+    <td><select onchange="FEATURES[${i}].access=this.value;S.flash='Feature ${f.code} access → '+this.options[this.selectedIndex].text+' (demo).';render()">
+      ${["all","admin","none"].map(a=>`<option value="${a}" ${f.access===a?"selected":""}>${accName[a]}</option>`).join("")}
+    </td></tr>`).join("");
+  return `<h2>Feature codes</h2>
+  ${S.flash?`<div class="flash ok">${esc(S.flash)}</div>`:""}
+  <div class="card"><p class="muted">Star codes users can dial. Toggle each one, set the default access, or override per user. Try disabling one — then dial it from the user view!</p>
+  <table><tr><th>Code</th><th>Name</th><th>Enabled</th><th>Default access</th></tr>${rows}</table></div>
+  <div class="card"><h3 style="margin-top:0">Try it: *555 ChanSpy monitor</h3>
+  <p class="muted">In the real system, dial <code>*5558801</code> to monitor an extension — it stays on the line, auto-follows new calls, and <code>*</code>/<code>#</code> hops between calls.</p></div>`;
+};
+
+VIEWS.ivr = function(){
+  const rows = IVRS.map(v=>`<tr><td><b>${v.num}</b></td><td>${esc(v.name)}</td><td class="muted">${esc(v.desc)}</td></tr>`).join("");
+  return `<h2>IVR menus</h2><div class="card"><table>
+    <tr><th>Number</th><th>Name</th><th>Greeting</th></tr>${rows}</table></div>`;
+};
+
+VIEWS.billing = function(){
+  return `<h2>Billing</h2><div class="card"><h3 style="margin-top:0">Current plan: Business</h3>
+  <table><tr><th>Quota</th><th>Used</th><th></th></tr>
+  ${[["Call minutes","1,240 / 5,000"],["SMS / MMS","312 / 2,000"],["Recordings","1.8 GB / 10 GB"]].map(([l,u])=>{
+    const [a,b]=u.split(" / "); const pct=Math.round(parseFloat(a.replace(/,/g,""))/parseFloat(b.replace(/,/g,""))*100);
+    return `<tr><td>${l}</td><td>${u}</td><td><span class="meter" style="display:inline-block;width:120px;height:8px;background:#eee;border-radius:4px;overflow:hidden;vertical-align:middle"><span style="display:block;height:100%;width:${pct}%;background:#1a1a2e"></span></span></td></tr>`;
+  }).join("")}</table></div>`;
+};
+
+VIEWS.email = function(){
+  return `<h2>Email</h2><div class="card"><h3 style="margin-top:0">SMTP settings</h3><table class="kv">
+    <tr><td>Server</td><td>smtp.example.com:587</td></tr><tr><td>Username</td><td>pbx@example.com</td></tr>
+    <tr><td>From</td><td>PBX &lt;pbx@example.com&gt;</td></tr></table>
+    <p><button class="btn ghost" onclick="toast('Email','Test message queued (demo).')">Send test email</button></p></div>`;
+};
+
+VIEWS.network = function(){
+  return `<h2>Network</h2><div class="card"><table class="kv">
+    <tr><td>Public IP</td><td>203.0.113.44 <span class="muted">(demo)</span></td></tr>
+    <tr><td>SIP port</td><td>5060 (UDP)</td></tr>
+    <tr><td>RTP range</td><td>10000–20000</td></tr>
+    <tr><td>Panel</td><td>https://pbx.example.com</td></tr>
+  </table></div>`;
+};
+
+VIEWS.e911 = function(){
+  return `<h2>E911</h2><div class="card"><h3 style="margin-top:0">Registered address</h3><table class="kv">
+    <tr><td>Street</td><td>123 Demo Ave, Suite 200</td></tr>
+    <tr><td>City</td><td>Fresno, CA 93721</td></tr></table>
+    <p class="muted">Dial <b>933</b> from any extension to hear the registered address read back. <b>911</b> always connects.</p></div>`;
+};
+
+VIEWS.reports = function(){
+  const max = Math.max(...WEEK.map(w=>w[1]));
+  const bars = WEEK.map(([d,v])=>`<div class="bar" style="height:${Math.round(v/max*140)}px"><i>${v}</i><span>${d}</span></div>`).join("");
+  return `<h2>Reports</h2><div class="card"><h3 style="margin-top:0">Calls per day (this week)</h3>
+    <div class="bars">${bars}</div><div style="height:26px"></div></div>
+  <div class="grid2"><div class="card"><h3 style="margin-top:0">Top extensions</h3><table>
+    <tr><td>8801</td><td>84 calls</td></tr><tr><td>8800</td><td>61 calls</td></tr><tr><td>8802</td><td>47 calls</td></tr></table></div>
+  <div class="card"><h3 style="margin-top:0">SMS / MMS</h3><table>
+    <tr><td>Inbound</td><td>188</td></tr><tr><td>Outbound</td><td>124</td></tr></table></div></div>`;
+};
+
+VIEWS.apikeys = function(){
+  const rows = APIKEYS.map(k=>`<tr><td>${esc(k.name)}</td><td><code>${k.key}</code></td><td>${k.created}</td><td>${k.last}</td></tr>`).join("");
+  return `<h2>API keys</h2><div class="card"><table>
+    <tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th></tr>${rows}</table>
+    <p><button class="btn" onclick="toast('API key','New key created (demo): pbx_sk_demo…')">Create key</button></p></div>`;
+};
+
+/* ---------- user (My Phone) views ---------- */
+VIEWS.ucp = function(){
+  if(S.role==="admin") return `<h2>My Phone</h2><div class="card"><p class="muted">Admin preview of the user portal. Switch to <b>User view</b> in the top bar to browse as Sarah (8801).</p></div>` + VIEWS["ucp-msgs"]().replace("<h2>Messages</h2>","");
+  return `<div class="tiles">
+    <a class="tile link" href="#/ucp-vm"><span class="lbl">Voicemail</span><b>2</b> new messages</a>
+    <a class="tile link" href="#/ucp-calls"><span class="lbl">Recent calls</span><b>8</b> today</a>
+    <a class="tile link" href="#/ucp-msgs"><span class="lbl">Messages</span><b>1</b> unread</a>
+  </div>
+  <div class="card"><h3 style="margin-top:0">Your extension</h3><table class="kv">
+    <tr><td>Extension</td><td><b>8801</b></td></tr>
+    <tr><td>Name</td><td>Sarah Miller</td></tr>
+    <tr><td>Status</td><td><span class="pill ok">Registered</span></td></tr>
+    <tr><td>Voicemail</td><td>Dial <code>*97</code> · record greeting with <code>*98</code></td></tr>
+  </table></div>
+  <div class="card"><h3 style="margin-top:0">Feature codes you can use</h3><table>
+    <tr><th>Code</th><th>What it does</th></tr>
+    ${FEATURES.filter(f=>f.enabled&&(f.access==="all"||(f.access==="admin"&&S.role==="admin"))).map(f=>`<tr><td><code>${f.code}</code></td><td>${esc(f.name)} — <span class="muted">${esc(f.desc)}</span></td></tr>`).join("")}
+  </table><p class="muted">Disabled codes disappear from this list. Try toggling one on the admin Features page!</p></div>`;
+};
+
+VIEWS["ucp-calls"] = function(){
+  const rows = CDR.slice(0,6).map(c=>`<tr><td>${c.t}</td><td>${esc(c.from)}</td><td>${esc(c.to)}</td><td>${c.dur}</td></tr>`).join("");
+  return `<h2>Calls</h2><div class="card">
+    <p><button class="btn" onclick="toast('Click to call','Dialing 8802… (demo)')">📞 Call 8802</button>
+    <button class="btn ghost" onclick="toast('Click to call','Dialing 8803… (demo)')">📞 Call 8803</button></p>
+    <table><tr><th>Time</th><th>From</th><th>To</th><th>Duration</th></tr>${rows}</table></div>`;
+};
+
+VIEWS["ucp-vm"] = function(){
+  const rows = VMS.map(v=>`<tr class="${v.unread?"unread":""}"><td>${v.unread?'<span class="dot"></span>':""}${esc(v.from)}</td><td>${v.at}</td><td>${v.dur}</td>
+    <td><button class="btn ghost" onclick="toast('Voicemail','Playing demo message… (no audio in demo)')">▶ Play</button></td></tr>`).join("");
+  return `<h2>Voicemail</h2><div class="card"><table>
+    <tr><th>From</th><th>Received</th><th>Length</th><th></th></tr>${rows}</table>
+    <p class="muted">Or dial <code>*97</code> from your phone. Record your greeting with <code>*98</code>.</p></div>`;
+};
+
+VIEWS["ucp-msgs"] = function(){
+  return `<h2>Messages</h2><div class="card"><div class="msgs">
+    <div class="convs">${threadList()}</div><div>${threadView()}</div></div>
+    <p class="muted">Tip: send a message — the contact replies automatically in a few seconds.</p></div>`;
+};
+
+/* ---------- live simulation ---------- */
+const CALLER_IDS = ["+1 (555) 010-3344","+1 (555) 010-9901","+1 (555) 010-1122","8802","8803"];
+const SMS_IN = ["Are you open tomorrow?","Thanks for your help today!","Can I get a quote on the AX-200?","Running 10 min late, sorry!"];
+function simTick(){
+  // update durations on dashboard
+  document.querySelectorAll("[data-dur]").forEach(el=>{
+    el.textContent = fmtDur(Date.now() - parseInt(el.dataset.dur,10));
+  });
+}
+function simCalls(){
+  if(!S.role) return;
+  if(liveCalls.length && Math.random()<0.45){
+    const done = liveCalls.shift();
+    CDR.unshift({t:new Date().toTimeString().slice(0,8), from:done.from, to:done.to,
+      dur:fmtDur(Date.now()-done.start), disp:"ANSWERED", dir:done.dir});
+  } else if(liveCalls.length < 4){
+    const exts = ["8800","8801","8802","8803"];
+    const inbound = Math.random()<0.5;
+    liveCalls.push(inbound
+      ? {from:CALLER_IDS[Math.floor(Math.random()*3)], to:DIDS[Math.floor(Math.random()*DIDS.length)].did, dir:"Inbound", start:Date.now()}
+      : {from:exts[Math.floor(Math.random()*4)], to:exts[Math.floor(Math.random()*4)], dir:"Internal", start:Date.now()});
+    if(S.route==="dashboard") render();
+    const c = liveCalls[liveCalls.length-1];
+    toast("Incoming call", c.from+" → "+c.to+" (demo)");
+  }
+  const sc = document.getElementById("stat-calls"); if(sc) sc.textContent = liveCalls.length;
+  if(S.route==="dashboard") render();
+}
+function simSms(){
+  if(!S.role) return;
+  const t = THREADS[Math.floor(Math.random()*THREADS.length)];
+  const body = SMS_IN[Math.floor(Math.random()*SMS_IN.length)];
+  const n = new Date(); const at = String(n.getHours()).padStart(2,"0")+":"+String(n.getMinutes()).padStart(2,"0");
+  t.msgs.push({mine:false, body, at});
+  if(S.thread!==t.id || (S.route!=="messages" && S.route!=="ucp-msgs")) t.unread++;
+  if(S.route==="messages"||S.route==="ucp-msgs") render();
+  toast("New SMS from "+t.contact, body+" (via "+t.via+")");
+}
+
+/* ---------- init ---------- */
+setInterval(simTick, 1000);
+setInterval(simCalls, 14000);
+setInterval(simSms, 30000);
+if(!location.hash) location.hash = S.role ? "#/"+(S.role==="admin"?"dashboard":"ucp") : "#/login";
+render();
+</script>
+</body>
+</html>
