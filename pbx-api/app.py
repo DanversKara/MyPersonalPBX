@@ -2068,6 +2068,16 @@ def branding_page(request: Request):
                     if b["logo"] else '<span class="muted">No logo uploaded.</span><br>')
     fav_preview = (f'<img src="{esc(b["favicon"])}" style="height:16px;width:16px"><br>'
                    if b["favicon"] else "")
+    _presets = "".join(
+        '<button type="button" class="preset" data-header="%s" data-accent="%s" title="%s" '
+        'style="width:30px;height:30px;border-radius:50%%;border:2px solid #999;cursor:pointer;'
+        'margin:2px;background:linear-gradient(135deg,%s 50%%,%s 50%%)"></button>' % (h, a, n, h, a)
+        for n, h, a in [
+            ("Default", "#1a1a2e", "#1a1a2e"), ("Ocean", "#0b3d66", "#0099cc"),
+            ("Midnight", "#101024", "#5a5ad6"), ("Sunset", "#431407", "#ea580c"),
+            ("Forest", "#0c2417", "#22a355"), ("Royal", "#2b0f4d", "#8b3fd9"),
+            ("Crimson", "#3d0a12", "#e0263c"), ("Amber", "#2e2008", "#d9a416"),
+        ])
     body = f"""<h2>Branding</h2>
 <p class="muted">White-label the panel: your name, logo, colors, login page and footer. Changes apply immediately.</p>
 <form method="post" action="/branding" enctype="multipart/form-data">
@@ -2082,7 +2092,11 @@ def branding_page(request: Request):
 <label>Logo image<br><input type="file" name="logo_file" accept="image/*"></label><br>
 <label>…or logo image URL<br><input name="logo_url" value="{'' if b['logo'].startswith('data:') else v('logo')}" size="60" placeholder="https://…"></label><br>
 {logo_preview}
-<label><input type="checkbox" name="logo_remove" value="1"> Remove current logo</label>
+<label><input type="checkbox" name="logo_remove" value="1"> Remove current logo</label><br>
+<label>Dark mode logo (optional)<br><input type="file" name="logo_dark_file" accept="image/*"></label><br>
+<label>…or image URL<br><input name="logo_dark_url" value="{'' if b['logo_dark'].startswith('data:') else v('logo_dark')}" size="60" placeholder="https://…"></label><br>
+{f'<img src="'+esc(b["logo_dark"])+'" style="max-height:48px;max-width:220px;border:1px solid #eee;border-radius:4px;background:#222"><br>' if b["logo_dark"] else '<span class="muted">No dark mode logo — main logo is used in both modes.</span><br>'}
+<label><input type="checkbox" name="logo_dark_remove" value="1"> Remove dark mode logo</label>
 <h3>Colors</h3>
 <label>Header background<br><input type="color" name="header_color" value="{v('header_color') or '#1a1a2e'}"></label><br>
 <label>Buttons &amp; active tabs<br><input type="color" name="accent_color" value="{v('accent_color') or '#1a1a2e'}"></label><br>
@@ -2091,6 +2105,16 @@ def branding_page(request: Request):
 <option value="light" {sel(b['theme_default'],'light')}>Light</option>
 </select></label>
 <p class="muted">Visitors can switch with the 🌙/☀️ icon in the header; their choice is remembered in the browser.</p>
+<label>Color presets<br><span class="muted">Click to apply:</span><br>
+{_presets}</label>
+<script>
+document.querySelectorAll('.preset').forEach(function(btn){{btn.addEventListener('click',function(){{
+  var h=document.querySelector('input[name=header_color]');
+  var a=document.querySelector('input[name=accent_color]');
+  if(h)h.value=btn.dataset.header; if(a)a.value=btn.dataset.accent;
+}});}});
+</script><br>
+<label><input type="checkbox" name="header_animated" value="1" {chk(b['header_animated'])}> Animated gradient header <span class="muted">(flows between the header and accent colors)</span></label><br>
 <h3>Login page</h3>
 <label>Shows<br><select name="login_mode">
 <option value="text" {sel(b['login_mode'],'text')}>Text only</option>
@@ -2101,6 +2125,10 @@ def branding_page(request: Request):
 <label>…or image URL<br><input name="login_logo_url" value="{'' if b['login_logo'].startswith('data:') else v('login_logo')}" size="60" placeholder="https://…"></label><br>
 {f'<img src="'+esc(b["login_logo"])+'" style="max-height:48px;max-width:220px;border:1px solid #eee;border-radius:4px"><br>' if b["login_logo"] else '<span class="muted">Using header logo.</span><br>'}
 <label><input type="checkbox" name="login_logo_remove" value="1"> Remove login logo (fall back to header logo)</label><br>
+<label>Dark mode login logo (optional)<br><input type="file" name="login_logo_dark_file" accept="image/*"></label><br>
+<label>…or image URL<br><input name="login_logo_dark_url" value="{'' if b['login_logo_dark'].startswith('data:') else v('login_logo_dark')}" size="60" placeholder="https://…"></label><br>
+{f'<img src="'+esc(b["login_logo_dark"])+'" style="max-height:48px;max-width:220px;border:1px solid #eee;border-radius:4px;background:#222"><br>' if b["login_logo_dark"] else '<span class="muted">No dark mode login logo — day logo is used in both modes.</span><br>'}
+<label><input type="checkbox" name="login_logo_dark_remove" value="1"> Remove dark mode login logo</label><br>
 <label>Heading (blank = site name)<br><input name="login_title" value="{v('login_title')}" size="40" maxlength="80"></label><br>
 <label>Subheading<br><input name="login_subtitle" value="{v('login_subtitle')}" size="60" maxlength="140"></label><br>
 <h3>Favicon</h3>
@@ -2128,7 +2156,9 @@ def branding_page(request: Request):
 async def branding_save(request: Request,
                         logo_file: UploadFile = File(None),
                         favicon_file: UploadFile = File(None),
-                        login_logo_file: UploadFile = File(None)):
+                        login_logo_file: UploadFile = File(None),
+                        logo_dark_file: UploadFile = File(None),
+                        login_logo_dark_file: UploadFile = File(None)):
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
@@ -2151,7 +2181,31 @@ async def branding_save(request: Request,
         "footer_show": "1" if f.get("footer_show") else "0",
         "footer_text": (f.get("footer_text") or "").strip()[:140],
         "theme_default": (f.get("theme_default") or "dark") if (f.get("theme_default") in ("dark", "light")) else "dark",
+        "header_animated": "1" if f.get("header_animated") else "0",
     }
+    def _save_image(field_prefix, label):
+        """Handle upload/URL/remove for an image setting. Returns (key, value)
+        to store, (None, None) to keep existing, or raises via error page."""
+        up = {"logo_dark": logo_dark_file, "login_logo_dark": login_logo_dark_file}[field_prefix]
+        uri = _brand_image_to_data_uri(up)
+        if uri is None:
+            raise ValueError(label)
+        url = (f.get(field_prefix + "_url") or "").strip()[:500]
+        if f.get(field_prefix + "_remove"):
+            return field_prefix, ""
+        if uri:
+            return field_prefix, uri
+        if url.startswith(("https://", "http://", "data:")):
+            return field_prefix, url
+        return None, None
+    for _prefix, _label in (("logo_dark", "Dark mode logo"), ("login_logo_dark", "Dark mode login logo")):
+        try:
+            _k, _v = _save_image(_prefix, _label)
+        except ValueError as e:
+            return HTMLResponse(page("Branding", f"<h2>Branding</h2><p style='color:red'>{esc(str(e))} rejected: use a PNG, JPEG, GIF, SVG or WebP under 500 KB.</p><p><a href='/branding'>Back</a></p>",
+                                      s["username"], s["role"], "branding"), status_code=400)
+        if _k:
+            vals[_k] = _v
     # Logo: upload wins, else URL field, else keep existing unless removed.
     logo_uri = _brand_image_to_data_uri(logo_file)
     if logo_uri is None:
@@ -2188,8 +2242,9 @@ async def branding_save(request: Request,
     elif login_url.startswith(("https://", "http://", "data:")):
         vals["login_logo"] = login_url
     with db() as c:
-        # logo/favicon/login_logo are only in vals when uploaded, pasted or
-        # removed; otherwise the existing value stays untouched.
+        # logo/favicon/login_logo/logo_dark/login_logo_dark are only in vals
+        # when uploaded, pasted or removed; otherwise the existing value
+        # stays untouched.
         for k, val in vals.items():
             c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?, ?)",
                       ("brand_" + k, val))

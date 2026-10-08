@@ -24,6 +24,19 @@ body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--
 .nav .sp{flex:1}
 .theme-toggle{background:none;border:0;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1}
 .theme-toggle:hover{background:rgba(255,255,255,.14)}
+/* theme-aware logos: dark variant shows only in dark mode */
+.brand-logo-dark,.login-logo-dark{display:none}
+[data-theme="dark"] .brand-logo-dark{display:inline-block}
+[data-theme="dark"] .brand-logo-light{display:none}
+[data-theme="dark"] .login-logo-dark{display:inline-block}
+[data-theme="dark"] .login-logo-light{display:none}
+/* animated gradient header (uses brand colors) */
+@keyframes navslide{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+.nav.animated{background:linear-gradient(120deg,var(--nav-bg),var(--accent),var(--nav-bg));background-size:250% 250%;animation:navslide 10s ease infinite}
+/* subtle entrance */
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.wrap>.card{animation:fadein .3s ease}
+@media (prefers-reduced-motion:reduce){.nav.animated{animation:none}.wrap>.card{animation:none}}
 .wrap{max-width:1100px;margin:20px auto;padding:0 20px}
 .card{background:var(--card);border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 table{width:100%;border-collapse:collapse}
@@ -164,13 +177,16 @@ BRANDING = contextvars.ContextVar("branding", default=None)
 BRAND_DEFAULTS = {
     "site_name": "PBX Panel",
     "header_mode": "text",      # text | logo | both
-    "logo": "",                 # data URI or https URL
+    "logo": "",                 # data URI or https URL (light theme / fallback)
+    "logo_dark": "",            # shown in dark theme; falls back to logo
     "header_color": "#1a1a2e",
     "accent_color": "#1a1a2e",
+    "header_animated": "0",     # 1 = animated gradient header
     "login_mode": "text",       # text | logo | both
     "login_title": "",
     "login_subtitle": "",
     "login_logo": "",           # data URI or https URL; falls back to logo
+    "login_logo_dark": "",      # shown in dark theme; falls back to login_logo
     "favicon": "",
     "footer_show": "0",
     "footer_text": "",
@@ -198,7 +214,29 @@ def get_brand():
         b["login_mode"] = "text"
     if b["theme_default"] not in ("dark", "light"):
         b["theme_default"] = "dark"
+    if b["header_animated"] != "1":
+        b["header_animated"] = "0"
     return b
+
+
+def theme_logo_imgs(light_src, dark_src, css_class, style):
+    """Render one <img>, or a light/dark pair that CSS swaps per data-theme.
+
+    dark_src falls back to light_src; when they match only one tag is emitted.
+    """
+    import html as _html
+    light_src = (light_src or "").strip()
+    dark_src = (dark_src or "").strip() or light_src
+    if not light_src:
+        return ""
+    base = (f'<img src="{_html.escape(light_src, quote=True)}" alt="" '
+            f'class="{css_class}" style="{style}">')
+    if dark_src != light_src:
+        return (f'<img src="{_html.escape(light_src, quote=True)}" alt="" '
+                f'class="{css_class} {css_class}-light" style="{style}">'
+                f'<img src="{_html.escape(dark_src, quote=True)}" alt="" '
+                f'class="{css_class} {css_class}-dark" style="{style}">')
+    return base
 
 
 def page(title, body, username="", role="", tab=""):
@@ -258,10 +296,9 @@ def page(title, body, username="", role="", tab=""):
     shown_role = role + (", office-only admin" if role == "admin" and hide_admin else "")
     nav_user = f'<span>{_html.escape(username, quote=True)} ({_html.escape(shown_role, quote=True)})</span> <a href="/logout">Logout</a>' if username else ""
     brand = get_brand()
-    # Header brand: text, logo, or both
-    _logo = brand["logo"].strip()
-    _logo_tag = (f'<img src="{_html.escape(_logo, quote=True)}" alt="" '
-                 f'style="height:28px;vertical-align:middle;border-radius:4px">') if _logo else ""
+    # Header brand: text, logo, or both (logo auto-swaps per theme when set)
+    _logo_tag = theme_logo_imgs(brand["logo"], brand["logo_dark"], "brand-logo",
+                                "height:28px;vertical-align:middle;border-radius:4px")
     _name = _html.escape(brand["site_name"] or "PBX Panel", quote=True)
     if brand["header_mode"] == "logo" and _logo_tag:
         brand_html = _logo_tag
@@ -269,6 +306,7 @@ def page(title, body, username="", role="", tab=""):
         brand_html = _logo_tag + f' <strong style="margin-left:8px">{_name}</strong>'
     else:
         brand_html = f"<strong>{_name}</strong>"
+    _nav_cls = "nav animated" if brand["header_animated"] == "1" else "nav"
     # Custom colors (validated hex in get_brand). Emitted as CSS variables
     # AFTER the theme blocks so branding wins in both light and dark mode.
     _brand_vars = []
@@ -306,16 +344,19 @@ def page(title, body, username="", role="", tab=""):
 {_theme_js}
 {_fav_tag}
 <style>{BASE_CSS}{_color_css}</style></head><body>
-<div class="nav">{brand_html}<span class="sp"></span>{_theme_btn}{nav_user}</div>
+<div class="{_nav_cls}">{brand_html}<span class="sp"></span>{_theme_btn}{nav_user}</div>
 <div class="wrap">{tabs}<div class="card">{body}</div></div>{_footer}</body></html>"""
 
 def login_html():
     """Login form with branding: logo and/or custom title per admin settings."""
     import html as _html
     brand = get_brand()
-    _logo = (brand["login_logo"] or brand["logo"]).strip()
-    _logo_tag = (f'<img src="{_html.escape(_logo, quote=True)}" alt="" '
-                 f'style="max-height:64px;max-width:280px;margin-bottom:8px"><br>') if _logo else ""
+    _login_src = (brand["login_logo"] or brand["logo"]).strip()
+    _login_dark = (brand["login_logo_dark"] or brand["logo_dark"] or _login_src).strip()
+    _logo_tag = theme_logo_imgs(_login_src, _login_dark, "login-logo",
+                                "max-height:64px;max-width:280px;margin-bottom:8px")
+    if _logo_tag:
+        _logo_tag += "<br>"
     _title = (brand["login_title"] or "").strip() or brand["site_name"] or "PBX Panel"
     _sub = (brand["login_subtitle"] or "").strip()
     mode = brand["login_mode"]
