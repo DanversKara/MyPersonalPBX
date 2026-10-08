@@ -1,0 +1,18 @@
+[Unit]
+Description=Own PBX API (management REST API)
+After=network.target
+
+[Service]
+Type=simple
+User=pbx
+Group=pbx
+WorkingDirectory=/opt/pbx/pbx-api
+Environment=PBX_DB=/var/lib/pbx/pbx.db
+ExecStart=/opt/pbx/api-venv/bin/uvicorn app:app --host 0.0.0.0 --port 8001
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

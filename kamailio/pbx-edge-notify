@@ -1,0 +1,61 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# pbx-edge-notify — tell the own-pbx panel about security events on the
+# edge box (called by fail2ban's pbx-notify action).
+#
+#   pbx-edge-notify --setup http://192.168.1.10:8001 <admin API key>
+#   pbx-edge-notify --test
+#   pbx-edge-notify ban|unban <ip> <jail> <failures> <bantime>
+#
+# The API key is created in the panel under API keys (an admin's key).
+# It's stored in /etc/pbx-edge/notify.env (root only).
+set -uo pipefail
+ENV=/etc/pbx-edge/notify.env
+
+send() {  # kind ip jail detail
+    [ -r "$ENV" ] || return 0
+    # shellcheck disable=SC1090
+    . "$ENV"
+    [ -n "${PBX_URL:-}" ] && [ -n "${PBX_KEY:-}" ] || return 0
+    local body
+    body=$(python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+k, ip, jail, detail = sys.argv[1:5]
+print(json.dumps({"source": "edge", "kind": k, "ip": ip, "jail": jail, "detail": detail[:400]}))
+PY
+)
+    curl -fsS -m 6 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $PBX_KEY" \
+         -H 'Content-Type: application/json' -d "$body" "$PBX_URL/api/v1/security/events"
+}
+
+case "${1:-}" in
+    --setup)
+        [ "$(id -u)" -eq 0 ] || { echo "run as root"; exit 1; }
+        url="${2:-}"; key="${3:-}"
+        [ -n "$url" ] && [ -n "$key" ] || { sed -n '2,10p' "$0"; exit 1; }
+        mkdir -p /etc/pbx-edge
+        umask 077
+        printf 'PBX_URL=%q\nPBX_KEY=%q\n' "${url%/}" "$key" > "$ENV"
+        chmod 600 "$ENV"
+        code=$(send test "" "setup" "Edge box $(hostname) connected for security alerts")
+        if [ "$code" = "200" ]; then
+            echo "ok: the PBX received a test event (check the dashboard Activity feed)"
+        else
+            echo "the PBX didn't accept the test event (HTTP ${code:-no answer})."
+            echo "check the address and that the API key belongs to an admin and isn't revoked."
+            exit 1
+        fi ;;
+    --test)
+        code=$(send test "" "test" "Test from edge box $(hostname)")
+        echo "HTTP ${code:-no answer}" ;;
+    ban|unban)
+        ip="${2:-}"; jail="${3:-}"; fails="${4:-0}"; bt="${5:-0}"
+        detail=""
+        if [ "$1" = ban ]; then
+            last=$(journalctl -u kamailio -n 3000 --no-pager -o cat 2>/dev/null | grep -F "from $ip" | tail -1 | sed 's/.*edge: //')
+            detail="$fails hits; banned $((bt / 60)) min${last:+. Last: $last}"
+        fi
+        send "$1" "$ip" "$jail" "$detail" >/dev/null 2>&1 || true ;;
+    *) sed -n '2,10p' "$0"; exit 1 ;;
+esac
+exit 0

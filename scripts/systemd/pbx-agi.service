@@ -1,0 +1,19 @@
+[Unit]
+Description=Own PBX AGI Server (SIP MESSAGE routing)
+After=network.target asterisk.service
+Wants=asterisk.service
+
+[Service]
+Type=simple
+User=pbx
+Group=pbx
+WorkingDirectory=/opt/pbx/pbx-brain
+Environment=PBX_DB=/var/lib/pbx/pbx.db
+ExecStart=/opt/pbx/brain-venv/bin/python agi_server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

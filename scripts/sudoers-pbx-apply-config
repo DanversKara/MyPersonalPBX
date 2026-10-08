@@ -1,0 +1,5 @@
+# Allow the pbx service user to apply Asterisk config changes and read
+# Asterisk status. Both wrappers are root-owned and take no arguments,
+# so this grants no general root access.
+pbx ALL=(root) NOPASSWD: /opt/pbx/bin/pbx-apply-config.sh
+pbx ALL=(root) NOPASSWD: /opt/pbx/bin/pbx-status.sh

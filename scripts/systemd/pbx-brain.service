@@ -1,0 +1,25 @@
+[Unit]
+Description=Own PBX ARI Brain (call logic)
+After=network.target asterisk.service
+Wants=asterisk.service
+
+[Service]
+Type=simple
+User=pbx
+Group=pbx
+WorkingDirectory=/opt/pbx/pbx-brain
+Environment=ARI_URL=http://127.0.0.1:8088/ari
+Environment=ARI_USER=pbxbrain
+Environment=PBX_DB=/var/lib/pbx/pbx.db
+Environment=PBX_REC_ADMIN_DIR=/var/spool/pbx/monitor/admin
+Environment=PBX_REC_USER_DIR=/var/spool/pbx/monitor/user
+Environment=PBX_VM_DIR=/var/spool/pbx/voicemail
+# ARI_PASS is read from /etc/pbx/ari.pass by the wrapper script
+ExecStart=/opt/pbx/bin/pbx-brain-start.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
