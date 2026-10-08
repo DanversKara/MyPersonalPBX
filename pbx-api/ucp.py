@@ -28,6 +28,7 @@ import voipms_sms
 import bcrypt
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
+from panel_templates import fmt_ts
 
 M = None  # the app module, set by install()
 
@@ -235,9 +236,9 @@ def _flash(request: Request):
     return f'<div class="flash {cls}">{esc(text)}</div>'
 
 
-def _ago(ts):
-    """'YYYY-MM-DD HH:MM:SS' (UTC or local) -> short readable form."""
-    return esc(ts or "")
+def _ago(ts, from_utc=True):
+    """Stored timestamp -> 12-hour brand-timezone form (e.g. 2026-10-08 7:29 PM)."""
+    return fmt_ts(ts, from_utc=from_utc)
 
 
 def _dur(sec):
@@ -322,14 +323,15 @@ KIND_LABEL = {"out": ("Outgoing", ""), "in": ("Incoming", "ok"),
 
 
 def _recordings_for(me, limit=200):
+    """Recordings the user started. Recordings made by other users are never
+    listed here, even if this user was on the call."""
     if not me["exten"]:
         return []
     with M.db() as c:
         return [dict(r) for r in c.execute(
-            "SELECT * FROM recordings WHERE system='user' AND"
-            " (login_id=? OR ((exten=? OR peer=?) AND (? IS NULL OR started_at >= ?)))"
+            "SELECT * FROM recordings WHERE system='user' AND login_id=?"
             " ORDER BY id DESC LIMIT ?",
-            (me["id"], me["exten"], me["exten"], _exten_since(me), _exten_since(me), limit)).fetchall()]
+            (me["id"], limit)).fetchall()]
 
 
 def can_play_voicemail(s, msg_id) -> bool:
@@ -346,14 +348,72 @@ def can_play_voicemail(s, msg_id) -> bool:
 def can_play_recording(s, rec_id) -> bool:
     with M.db() as c:
         me = c.execute("SELECT * FROM logins WHERE id=?", (s["id"],)).fetchone()
-        r = c.execute("SELECT system, login_id, exten, peer, started_at FROM recordings WHERE id=?",
+        r = c.execute("SELECT system, login_id FROM recordings WHERE id=?",
                       (rec_id,)).fetchone()
-    if not me or not r or r["system"] != "user" or not me["exten"]:
+    if not me or not r or r["system"] != "user":
         return False
-    if r["login_id"] == me["id"]:
-        return True
-    since = _exten_since(me)
-    return me["exten"] in (r["exten"], r["peer"]) and (since is None or (r["started_at"] or "") >= since)
+    # Only the user who started the recording may play it.
+    return r["login_id"] == me["id"]
+
+
+def purge_extension_data(exts, moving_login_id=None):
+    """Privacy clean slate for (re)assigned extensions.
+
+    Deletes every user-data row tied to any of the given extensions, plus
+    the audio files on disk:
+      - recordings where exten or peer matches (DB + files)
+      - cdr where src or dst matches
+      - messages where from_ext or to_ext matches (internal + SMS/MMS)
+      - voicemail boxes named vm-<ext>, plus the moving login's own box:
+        all messages (DB + files) and the greeting file
+    message_hidden rows cascade from messages. The logins.exten_since
+    trigger already stamps the reassignment time. Returns {table: count}.
+    """
+    exts = sorted({str(e).strip() for e in (exts or []) if str(e).strip()})
+    counts = {"recordings": 0, "cdr": 0, "messages": 0, "voicemail": 0}
+    if not exts:
+        return counts
+    with M.db() as c:
+        for e in exts:
+            rows = c.execute("SELECT id, path FROM recordings WHERE exten=? OR peer=?",
+                             (e, e)).fetchall()
+            for r in rows:
+                _safe_unlink(r["path"], REC_ROOT)
+            counts["recordings"] += len(rows)
+            c.execute("DELETE FROM recordings WHERE exten=? OR peer=?", (e, e))
+
+            r = c.execute("DELETE FROM cdr WHERE src=? OR dst=?", (e, e))
+            counts["cdr"] += r.rowcount
+
+            r = c.execute("DELETE FROM messages WHERE from_ext=? OR to_ext=?", (e, e))
+            counts["messages"] += r.rowcount
+
+        # Voicemail: boxes named vm-<ext>, plus the moving login's own box
+        # (its name may still be the old vm-<old ext>).
+        boxes = {}
+        for r in c.execute(
+                "SELECT mailbox, login_id, greeting_path FROM voicemail_boxes WHERE mailbox IN (%s)"
+                % ",".join("?" * len(exts)),
+                [f"vm-{e}" for e in exts]).fetchall():
+            boxes[r["mailbox"]] = r
+        if moving_login_id:
+            r = c.execute("SELECT mailbox, login_id, greeting_path FROM voicemail_boxes WHERE login_id=?",
+                          (moving_login_id,)).fetchone()
+            if r:
+                boxes[r["mailbox"]] = r
+        for box in boxes.values():
+            msgs = c.execute("SELECT id, path FROM voicemail_messages WHERE mailbox=?",
+                             (box["mailbox"],)).fetchall()
+            for m in msgs:
+                _safe_unlink(m["path"], VM_ROOT)
+            counts["voicemail"] += len(msgs)
+            c.execute("DELETE FROM voicemail_messages WHERE mailbox=?", (box["mailbox"],))
+            if box["greeting_path"]:
+                _safe_unlink(box["greeting_path"], VMGREET_DIR)
+                c.execute("UPDATE voicemail_boxes SET greeting_path='' WHERE mailbox=?",
+                          (box["mailbox"],))
+        c.commit()
+    return counts
 
 
 def _safe_unlink(path, root):
@@ -415,7 +475,7 @@ def overview(request: Request):
                f'{"Turn off do not disturb" if p["dnd"] else "Turn on do not disturb"}</button></form>')
     rows = "".join(
         f'<tr><td><span class="pill {KIND_LABEL[r["kind"]][1]}">{KIND_LABEL[r["kind"]][0]}</span></td>'
-        f'<td>{esc(r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"])}</td></tr>'
+        f'<td>{esc(r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"], from_utc=False)}</td></tr>'
         for r in calls) or '<tr><td colspan="4" class="muted">No calls yet</td></tr>'
     body = f"""
 <div class="tiles">
@@ -469,7 +529,7 @@ def calls_page(request: Request):
                 + " " + M.safety_ui.report_button(csrf, "call", r["id"], "calls"))
     rows = "".join(
         f'<tr><td><span class="pill {KIND_LABEL[r["kind"]][1]}">{KIND_LABEL[r["kind"]][0]}</span></td>'
-        f'<td>{esc(r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"])}</td>'
+        f'<td>{esc(r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"], from_utc=False)}</td>'
         f'<td>{rec_cell(r)}</td><td class="actions">{_call_actions(r)}</td></tr>'
         for r in calls) or '<tr><td colspan="6" class="muted">No calls</td></tr>'
     left = _left(me, "call_minutes")
@@ -716,10 +776,10 @@ def recordings_page(request: Request):
                 '<p class="muted legal-mini">Recording laws vary; some states require everyone on the call to agree. '
                 'Make sure you have consent where required.</p>')
     body = f"""{rec_note}
-{_bulkbar(s, "recdel", "/ucp/recordings/delete", own, "recordings you made")}
-<table><tr><th><input type="checkbox" id="recdel-all" aria-label="Select all"></th><th>With</th><th>Direction</th><th>Length</th><th>When</th><th>Listen</th><th></th></tr>{rows}</table>
-{_bulk_js("recdel")}
-<p class="muted">Recordings you started can be deleted. Recordings started by the other person on the call are shown but can only be deleted by them.</p>"""
+{(_bulkbar(s, "recdel", "/ucp/recordings/delete", own, "recordings you made") + _bulk_js("recdel")) if own else ""}
+<table><tr><th>{'<input type="checkbox" id="recdel-all" aria-label="Select all">' if own else ""}</th><th>With</th><th>Direction</th><th>Length</th><th>When</th><th>Listen</th><th></th></tr>{rows}</table>
+{_bulk_js("recdel") if own else ""}
+<p class="muted">Only recordings you started are shown here.</p>"""
     return _render(request, s, me, "ucp-rec", "Recordings", body)
 
 
@@ -997,7 +1057,19 @@ def _settings_body(request, s, me, extra_top=""):
     else:
         ack = (f'<p class="muted ok">You accepted the notice on {esc(acc_at)}.</p>' if consented else
                f'<label class="ack"><input type="checkbox" name="record_ack" value="1"> {esc(ent.RECORDING_ACK)}</label>')
-        rec_block = (f'<label class="switch"><input type="checkbox" name="user_record" value="1" {chk(me["user_record"] and consented)}> '
+        admin_ok = bool(me["user_record"])
+        wish = bool(me.get("user_wants_record", 0))
+        if not admin_ok:
+            rec_status = ('<p class="warn">⚠️ <b>Recording is turned off by your admin</b> for this extension. '
+                          'Your preference below is saved, but calls will not be recorded until your admin allows it.</p>')
+        elif wish and consented:
+            rec_status = ('<p class="ok">✅ <b>Recording is on</b> — your answered calls are being recorded '
+                          'and appear under Recordings.</p>')
+        else:
+            rec_status = ('<p class="muted">Recording is allowed by your admin. '
+                          'Check "Record my calls" below to start recording your calls.</p>')
+        rec_block = (f'{rec_status}'
+                     f'<label class="switch"><input type="checkbox" name="user_record" value="1" {chk(wish and consented)}> '
                      f'<span>Record my calls</span></label>'
                      f'<p class="muted">Answered calls are recorded and appear under Recordings.</p>'
                      f'<div class="legal"><b>Before you record calls:</b> {esc(ent.RECORDING_NOTICE)}</div>{ack}')
@@ -1188,11 +1260,11 @@ async def settings_prefs(request: Request):
             _audit(me, "ucp.recording_consent", f"version={ent.RECORDING_CONSENT_VERSION} ip={ip}")
     txt = 1 if f.get("text_email") == "1" else 0
     with M.db() as c:
-        c.execute("UPDATE logins SET user_record=?, vm_email=? WHERE id=?", (rec, email, me["id"]))
+        c.execute("UPDATE logins SET user_wants_record=?, vm_email=? WHERE id=?", (rec, email, me["id"]))
         c.execute("INSERT INTO user_prefs (login_id, text_email) VALUES (?,?)"
                   " ON CONFLICT(login_id) DO UPDATE SET text_email=excluded.text_email", (me["id"], txt))
         c.commit()
-    _audit(me, "ucp.prefs", f"user_record={rec} text_email={txt}")
+    _audit(me, "ucp.prefs", f"user_wants_record={rec} text_email={txt}")
     return _back("/ucp/settings", "saved")
 
 

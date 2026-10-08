@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS logins (
   sip_secret TEXT NOT NULL DEFAULT '',     -- SIP password; server-side only
   display_name TEXT NOT NULL DEFAULT '',
   record_admin INTEGER NOT NULL DEFAULT 0, -- admin-only recording flag
-  user_record INTEGER NOT NULL DEFAULT 0,  -- user's own "record calls" toggle
+  user_record INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for user recording
+  user_wants_record INTEGER NOT NULL DEFAULT 0, -- user's own "record my calls" wish
   vm_email TEXT NOT NULL DEFAULT '',
   max_messages INTEGER NOT NULL DEFAULT 500,
   enabled INTEGER NOT NULL DEFAULT 1,

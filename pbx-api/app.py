@@ -20,7 +20,7 @@ import bcrypt
 from fastapi import FastAPI, HTTPException, Request, Form, File, UploadFile
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse
 from pydantic import BaseModel
-from panel_templates import page, LOGIN_HTML, HIDE_ADMIN, BRANDING, BRAND_DEFAULTS, login_html
+from panel_templates import page, LOGIN_HTML, HIDE_ADMIN, BRANDING, BRAND_DEFAULTS, login_html, fmt_ts
 import ucp
 import ivr_ui
 import billing
@@ -100,6 +100,11 @@ def _migrate(c):
                  BEGIN UPDATE logins SET exten_since = datetime('now') WHERE id = NEW.id; END""")
     if "answered_login_id" not in cols("cdr"):
         c.execute("ALTER TABLE cdr ADD COLUMN answered_login_id INTEGER DEFAULT NULL")
+    # Split user recording into admin allow-flag + user wish-flag, so a
+    # user's opt-out sticks and an admin can never force user recording on.
+    # Backfill wish=0: every user (re-)opts in via Settings -> "Record my calls".
+    if "user_wants_record" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN user_wants_record INTEGER NOT NULL DEFAULT 0")
     # One-time: the previous build seeded 3 free IVR menus per user; paid
     # plans replace that (no free menus). Only touches the untouched seed.
     done = c.execute("SELECT value FROM kv_settings WHERE key='mig_ivr_free_0'").fetchone()
@@ -867,27 +872,38 @@ def login_edit_page(request: Request, lid: str):
         return esc(t[k] if t and t[k] is not None else d)
     body = f"""
 <h2>{'Edit' if t else 'Add'} login</h2>
-<form method="post" action="/logins/{lid}/edit">
+<form method="post" action="/logins/{lid}/edit" onsubmit="return confirmExtenChange()">
 {_csrf_field(s)}
 <label>Username<br><input name="username" value="{v('username')}" required></label><br>
 <label>Password<br><input name="password" type="password" placeholder="{'(unchanged)' if t else ''}" {'required' if not t else ''}></label><br>
 <label>Role<br><select name="role"><option value="user" {'selected' if v('role','user')=='user' else ''}>user</option><option value="admin" {'selected' if v('role')=='admin' else ''}>admin</option></select></label><br>
-<label>Extension<br><input name="exten" value="{v('exten')}" placeholder="e.g. 8800"></label><br>
+<label>Extension<br><input name="exten" id="exten" value="{v('exten')}" placeholder="e.g. 8800"></label>
+<p class="muted" style="color:#b31d1d;max-width:560px;margin:2px 0 6px">&#9888; {"Changing" if t else "Assigning"} the extension permanently deletes all call logs, SMS/MMS, voicemails and recordings tied to the old and new extension numbers. This cannot be undone.</p><br>
 <label>SIP username<br><input name="sip_username" value="{v('sip_username')}" placeholder="defaults to exten"></label><br>
 <label>SIP secret<br><input name="sip_secret" type="password" placeholder="{'(unchanged)' if t and v('sip_secret') else ''}"></label><br>
 <label>Display name<br><input name="display_name" value="{v('display_name')}" size="30"></label><br>
 <label>Voicemail email<br><input name="vm_email" value="{v('vm_email')}" size="30"></label><br>
-<label><input type="checkbox" name="record_admin" {'checked' if v('record_admin') else ''}> Admin call recording</label>
+<label><input type="checkbox" name="record_admin" {'checked' if t and t['record_admin'] else ''}> Admin call recording</label>
 <span class="muted">{'(on system-wide)' if _get_setting("admin_rec_enabled") == "1" else '(off system-wide - nothing is recorded until it is turned on under <a href="/recordings">Recordings</a>)'}</span><br>
-<label><input type="checkbox" name="user_record" {'checked' if v('user_record') else ''}> User call recording</label><br>
+<label><input type="checkbox" name="user_record" {'checked' if t and t['user_record'] else ''}> User call recording (allow)</label>
+<span class="muted">Lets the user record their own calls. They must still turn on "Record my calls" in Settings themselves — this cannot enable it for them. Uncheck to disable user recording entirely.</span><br>
 <p class="muted" style="max-width:560px">Recording laws vary; some US states (e.g. California, Florida, Illinois, Maryland,
 Massachusetts, Pennsylvania, Washington) require every party's consent. "User call recording" only records once the user has
 accepted the recording notice in their control panel and their plan includes recording. Admin recording is your responsibility
 to use lawfully.</p>
-<label><input type="checkbox" name="enabled" {'checked' if not t or v('enabled') else ''}> Enabled</label><br><br>
+<label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
 <a href="/logins">Cancel</a>
-</form>"""
+</form>
+<script>
+function confirmExtenChange(){{
+  var el=document.getElementById('exten');
+  if(el && el.value.trim()!==el.defaultValue.trim()){{
+    return confirm('Change extension from "'+el.defaultValue+'" to "'+el.value.trim()+'"?\n\nThis PERMANENTLY DELETES all call logs, SMS/MMS, voicemails and recordings for BOTH extensions. This cannot be undone.');
+  }}
+  return true;
+}}
+</script>"""
     return page("Edit login", body, s["username"], s["role"], "logins")
 
 
@@ -906,6 +922,7 @@ async def login_edit_save(request: Request, lid: str,
         return _panel_locked(s, "logins")
     await _check_csrf(request, s)
     import subprocess
+    new_id, old_exten = None, ""
     with db() as c:
         if lid == "new":
             pwh = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -927,6 +944,8 @@ async def login_edit_save(request: Request, lid: str,
                 c.execute("INSERT OR IGNORE INTO voicemail_boxes (mailbox, login_id) VALUES (?,?)",
                           (f"vm-{exten}", new_id))
         else:
+            old = c.execute("SELECT exten FROM logins WHERE id=?", (lid,)).fetchone()
+            old_exten = (old["exten"] if old else "") or ""
             sets, vals = [], []
             sip_username = _valid_name(sip_username, "sip_username") if sip_username else ""
             for k, val in [("username", username), ("role", role), ("exten", exten or ""),
@@ -943,6 +962,21 @@ async def login_edit_save(request: Request, lid: str,
             vals.append(lid)
             c.execute(f"UPDATE logins SET {', '.join(sets)} WHERE id=?", vals)
         c.commit()
+    # Privacy clean slate on (re)assignment. Changing a login's extension
+    # purges all user data for BOTH the old and new extension; a brand-new
+    # login purges the new extension's previous holder data.
+    new_exten = (exten or "").strip()
+    if lid == "new":
+        if new_exten:
+            purged = ucp.purge_extension_data([new_exten])
+            _audit_log(s["username"], "logins.exten_purge",
+                       f"new login {new_id} on ext {new_exten}: " +
+                       ", ".join(f"{k}={v}" for k, v in purged.items()))
+    elif old_exten != new_exten:
+        purged = ucp.purge_extension_data([old_exten, new_exten], moving_login_id=int(lid))
+        _audit_log(s["username"], "logins.exten_purge",
+                   f"login {lid}: {old_exten or '(none)'} -> {new_exten or '(none)'}: " +
+                   ", ".join(f"{k}={v}" for k, v in purged.items()))
     # Regenerate pjsip.conf for the new/changed extension (best effort;
     # retry via POST /system/reload if this fails)
     _best_effort_apply()
@@ -986,7 +1020,7 @@ def trunk_edit_page(request: Request, name: str):
 <label>Username<br><input name="username" value="{v('username')}" size="30" required></label><br>
 <label>Secret<br><input name="secret" type="password" value="" placeholder="{'(unchanged)' if t else ''}" {'required' if not t else ''}></label><br>
 <label>Codecs<br><input name="codecs" value="{v('codecs','ulaw,alaw,g722')}" size="40"></label><br>
-<label><input type="checkbox" name="enabled" {'checked' if not t or v('enabled') else ''}> Enabled</label><br><br>
+<label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
 <a href="/trunks">Cancel</a>
 </form>"""
@@ -1103,7 +1137,7 @@ def inbound_edit_page(request: Request, rid: str):
 <label>Timeout (seconds)<br><input name="timeout_sec" value="{v('timeout_sec','30')}" size="6"></label><br>
 <p><small>With an IVR menu selected, the menu answers and the ring list is only used if the menu is switched off.
 A number that rings a single user uses that user's own ring time and "answer with IVR" setting.</small></p>
-<label><input type="checkbox" name="enabled" {'checked' if not t or v('enabled') else ''}> Enabled</label><br><br>
+<label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
 <a href="/routes">Cancel</a>
 </form>
@@ -1216,7 +1250,7 @@ def cdr_page(request: Request):
     with db() as c:
         rows = c.execute("SELECT id, src, dst, direction, disposition, duration_sec, bill_sec, started_at FROM cdr ORDER BY id DESC LIMIT 500").fetchall()
         total = c.execute("SELECT COUNT(*) FROM cdr").fetchone()[0]
-    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='cdrdel' aria-label='Select'></td><td>{esc(r['src'])}</td><td>{esc(r['dst'])}</td><td>{esc(r['direction'])}</td><td>{esc(r['disposition'])}</td><td>{r['duration_sec']}s</td><td>{r['bill_sec']}s</td><td>{esc(r['started_at'])}</td></tr>" for r in rows)
+    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='cdrdel' aria-label='Select'></td><td>{esc(r['src'])}</td><td>{esc(r['dst'])}</td><td>{esc(r['direction'])}</td><td>{esc(r['disposition'])}</td><td>{r['duration_sec']}s</td><td>{r['bill_sec']}s</td><td>{fmt_ts(r['started_at'], from_utc=False)}</td></tr>" for r in rows)
     flash = ""
     d = request.query_params.get("deleted")
     if d is not None and d.isdigit():
@@ -1265,7 +1299,7 @@ def vm_page(request: Request):
     with db() as c:
         rows = c.execute("SELECT m.id, m.mailbox, m.caller, m.duration_sec, m.folder, m.received_at, m.path, b.login_id FROM voicemail_messages m LEFT JOIN voicemail_boxes b ON m.mailbox=b.mailbox ORDER BY m.id DESC LIMIT 500").fetchall()
         total = c.execute("SELECT COUNT(*) FROM voicemail_messages").fetchone()[0]
-    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='avm' aria-label='Select'></td><td>{esc(r['mailbox'])}</td><td>{esc(r['caller'])}</td><td>{r['duration_sec']}s</td><td>{esc(r['folder'])}</td><td>{esc(r['received_at'])}</td><td><audio controls preload=\"none\" src=\"/api/voicemail-audio/{r['id']}\"></audio> <a href=\"/api/voicemail-audio/{r['id']}?download=1\">DL</a></td></tr>" for r in rows)
+    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='avm' aria-label='Select'></td><td>{esc(r['mailbox'])}</td><td>{esc(r['caller'])}</td><td>{r['duration_sec']}s</td><td>{esc(r['folder'])}</td><td>{fmt_ts(r['received_at'])}</td><td><audio controls preload=\"none\" src=\"/api/voicemail-audio/{r['id']}\"></audio> <a href=\"/api/voicemail-audio/{r['id']}?download=1\">DL</a></td></tr>" for r in rows)
     body = (f"{_deleted_flash(request)}<h2>Voicemail Messages</h2>{_shown(len(rows), total, 'message')}"
             + ucp._bulkbar(s, "avm", "/voicemail/delete", total, "voicemail messages (every mailbox)")
             + f"<table><tr><th><input type='checkbox' id='avm-all' aria-label='Select all'></th><th>Box</th><th>Caller</th><th>Length</th><th>Folder</th><th>Received</th><th>Play</th></tr>{tr or '<tr><td colspan=7 class=muted>No messages</td></tr>'}</table>"
@@ -1463,7 +1497,7 @@ def rec_page(request: Request):
     with db() as c:
         rows = c.execute("SELECT id, system, exten, direction, peer, duration_sec, started_at, path FROM recordings ORDER BY id DESC LIMIT 500").fetchall()
         total = c.execute("SELECT COUNT(*) FROM recordings").fetchone()[0]
-    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='arec' aria-label='Select'></td><td>{esc(r['system'])}</td><td>{esc(r['exten'])}</td><td>{esc(r['direction'])}</td><td>{esc(r['peer'])}</td><td>{r['duration_sec']}s</td><td>{esc(r['started_at'])}</td><td><audio controls preload=\"none\" src=\"/api/recording-audio/{r['id']}\"></audio> <a href=\"/api/recording-audio/{r['id']}?download=1\">DL</a></td></tr>" for r in rows)
+    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='arec' aria-label='Select'></td><td>{esc(r['system'])}</td><td>{esc(r['exten'])}</td><td>{esc(r['direction'])}</td><td>{esc(r['peer'])}</td><td>{r['duration_sec']}s</td><td>{fmt_ts(r['started_at'])}</td><td><audio controls preload=\"none\" src=\"/api/recording-audio/{r['id']}\"></audio> <a href=\"/api/recording-audio/{r['id']}?download=1\">DL</a></td></tr>" for r in rows)
     body = (f"{_deleted_flash(request)}{_rec_settings_html(request, s)}<h2>Call Recordings</h2>{_shown(len(rows), total, 'recording')}"
             + ucp._bulkbar(s, "arec", "/recordings/delete", total, "call recordings (admin and user)")
             + f"<table><tr><th><input type='checkbox' id='arec-all' aria-label='Select all'></th><th>System</th><th>Exten</th><th>Dir</th><th>Peer</th><th>Length</th><th>Time</th><th>Play</th></tr>{tr or '<tr><td colspan=8 class=muted>No recordings</td></tr>'}</table>"
@@ -1498,7 +1532,7 @@ def messages_admin_page(request: Request):
     with db() as c:
         rows = c.execute("SELECT id, from_ext, to_ext, body, sent_at FROM messages ORDER BY id DESC LIMIT 500").fetchall()
         total = c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='amsg' aria-label='Select'></td><td>{esc(r['from_ext'])}</td><td>{esc(r['to_ext'])}</td><td class='msgbody'>{esc(r['body'])}</td><td>{esc(r['sent_at'])}</td></tr>" for r in rows)
+    tr = "".join(f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='amsg' aria-label='Select'></td><td>{esc(r['from_ext'])}</td><td>{esc(r['to_ext'])}</td><td class='msgbody'>{esc(r['body'])}</td><td>{fmt_ts(r['sent_at'])}</td></tr>" for r in rows)
     body = (f"{_deleted_flash(request)}<h2>Text Messages</h2>{_shown(len(rows), total, 'message')}"
             + ucp._bulkbar(s, "amsg", "/messages/delete", total, "text messages (for everyone)")
             + f"<table><tr><th><input type='checkbox' id='amsg-all' aria-label='Select all'></th><th>From</th><th>To</th><th>Message</th><th>Sent</th></tr>{tr or '<tr><td colspan=5 class=muted>No messages</td></tr>'}</table>"
@@ -2105,6 +2139,13 @@ def branding_page(request: Request):
 <option value="light" {sel(b['theme_default'],'light')}>Light</option>
 </select></label>
 <p class="muted">Visitors can switch with the 🌙/☀️ icon in the header; their choice is remembered in the browser.</p>
+<label>Time zone<br><select name="timezone">
+{"".join(f'<option value="{tz}" {sel(b["timezone"], tz)}>{label}</option>' for tz, label in [
+    ("America/Los_Angeles", "Los Angeles (PT)"), ("America/Denver", "Denver (MT)"),
+    ("America/Chicago", "Chicago (CT)"), ("America/New_York", "New York (ET)"),
+    ("America/Anchorage", "Anchorage (AKT)"), ("Pacific/Honolulu", "Honolulu (HST)"),
+    ("UTC", "UTC")])}</select></label>
+<p class="muted">Call/message times show in 12-hour format in this zone.</p>
 <label>Color presets<br><span class="muted">Click to apply:</span><br>
 {_presets}</label>
 <script>
@@ -2182,6 +2223,10 @@ async def branding_save(request: Request,
         "footer_text": (f.get("footer_text") or "").strip()[:140],
         "theme_default": (f.get("theme_default") or "dark") if (f.get("theme_default") in ("dark", "light")) else "dark",
         "header_animated": "1" if f.get("header_animated") else "0",
+        "timezone": (f.get("timezone") or "America/Los_Angeles")
+        if (f.get("timezone") in ("America/Los_Angeles", "America/Denver", "America/Chicago",
+                                  "America/New_York", "America/Anchorage", "Pacific/Honolulu", "UTC"))
+        else "America/Los_Angeles",
     }
     def _save_image(field_prefix, label):
         """Handle upload/URL/remove for an image setting. Returns (key, value)
@@ -2730,8 +2775,8 @@ def apikeys_page(request: Request):
     tr = "".join(
         f"<tr><td>{'' if r['enabled'] else chr(60) + 'input type=checkbox class=sel name=ids value=' + str(r['id']) + ' form=akeys aria-label=Select' + chr(62)}</td>"
         f"<td><code>{esc(r['prefix'])}...</code></td><td>{esc(r['name'])}</td>"
-        f"<td>{esc(r['username'])}</td><td>{esc(r['created_at'])}</td>"
-        f"<td>{esc(r['last_used_at']) or '-'}</td>"
+        f"<td>{esc(r['username'])}</td><td>{fmt_ts(r['created_at'])}</td>"
+        f"<td>{fmt_ts(r['last_used_at']) if r['last_used_at'] else '-'}</td>"
         f"<td>{'yes' if r['enabled'] else 'no'}</td>"
         f"<td>{'<form method=post action=/api-keys/' + str(r['id']) + '/revoke style=display:inline>' + _csrf_field(s) + '<button class=btn>Revoke</button></form>' if r['enabled'] else ''}</td></tr>"
         for r in rows)

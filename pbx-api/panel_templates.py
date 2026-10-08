@@ -162,6 +162,8 @@ pre.token{background:var(--pill-bg);padding:12px;word-break:break-all;border-rad
 """
 
 import contextvars
+from zoneinfo import ZoneInfo
+from datetime import datetime as _dt
 
 # Set per request by app._remote_guard: True when admin pages are blocked for
 # this visitor (internet, "office network only"). Admins then get the same
@@ -191,6 +193,7 @@ BRAND_DEFAULTS = {
     "footer_show": "0",
     "footer_text": "",
     "theme_default": "dark",    # dark | light — used when visitor has no saved choice
+    "timezone": "America/Los_Angeles",
 }
 
 import re as _re
@@ -216,7 +219,40 @@ def get_brand():
         b["theme_default"] = "dark"
     if b["header_animated"] != "1":
         b["header_animated"] = "0"
+    try:
+        ZoneInfo(b["timezone"] or "America/Los_Angeles")
+    except Exception:
+        b["timezone"] = "America/Los_Angeles"
     return b
+
+
+def fmt_ts(ts, from_utc=True):
+    """'YYYY-MM-DD HH:MM:SS' -> 'YYYY-MM-DD h:MM AM/PM' in the brand timezone.
+
+    from_utc=True: the stored value is UTC (SQLite datetime('now') defaults,
+    voip.ms). False: it's already server-local wall time (CDR); formatted
+    as-is on the assumption the server sits in the brand timezone.
+    """
+    import html as _html
+    s = (ts or "").strip()[:19]
+    try:
+        dt = _dt.strptime(s, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return _html.escape(str(ts or ""))
+    brand = get_brand()
+    try:
+        tz = ZoneInfo(brand.get("timezone") or "America/Los_Angeles")
+    except Exception:
+        tz = ZoneInfo("America/Los_Angeles")
+    try:
+        if from_utc:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+        else:
+            dt = dt.replace(tzinfo=tz)
+    except Exception:
+        pass
+    h = dt.strftime("%I").lstrip("0") or "12"
+    return _html.escape(f"{dt:%Y-%m-%d} {h}:{dt:%M} {dt:%p}")
 
 
 def theme_logo_imgs(light_src, dark_src, css_class, style):

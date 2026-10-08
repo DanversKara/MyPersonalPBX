@@ -581,10 +581,12 @@ def start_call_recordings(bridge, a_id):
         systems.add("admin")
     if admin_on and callee and callee["record_admin"]:
         systems.add("admin")
-    # "Record my calls" only with the feature in their plan AND the user's
-    # acknowledgement of recording laws (two-party consent states etc.).
+    # "Record my calls" needs the admin allow-flag AND the user's own wish
+    # (so a user's opt-out sticks), plus the feature in their plan AND the
+    # user's acknowledgement of recording laws (two-party consent states).
     for party in (caller, callee):
-        if (party and party["user_record"] and has_feature(party["id"], "recording")
+        if (party and party["user_record"] and _party_wants_record(party)
+                and has_feature(party["id"], "recording")
                 and recording_consented(party["id"])):
             systems.add("user")
     if systems and (q1("SELECT value FROM kv_settings WHERE key='rec_announce'") or {"value": "0"})["value"] == "1":
@@ -1958,6 +1960,14 @@ def can_call_outside(login_id):
     if q == UNLIMITED:
         return True
     return q > 0 and minutes_used(login_id) < q
+
+
+def _party_wants_record(party):
+    """User's own wish-flag; True on pre-migration DBs (old single-flag)."""
+    try:
+        return bool(party["user_wants_record"])
+    except (IndexError, KeyError, TypeError):
+        return True
 
 
 def recording_consented(login_id):

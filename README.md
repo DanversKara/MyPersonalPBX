@@ -498,6 +498,10 @@ browser), login page logo/title/subtitle (also with a dark-mode variant),
 favicon, and an optional footer line. Logos are stored in the database, so
 they ride along with backups.
 
+**Regional:** time zone selector (defaults to Los Angeles); all call,
+message, voicemail and recording times display in 12-hour format in that
+zone.
+
 ---
 
 ## 10. My Phone: the user panel
