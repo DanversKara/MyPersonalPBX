@@ -5,72 +5,93 @@
 # (see esc() in app.py) — caller ID, message bodies etc. are attacker input.
 
 BASE_CSS = """
-body{font-family:system-ui,sans-serif;margin:0;background:#f5f5f5;color:#222}
-.nav{background:#1a1a2e;color:#fff;padding:12px 20px;display:flex;gap:20px;align-items:center}
-.nav a{color:#aaccff;text-decoration:none}
+:root{
+  --bg:#f5f5f5;--fg:#222;--card:#fff;--border:#eee;--th-bg:#f8f8f8;
+  --input-border:#ddd;--input-bg:#fff;--muted-fg:#666;--muted2:#888;
+  --pill-bg:#eee;--hover-bg:#eef;--nav-bg:#1a1a2e;--accent:#1a1a2e;
+  --accent-hover:#2a2a4e;--link:#2856c7;--nav-link:#aaccff;
+}
+[data-theme="dark"]{
+  --bg:#111119;--fg:#e9e9f2;--card:#1b1b27;--border:#2d2d42;
+  --th-bg:#222230;--input-border:#3b3b55;--input-bg:#1b1b27;
+  --muted-fg:#9c9cb4;--muted2:#8a8aa2;--pill-bg:#2b2b3d;--hover-bg:#2e2e44;
+  --accent:#41417a;--accent-hover:#52528f;--link:#8ab4ff;
+}
+body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
+.nav{background:var(--nav-bg);color:#fff;padding:12px 20px;display:flex;gap:20px;align-items:center}
+.nav a{color:var(--nav-link);text-decoration:none}
 .nav a:hover{color:#fff}
 .nav .sp{flex:1}
+.theme-toggle{background:none;border:0;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1}
+.theme-toggle:hover{background:rgba(255,255,255,.14)}
 .wrap{max-width:1100px;margin:20px auto;padding:0 20px}
-.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.card{background:var(--card);border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:8px;border-bottom:1px solid #eee}
-th{background:#f8f8f8}
-.btn{background:#1a1a2e;color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer}
-.btn:hover{background:#2a2a4e}
-input,select{padding:8px;border:1px solid #ddd;border-radius:4px;margin:4px 0}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border)}
+th{background:var(--th-bg)}
+.btn{background:var(--accent);color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer}
+.btn:hover{background:var(--accent-hover)}
+input,select{padding:8px;border:1px solid var(--input-border);border-radius:4px;margin:4px 0;background:var(--input-bg);color:var(--fg)}
+input::placeholder{color:var(--muted2)}
 .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
-.tabs a{padding:8px 16px;background:#fff;border-radius:4px;text-decoration:none;color:#333}
-.tabs a.on{background:#1a1a2e;color:#fff}
+.tabs a{padding:8px 16px;background:var(--card);border-radius:4px;text-decoration:none;color:var(--fg)}
+.tabs a.on{background:var(--accent);color:#fff}
 audio{width:100%;max-width:400px}
 td audio{min-width:240px;height:36px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
-.stat{background:#f8f8f8;border-radius:8px;padding:14px;text-align:center}
+.stat{background:var(--th-bg);border-radius:8px;padding:14px;text-align:center}
 .stat b{font-size:26px;display:block}
-.stat span{color:#666;font-size:12px}
-.muted{color:#888;font-size:12px}
+.stat span{color:var(--muted-fg);font-size:12px}
+.muted{color:var(--muted2);font-size:12px}
 .ok{color:#0a7d2c}.bad{color:#c22}.warn{color:#8a5a00}
+[data-theme="dark"] .ok{color:#4ade80}[data-theme="dark"] .bad{color:#f87171}[data-theme="dark"] .warn{color:#fbbf24}
 /* ---- user control panel ---- */
 .ucp-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px}
 .ucp-head h2{margin:0 0 2px}
-.subtabs{display:flex;gap:4px;flex-wrap:wrap;margin:-4px 0 18px;border-bottom:1px solid #eee}
-.subtabs a{padding:8px 12px;text-decoration:none;color:#555;border-bottom:2px solid transparent;margin-bottom:-1px}
-.subtabs a.on{color:#1a1a2e;border-color:#1a1a2e;font-weight:600}
+.subtabs{display:flex;gap:4px;flex-wrap:wrap;margin:-4px 0 18px;border-bottom:1px solid var(--border)}
+.subtabs a{padding:8px 12px;text-decoration:none;color:var(--muted-fg);border-bottom:2px solid transparent;margin-bottom:-1px}
+.subtabs a.on{color:var(--accent);border-color:var(--accent);font-weight:600}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:22px}
-.tile{background:#f8f8f8;border-radius:8px;padding:14px;color:inherit;text-decoration:none;display:block}
-.tile .lbl{display:block;color:#666;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.tile{background:var(--th-bg);border-radius:8px;padding:14px;color:inherit;text-decoration:none;display:block}
+.tile .lbl{display:block;color:var(--muted-fg);font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
 .tile b{font-size:28px}
-.tile.link:hover{background:#eef}
-.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#eee;color:#444}
+.tile.link:hover{background:var(--hover-bg)}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:var(--pill-bg);color:var(--fg)}
 .pill.ok{background:#e3f5e8;color:#0a7d2c}.pill.bad{background:#fde8e8;color:#b31d1d}.pill.warn{background:#fff3d6;color:#8a5a00}
-.flash{padding:10px 14px;border-radius:6px;margin-bottom:16px;background:#f3f3f3}
+[data-theme="dark"] .pill.ok{background:#12351f;color:#4ade80}
+[data-theme="dark"] .pill.bad{background:#3d1414;color:#f87171}
+[data-theme="dark"] .pill.warn{background:#3a2c10;color:#fbbf24}
+.flash{padding:10px 14px;border-radius:6px;margin-bottom:16px;background:var(--th-bg)}
 .flash.ok{background:#e3f5e8;color:#0a5a22}.flash.bad{background:#fde8e8;color:#8d1616}
-.flash.secret code{font-size:15px;background:#fff;padding:3px 8px;border-radius:4px;margin:0 6px;word-break:break-all}
+[data-theme="dark"] .flash.ok{background:#12351f;color:#4ade80}
+[data-theme="dark"] .flash.bad{background:#3d1414;color:#f87171}
+.flash.secret code{font-size:15px;background:var(--card);padding:3px 8px;border-radius:4px;margin:0 6px;word-break:break-all}
 .filters{display:flex;gap:6px;margin-bottom:12px}
-.filters a{padding:5px 12px;border-radius:999px;background:#f1f1f1;color:#333;text-decoration:none;font-size:14px}
-.filters a.on{background:#1a1a2e;color:#fff}
+.filters a{padding:5px 12px;border-radius:999px;background:var(--pill-bg);color:var(--fg);text-decoration:none;font-size:14px}
+.filters a.on{background:var(--accent);color:#fff}
 form.inline{display:inline;margin:0}
-.link-btn{background:none;border:0;color:#2856c7;cursor:pointer;padding:0 6px;font:inherit}
+.link-btn{background:none;border:0;color:var(--link);cursor:pointer;padding:0 6px;font:inherit}
 .link-btn.bad{color:#c22}
 .actions a{margin-right:6px}
-.btn.ghost{background:#fff;color:#1a1a2e;border:1px solid #1a1a2e}
+.btn.ghost{background:var(--card);color:var(--accent);border:1px solid var(--accent)}
 tr.unread td{font-weight:600}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2856c7;margin-right:6px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--link);margin-right:6px}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
-.panel{border:1px solid #eee;border-radius:8px;padding:16px}
+.panel{border:1px solid var(--border);border-radius:8px;padding:16px}
 .panel h3{margin-top:0}
 .panel label{display:block;margin:10px 0;font-size:14px}
 .panel input[type=text],.panel input:not([type]),.panel input[type=email],.panel input[type=password]{width:100%;box-sizing:border-box}
 .switch{display:flex!important;align-items:center;gap:8px;font-weight:600}
 .switch input{width:18px;height:18px}
-table.kv td:first-child{color:#666;width:110px}
+table.kv td:first-child{color:var(--muted-fg);width:110px}
 .msgs{display:grid;grid-template-columns:220px 1fr;gap:16px;min-height:300px}
-.convs{border-right:1px solid #eee;padding-right:8px}
+.convs{border-right:1px solid var(--border);padding-right:8px}
 .conv{display:block;padding:8px;border-radius:6px;text-decoration:none;color:inherit}
 .conv span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.conv.on{background:#eef}
+.conv.on{background:var(--hover-bg)}
 .thread{display:flex;flex-direction:column;gap:8px}
-.bubble{max-width:70%;background:#f1f1f1;padding:8px 12px;border-radius:12px;align-self:flex-start}
-.bubble.mine{background:#1a1a2e;color:#fff;align-self:flex-end}
+.bubble{max-width:70%;background:var(--pill-bg);padding:8px 12px;border-radius:12px;align-self:flex-start}
+.bubble.mine{background:var(--accent);color:#fff;align-self:flex-end}
 .bubble .muted{display:block;font-size:11px;margin-top:2px}
 .bubble.mine .muted{color:#bbc}
 table.keys td{padding:5px 6px}
@@ -80,11 +101,11 @@ table.keys td.key{font-weight:700;font-size:18px;width:34px;text-align:center}
 .greet{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0}
 .inline-chk{display:inline-flex!important;gap:6px;align-items:center;margin:0!important}
 .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:12px}
-.plan{border:1px solid #e3e3e3;border-radius:10px;padding:16px;display:flex;flex-direction:column}
-.plan.on{border:2px solid #1a1a2e}
+.plan{border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;flex-direction:column}
+.plan.on{border:2px solid var(--accent)}
 .plan h3{margin:0 0 6px}
 .plan .price{font-size:28px;font-weight:700;margin-bottom:6px}
-.plan .price span{font-size:14px;font-weight:400;color:#666}
+.plan .price span{font-size:14px;font-weight:400;color:var(--muted-fg)}
 .plan form,.plan>button{margin-top:auto}
 .current-plan{margin-bottom:20px}
 .current-plan h3{margin:4px 0 6px;display:flex;gap:10px;align-items:center}
@@ -94,7 +115,8 @@ table.keys td.key{font-weight:700;font-size:18px;width:34px;text-align:center}
 .greet-up{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
 .bulkbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
 .btn.danger{color:#b31d1d;border-color:#b31d1d}
-.scrollbox{max-height:420px;overflow-y:auto;border:1px solid #eee;border-radius:6px}
+[data-theme="dark"] .btn.danger{color:#f87171;border-color:#f87171}
+.scrollbox{max-height:420px;overflow-y:auto;border:1px solid var(--border);border-radius:6px}
 .scrollbox th{position:sticky;top:0;z-index:1}
 th input[type=checkbox],td input.sel,td input.si{width:16px;height:16px;margin:0}
 .conv-row{display:flex;align-items:center;gap:4px}
@@ -102,13 +124,14 @@ th input[type=checkbox],td input.sel,td input.si{width:16px;height:16px;margin:0
 .bubble input.sel{margin:0 6px 0 0;vertical-align:middle}
 td.msgbody{max-width:420px;overflow-wrap:anywhere}
 .flash.warn-note{background:#fff6dd;color:#6b4a00}
-.legal{background:#f7f7fb;border-left:3px solid #8a5a00;padding:10px 12px;font-size:13px;margin:8px 0;line-height:1.45}
+[data-theme="dark"] .flash.warn-note{background:#3a2f14;color:#fbbf24}
+.legal{background:var(--th-bg);border-left:3px solid #8a5a00;padding:10px 12px;font-size:13px;margin:8px 0;line-height:1.45}
 label.ack{display:flex!important;gap:8px;align-items:flex-start;font-size:13px;font-weight:600}
 label.ack input{margin-top:2px;width:16px;height:16px;flex:none}
 ul.feat{padding-left:18px;margin:4px 0 10px}ul.feat li{margin:2px 0}
 table.usage caption{text-align:left;padding:4px 0}
-.meter{display:inline-block;width:90px;height:6px;background:#eee;border-radius:3px;margin-left:8px;vertical-align:middle;overflow:hidden}
-.meter span{display:block;height:100%;background:#1a1a2e}
+.meter{display:inline-block;width:90px;height:6px;background:var(--pill-bg);border-radius:3px;margin-left:8px;vertical-align:middle;overflow:hidden}
+.meter span{display:block;height:100%;background:var(--accent)}
 .warn{color:#8a5a00}
 .access-defaults{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px}
 .access-defaults label{margin:0!important}
@@ -117,6 +140,10 @@ ul.checklist{padding-left:18px;font-size:13px;line-height:1.5}
 ul.checklist code{display:block;margin:4px 0 6px;word-break:break-all}
 .setup-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
 .setup-grid h4{margin:0 0 6px}
+.safety-bar{border:2px solid var(--border);border-radius:8px;padding:12px;background:var(--th-bg)}
+.safety-bar.engaged{border-color:#c22;background:#fff0f0}
+[data-theme="dark"] .safety-bar.engaged{background:#3d1414;border-color:#f87171}
+pre.token{background:var(--pill-bg);padding:12px;word-break:break-all;border-radius:6px}
 @media (max-width:640px){.msgs{grid-template-columns:1fr}.convs{border:0}
   table{display:block;overflow-x:auto}.wrap{padding:0 10px}.card{padding:14px}}
 """
@@ -143,9 +170,11 @@ BRAND_DEFAULTS = {
     "login_mode": "text",       # text | logo | both
     "login_title": "",
     "login_subtitle": "",
+    "login_logo": "",           # data URI or https URL; falls back to logo
     "favicon": "",
     "footer_show": "0",
     "footer_text": "",
+    "theme_default": "dark",    # dark | light — used when visitor has no saved choice
 }
 
 import re as _re
@@ -167,6 +196,8 @@ def get_brand():
         b["header_mode"] = "text"
     if b["login_mode"] not in ("text", "logo", "both"):
         b["login_mode"] = "text"
+    if b["theme_default"] not in ("dark", "light"):
+        b["theme_default"] = "dark"
     return b
 
 
@@ -238,14 +269,14 @@ def page(title, body, username="", role="", tab=""):
         brand_html = _logo_tag + f' <strong style="margin-left:8px">{_name}</strong>'
     else:
         brand_html = f"<strong>{_name}</strong>"
-    # Custom colors (validated hex in get_brand)
-    _color_css = ""
+    # Custom colors (validated hex in get_brand). Emitted as CSS variables
+    # AFTER the theme blocks so branding wins in both light and dark mode.
+    _brand_vars = []
     if brand["header_color"] != BRAND_DEFAULTS["header_color"]:
-        _color_css += f".nav{{background:{brand['header_color']}}}"
+        _brand_vars.append(f"--nav-bg:{brand['header_color']}")
     if brand["accent_color"] != BRAND_DEFAULTS["accent_color"]:
-        _color_css += (f".tabs a.on{{background:{brand['accent_color']}}}"
-                       f".btn{{background:{brand['accent_color']}}}"
-                       f".btn:hover{{filter:brightness(1.2)}}")
+        _brand_vars.append(f"--accent:{brand['accent_color']}")
+    _color_css = (":root{" + ";".join(_brand_vars) + "}") if _brand_vars else ""
     # Favicon
     _fav = brand["favicon"].strip()
     _fav_tag = (f'<link rel="icon" href="{_html.escape(_fav, quote=True)}">') if _fav else ""
@@ -254,18 +285,35 @@ def page(title, body, username="", role="", tab=""):
     if brand["footer_show"] == "1" and brand["footer_text"].strip():
         _footer = (f'<div class="wrap"><p class="muted" style="text-align:center;padding:10px 0">'
                    f'{_html.escape(brand["footer_text"].strip())}</p></div>')
+    # Theme: visitor's saved choice wins, else the branded default (dark).
+    # Runs synchronously in <head> so the right theme paints first try.
+    _theme_js = ("""<script>(function(){var d="%s";try{var t=localStorage.getItem("pbx-theme");"""
+                 """t=(t==="light"||t==="dark")?t:d;}catch(e){t=d;}"""
+                 """document.documentElement.setAttribute("data-theme",t);})();"""
+                 """function toggleTheme(){var h=document.documentElement;"""
+                 """var t=h.getAttribute("data-theme")==="dark"?"light":"dark";"""
+                 """h.setAttribute("data-theme",t);"""
+                 """try{localStorage.setItem("pbx-theme",t);}catch(e){}"""
+                 """var b=document.getElementById("theme-toggle");"""
+                 """if(b)b.textContent=t==="dark"?"🌙":"☀️";}</script>"""
+                ) % brand["theme_default"]
+    _theme_btn = ("""<button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" """
+                  """title="Toggle dark / light mode">🌙</button>"""
+                  """<script>try{document.getElementById("theme-toggle").textContent="""
+                  """document.documentElement.getAttribute("data-theme")==="dark"?"🌙":"☀️";}catch(e){}</script>""")
     return f"""<!DOCTYPE html><html><head><title>{title} - {_name}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{_theme_js}
 {_fav_tag}
 <style>{BASE_CSS}{_color_css}</style></head><body>
-<div class="nav">{brand_html}<span class="sp"></span>{nav_user}</div>
+<div class="nav">{brand_html}<span class="sp"></span>{_theme_btn}{nav_user}</div>
 <div class="wrap">{tabs}<div class="card">{body}</div></div>{_footer}</body></html>"""
 
 def login_html():
     """Login form with branding: logo and/or custom title per admin settings."""
     import html as _html
     brand = get_brand()
-    _logo = brand["logo"].strip()
+    _logo = (brand["login_logo"] or brand["logo"]).strip()
     _logo_tag = (f'<img src="{_html.escape(_logo, quote=True)}" alt="" '
                  f'style="max-height:64px;max-width:280px;margin-bottom:8px"><br>') if _logo else ""
     _title = (brand["login_title"] or "").strip() or brand["site_name"] or "PBX Panel"

@@ -687,8 +687,7 @@ async function loadSafety() {
     const sz = await jgetDetail('/api/v1/safety');
     const ks = sz.kill_switch, lock = sz.safety_lock;
     document.getElementById('safety').innerHTML =
-      '<div style="border:2px solid ' + (ks ? '#c22' : '#ddd') + ';border-radius:8px;padding:12px;' +
-      (ks ? 'background:#fff0f0;' : 'background:#fafafa;') + '">' +
+      '<div class="safety-bar' + (ks ? ' engaged' : '') + '">' +
       '<strong>Status:</strong> ' +
       (ks ? '<span class="bad"><strong>KILL SWITCH ENGAGED</strong> — all calls halted, no registrations</span>'
           : '<span class="ok">Active</span>') +
@@ -2087,12 +2086,21 @@ def branding_page(request: Request):
 <h3>Colors</h3>
 <label>Header background<br><input type="color" name="header_color" value="{v('header_color') or '#1a1a2e'}"></label><br>
 <label>Buttons &amp; active tabs<br><input type="color" name="accent_color" value="{v('accent_color') or '#1a1a2e'}"></label><br>
+<label>Default theme<br><select name="theme_default">
+<option value="dark" {sel(b['theme_default'],'dark')}>Dark</option>
+<option value="light" {sel(b['theme_default'],'light')}>Light</option>
+</select></label>
+<p class="muted">Visitors can switch with the 🌙/☀️ icon in the header; their choice is remembered in the browser.</p>
 <h3>Login page</h3>
 <label>Shows<br><select name="login_mode">
 <option value="text" {sel(b['login_mode'],'text')}>Text only</option>
 <option value="logo" {sel(b['login_mode'],'logo')}>Logo only</option>
 <option value="both" {sel(b['login_mode'],'both')}>Logo + text</option>
 </select></label><br>
+<label>Login page logo (blank = use header logo)<br><input type="file" name="login_logo_file" accept="image/*"></label><br>
+<label>…or image URL<br><input name="login_logo_url" value="{'' if b['login_logo'].startswith('data:') else v('login_logo')}" size="60" placeholder="https://…"></label><br>
+{f'<img src="'+esc(b["login_logo"])+'" style="max-height:48px;max-width:220px;border:1px solid #eee;border-radius:4px"><br>' if b["login_logo"] else '<span class="muted">Using header logo.</span><br>'}
+<label><input type="checkbox" name="login_logo_remove" value="1"> Remove login logo (fall back to header logo)</label><br>
 <label>Heading (blank = site name)<br><input name="login_title" value="{v('login_title')}" size="40" maxlength="80"></label><br>
 <label>Subheading<br><input name="login_subtitle" value="{v('login_subtitle')}" size="60" maxlength="140"></label><br>
 <h3>Favicon</h3>
@@ -2119,7 +2127,8 @@ def branding_page(request: Request):
 @app.post("/branding")
 async def branding_save(request: Request,
                         logo_file: UploadFile = File(None),
-                        favicon_file: UploadFile = File(None)):
+                        favicon_file: UploadFile = File(None),
+                        login_logo_file: UploadFile = File(None)):
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
@@ -2141,6 +2150,7 @@ async def branding_save(request: Request,
         "login_subtitle": (f.get("login_subtitle") or "").strip()[:140],
         "footer_show": "1" if f.get("footer_show") else "0",
         "footer_text": (f.get("footer_text") or "").strip()[:140],
+        "theme_default": (f.get("theme_default") or "dark") if (f.get("theme_default") in ("dark", "light")) else "dark",
     }
     # Logo: upload wins, else URL field, else keep existing unless removed.
     logo_uri = _brand_image_to_data_uri(logo_file)
@@ -2165,9 +2175,21 @@ async def branding_save(request: Request,
         vals["favicon"] = fav_uri
     elif fav_url.startswith(("https://", "http://", "data:")):
         vals["favicon"] = fav_url
+    # Login page logo: upload wins, else URL, else keep unless removed.
+    login_uri = _brand_image_to_data_uri(login_logo_file)
+    if login_uri is None:
+        return HTMLResponse(page("Branding", "<h2>Branding</h2><p style='color:red'>Login logo rejected: use a PNG, JPEG, GIF, SVG or WebP under 500 KB.</p><p><a href='/branding'>Back</a></p>",
+                                  s["username"], s["role"], "branding"), status_code=400)
+    login_url = (f.get("login_logo_url") or "").strip()[:500]
+    if f.get("login_logo_remove"):
+        vals["login_logo"] = ""
+    elif login_uri:
+        vals["login_logo"] = login_uri
+    elif login_url.startswith(("https://", "http://", "data:")):
+        vals["login_logo"] = login_url
     with db() as c:
-        # logo/favicon are only in vals when uploaded, pasted or removed;
-        # otherwise the existing value stays untouched.
+        # logo/favicon/login_logo are only in vals when uploaded, pasted or
+        # removed; otherwise the existing value stays untouched.
         for k, val in vals.items():
             c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?, ?)",
                       ("brand_" + k, val))
@@ -2694,7 +2716,7 @@ async def apikeys_create(request: Request, username: str = Form(...), name: str 
                             status_code=e.status_code)
     body = f"""<h2>API key created</h2>
 <p>Copy it now — it will not be shown again.</p>
-<pre style="background:#eee;padding:12px;word-break:break-all">{token}</pre>
+<pre class="token">{token}</pre>
 <p>Login: <strong>{esc(info['username'])}</strong> &middot; Name: {esc(info['name'] or '-')}<br>
 Use as: <code>Authorization: Bearer {token}</code></p>
 <p><a href="/api-keys" class="btn">Done</a></p>"""

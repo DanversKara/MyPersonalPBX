@@ -490,9 +490,10 @@ alerts. A key is shown only once; revoke it any time.
 
 ### Branding
 White-label the panel: site name, header logo (upload or URL, shown as text,
-logo, or both), header and button colors, login page logo/title/subtitle,
-favicon, and an optional footer line. Logos are stored in the database, so
-they ride along with backups.
+logo, or both), header and button colors, default dark/light theme (visitors
+can flip it with the 🌙/☀️ icon; their choice sticks in the browser), login
+page logo/title/subtitle, favicon, and an optional footer line. Logos are
+stored in the database, so they ride along with backups.
 
 ---
 
