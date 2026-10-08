@@ -488,6 +488,12 @@ reopen or delete them. To stop someone, disable their login.
 Bearer tokens for the REST API (`docs/API.md`) and for the edge's security
 alerts. A key is shown only once; revoke it any time.
 
+### Branding
+White-label the panel: site name, header logo (upload or URL, shown as text,
+logo, or both), header and button colors, login page logo/title/subtitle,
+favicon, and an optional footer line. Logos are stored in the database, so
+they ride along with backups.
+
 ---
 
 ## 10. My Phone: the user panel

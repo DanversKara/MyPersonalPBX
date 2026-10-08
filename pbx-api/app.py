@@ -17,10 +17,10 @@ import logging
 log = logging.getLogger("pbx-api")
 
 import bcrypt
-from fastapi import FastAPI, HTTPException, Request, Form
+from fastapi import FastAPI, HTTPException, Request, Form, File, UploadFile
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse
 from pydantic import BaseModel
-from panel_templates import page, LOGIN_HTML, HIDE_ADMIN
+from panel_templates import page, LOGIN_HTML, HIDE_ADMIN, BRANDING, BRAND_DEFAULTS, login_html
 import ucp
 import ivr_ui
 import billing
@@ -407,6 +407,7 @@ async def _remote_guard(request: Request, call_next):
     _login_peer.set(request.client.host if request.client else "?")
     blocked = is_remote(request) and _get_setting("admin_remote") != "1"
     HIDE_ADMIN.set(blocked)
+    _load_branding()
     if blocked:
         path = request.url.path
         if path == "/":
@@ -550,14 +551,14 @@ def _check_csrf_v1(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
-    return page("Login", LOGIN_HTML)
+    return page("Login", login_html())
 
 
 @app.post("/login")
 def login_post(request: Request, username: str = Form(...), password: str = Form(...)):
     ip = client_ip(request)
     if not _login_allowed(ip, username):
-        return HTMLResponse(page("Login", LOGIN_HTML + "<p style='color:red'>Too many attempts — try again in 15 minutes.</p>"), status_code=429)
+        return HTMLResponse(page("Login", login_html() + "<p style='color:red'>Too many attempts — try again in 15 minutes.</p>"), status_code=429)
     with db() as c:
         u = c.execute("SELECT * FROM logins WHERE username=?",
                       (username,)).fetchone()
@@ -565,7 +566,7 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
     if not u or not pw_ok or not u["enabled"]:
         _log_signin(request, username, False)
         _login_failed(ip, username)
-        return HTMLResponse(page("Login", LOGIN_HTML + "<p style='color:red'>Invalid credentials</p>"), status_code=401)
+        return HTMLResponse(page("Login", login_html() + "<p style='color:red'>Invalid credentials</p>"), status_code=401)
     _log_signin(request, username, True)
     tok = _new_session(u)
     dest = "/" if u["role"] == "admin" else "/ucp"
@@ -732,19 +733,21 @@ function dur(epoch) {
   const m = Math.floor(s / 60); s -= m * 60;
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
 }
-const CALL_TYPE = {inbound: 'Incoming', outbound: 'Outgoing', internal: 'Internal', forwarded: 'Forwarded', emergency: '🚨 911'};
+const CALL_TYPE = {inbound: 'Incoming', outbound: 'Outgoing', internal: 'Internal', forwarded: 'Forwarded', emergency: '🚨 911', spy: '👁 Spy'};
 async function loadCalls() {
   try {
     const calls = (await jgetDetail('/api/v1/calls/live')).calls || [];
     STATS.calls = calls.length;
-    document.getElementById('calls').innerHTML = calls.length ? calls.map(c =>
-      '<tr><td><strong>' + esc(c.from_label || c.caller) + '</strong></td>' +
+    document.getElementById('calls').innerHTML = calls.length ? calls.map(c => {
+      const isSpy = c.direction === 'spy';
+      const stateLabel = isSpy ? (c.state === 'bridged' ? 'Listening' : 'Waiting')
+                               : (c.state === 'bridged' ? 'Talking' : 'Ringing');
+      return '<tr><td><strong>' + esc(c.from_label || c.caller) + '</strong></td>' +
       '<td>' + esc(c.to_label || c.callee) + '</td>' +
       '<td>' + esc(CALL_TYPE[c.direction] || c.direction || 'Internal') + '</td>' +
-      '<td class="' + (c.state === 'bridged' ? 'ok' : 'warn') + '">' +
-        (c.state === 'bridged' ? 'Talking' : 'Ringing') + '</td>' +
-      '<td>' + (c.state === 'bridged' ? dur(c.bridged_at) : dur(c.started_at)) + '</td></tr>'
-    ).join('') : '<tr><td colspan="5" class="muted">No calls right now</td></tr>';
+      '<td class="' + (c.state === 'bridged' ? 'ok' : 'warn') + '">' + stateLabel + '</td>' +
+      '<td>' + (c.state === 'bridged' ? dur(c.bridged_at) : dur(c.started_at)) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="muted">No calls right now</td></tr>';
     LOADED.calls = true;
   } catch (e) { failRow('calls', 5, 'live calls', e); }
 }
@@ -2016,6 +2019,163 @@ async def feature_edit_save(request: Request, code: str):
     return RedirectResponse("/features", status_code=303)
 
 
+# ---------------------------------------------------------------- branding
+BRAND_IMAGE_TYPES = {
+    "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif",
+    "image/svg+xml": "svg", "image/webp": "webp", "image/x-icon": "ico",
+}
+BRAND_MAX_UPLOAD = 500 * 1024  # 500 KB
+
+
+def _brand_image_to_data_uri(upload):
+    """Validate an uploaded image and return a data URI, or '' / None.
+
+    Returns '' when no file was uploaded, None when the file is rejected.
+    """
+    if upload is None or not getattr(upload, "filename", ""):
+        return ""
+    ctype = (upload.content_type or "").split(";")[0].strip().lower()
+    if ctype not in BRAND_IMAGE_TYPES:
+        return None
+    data = upload.file.read(BRAND_MAX_UPLOAD + 1)
+    if not data or len(data) > BRAND_MAX_UPLOAD:
+        return None
+    import base64 as _b64
+    return "data:%s;base64,%s" % (ctype, _b64.b64encode(data).decode("ascii"))
+
+
+def _brand_settings():
+    with db() as c:
+        rows = c.execute("SELECT key, value FROM kv_settings WHERE key LIKE 'brand_%'").fetchall()
+    d = dict(BRAND_DEFAULTS)
+    for r in rows:
+        d[r["key"][6:]] = r["value"]
+    return d
+
+
+@app.get("/branding", response_class=HTMLResponse)
+def branding_page(request: Request):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    b = _brand_settings()
+    def v(k):
+        return esc(b.get(k, ""))
+    def sel(cur, val):
+        return "selected" if cur == val else ""
+    def chk(val):
+        return "checked" if val == "1" else ""
+    logo_preview = (f'<img src="{esc(b["logo"])}" style="max-height:48px;max-width:220px;border:1px solid #eee;border-radius:4px"><br>'
+                    if b["logo"] else '<span class="muted">No logo uploaded.</span><br>')
+    fav_preview = (f'<img src="{esc(b["favicon"])}" style="height:16px;width:16px"><br>'
+                   if b["favicon"] else "")
+    body = f"""<h2>Branding</h2>
+<p class="muted">White-label the panel: your name, logo, colors, login page and footer. Changes apply immediately.</p>
+<form method="post" action="/branding" enctype="multipart/form-data">
+{_csrf_field(s)}
+<h3>Site identity</h3>
+<label>Site name<br><input name="site_name" value="{v('site_name')}" size="40" maxlength="60"></label><br>
+<label>Header shows<br><select name="header_mode">
+<option value="text" {sel(b['header_mode'],'text')}>Text only</option>
+<option value="logo" {sel(b['header_mode'],'logo')}>Logo only</option>
+<option value="both" {sel(b['header_mode'],'both')}>Logo + text</option>
+</select></label><br>
+<label>Logo image<br><input type="file" name="logo_file" accept="image/*"></label><br>
+<label>…or logo image URL<br><input name="logo_url" value="{'' if b['logo'].startswith('data:') else v('logo')}" size="60" placeholder="https://…"></label><br>
+{logo_preview}
+<label><input type="checkbox" name="logo_remove" value="1"> Remove current logo</label>
+<h3>Colors</h3>
+<label>Header background<br><input type="color" name="header_color" value="{v('header_color') or '#1a1a2e'}"></label><br>
+<label>Buttons &amp; active tabs<br><input type="color" name="accent_color" value="{v('accent_color') or '#1a1a2e'}"></label><br>
+<h3>Login page</h3>
+<label>Shows<br><select name="login_mode">
+<option value="text" {sel(b['login_mode'],'text')}>Text only</option>
+<option value="logo" {sel(b['login_mode'],'logo')}>Logo only</option>
+<option value="both" {sel(b['login_mode'],'both')}>Logo + text</option>
+</select></label><br>
+<label>Heading (blank = site name)<br><input name="login_title" value="{v('login_title')}" size="40" maxlength="80"></label><br>
+<label>Subheading<br><input name="login_subtitle" value="{v('login_subtitle')}" size="60" maxlength="140"></label><br>
+<h3>Favicon</h3>
+<label>Icon image<br><input type="file" name="favicon_file" accept="image/*"></label><br>
+<label>…or icon URL<br><input name="favicon_url" value="{'' if b['favicon'].startswith('data:') else v('favicon')}" size="60" placeholder="https://…"></label><br>
+{fav_preview}
+<label><input type="checkbox" name="favicon_remove" value="1"> Remove current favicon</label>
+<h3>Footer</h3>
+<label><input type="checkbox" name="footer_show" value="1" {chk(b['footer_show'])}> Show footer on every page</label><br>
+<label>Footer text<br><input name="footer_text" value="{v('footer_text')}" size="60" maxlength="140" placeholder="© 2026 My Company"></label><br><br>
+<button class="btn" type="submit">Save branding</button>
+</form>
+<h3>Preview</h3>
+<div class="nav" style="{'background:'+esc(b['header_color']) if b['header_color'] else ''}">
+  {"<img src='"+esc(b["logo"])+"' style='height:28px;vertical-align:middle;border-radius:4px'>" if b["logo"] and b["header_mode"] in ("logo","both") else ""}
+  {("<strong style='margin-left:8px'>"+esc(b["site_name"])+"</strong>") if b["header_mode"] in ("text","both") else ""}
+  <span class="sp"></span><span>preview</span>
+</div>
+<p class="muted">Logos are stored in the database (max 500 KB: PNG, JPEG, GIF, SVG, WebP). They ride along with database backups.</p>
+"""
+    return page("Branding", body, s["username"], s["role"], "branding")
+
+
+@app.post("/branding")
+async def branding_save(request: Request,
+                        logo_file: UploadFile = File(None),
+                        favicon_file: UploadFile = File(None)):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    if _get_setting("safety_lock") == "1":
+        return _panel_locked(s, "branding")
+    await _check_csrf(request, s)
+    f = await request.form()
+    import re as _re
+    def clean_color(val, fallback):
+        val = (val or "").strip()
+        return val if _re.fullmatch(r"#[0-9a-fA-F]{6}", val) else fallback
+    vals = {
+        "site_name": (f.get("site_name") or "").strip()[:60] or "PBX Panel",
+        "header_mode": (f.get("header_mode") or "text") if (f.get("header_mode") in ("text", "logo", "both")) else "text",
+        "header_color": clean_color(f.get("header_color"), "#1a1a2e"),
+        "accent_color": clean_color(f.get("accent_color"), "#1a1a2e"),
+        "login_mode": (f.get("login_mode") or "text") if (f.get("login_mode") in ("text", "logo", "both")) else "text",
+        "login_title": (f.get("login_title") or "").strip()[:80],
+        "login_subtitle": (f.get("login_subtitle") or "").strip()[:140],
+        "footer_show": "1" if f.get("footer_show") else "0",
+        "footer_text": (f.get("footer_text") or "").strip()[:140],
+    }
+    # Logo: upload wins, else URL field, else keep existing unless removed.
+    logo_uri = _brand_image_to_data_uri(logo_file)
+    if logo_uri is None:
+        return HTMLResponse(page("Branding", "<h2>Branding</h2><p style='color:red'>Logo rejected: use a PNG, JPEG, GIF, SVG or WebP under 500 KB.</p><p><a href='/branding'>Back</a></p>",
+                                  s["username"], s["role"], "branding"), status_code=400)
+    logo_url = (f.get("logo_url") or "").strip()[:500]
+    if f.get("logo_remove"):
+        vals["logo"] = ""
+    elif logo_uri:
+        vals["logo"] = logo_uri
+    elif logo_url.startswith(("https://", "http://", "data:")):
+        vals["logo"] = logo_url
+    fav_uri = _brand_image_to_data_uri(favicon_file)
+    if fav_uri is None:
+        return HTMLResponse(page("Branding", "<h2>Branding</h2><p style='color:red'>Favicon rejected: use a PNG, JPEG, GIF, SVG or WebP under 500 KB.</p><p><a href='/branding'>Back</a></p>",
+                                  s["username"], s["role"], "branding"), status_code=400)
+    fav_url = (f.get("favicon_url") or "").strip()[:500]
+    if f.get("favicon_remove"):
+        vals["favicon"] = ""
+    elif fav_uri:
+        vals["favicon"] = fav_uri
+    elif fav_url.startswith(("https://", "http://", "data:")):
+        vals["favicon"] = fav_url
+    with db() as c:
+        # logo/favicon are only in vals when uploaded, pasted or removed;
+        # otherwise the existing value stays untouched.
+        for k, val in vals.items():
+            c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?, ?)",
+                      ("brand_" + k, val))
+        c.commit()
+    _audit_log(s["username"], "branding.save", "updated")
+    return RedirectResponse("/branding", status_code=303)
+
+
 
 async def _admin_bulk_form(request, tab):
     """Common checks for admin bulk deletes.
@@ -2693,6 +2853,19 @@ def v1_calls_live(request: Request):
     by_ext = {r["exten"]: r for r in rows}
     by_id = {r["id"]: r for r in rows}
     for call in calls:
+        if call.get("direction") == "spy":
+            # *555 monitor session: label who is listening to what.
+            call["from_label"], call["from_kind"] = _party_label(call.get("caller", ""), by_ext)
+            target = call.get("callee") or ""
+            if target:
+                tlabel, _ = _party_label(target, by_ext)
+                to_label = "👁 monitoring " + tlabel
+            else:
+                to_label = "👁 scanning all calls"
+            if call.get("spy_label"):
+                to_label += " — hearing " + call["spy_label"]
+            call["to_label"], call["to_kind"] = to_label, "spy"
+            continue
         call["from_label"], call["from_kind"] = _party_label(call.get("caller", ""), by_ext)
         to, kind = _party_label(call.get("callee", ""), by_ext)
         if call.get("direction") == "outbound" and call.get("trunk"):
@@ -2881,6 +3054,16 @@ def _get_setting(key: str) -> str:
     with db() as c:
         row = c.execute("SELECT value FROM kv_settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else "0"
+
+
+def _load_branding():
+    """Load brand_* settings into the BRANDING contextvar for this request."""
+    try:
+        with db() as c:
+            rows = c.execute("SELECT key, value FROM kv_settings WHERE key LIKE 'brand_%'").fetchall()
+        BRANDING.set({r["key"][6:]: r["value"] for r in rows})
+    except Exception:
+        BRANDING.set({})
 
 
 def _set_setting(key: str, value: str):

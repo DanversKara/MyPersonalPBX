@@ -128,6 +128,47 @@ import contextvars
 # menu as users - the admin tabs would only lead to "Office network only".
 HIDE_ADMIN = contextvars.ContextVar("hide_admin", default=False)
 
+# Branding dict for this request (set by app middleware from kv_settings).
+# Keys: site_name, header_mode, logo, header_color, accent_color,
+#       login_mode, login_title, login_subtitle, favicon,
+#       footer_show, footer_text. Missing keys fall back to BRAND_DEFAULTS.
+BRANDING = contextvars.ContextVar("branding", default=None)
+
+BRAND_DEFAULTS = {
+    "site_name": "PBX Panel",
+    "header_mode": "text",      # text | logo | both
+    "logo": "",                 # data URI or https URL
+    "header_color": "#1a1a2e",
+    "accent_color": "#1a1a2e",
+    "login_mode": "text",       # text | logo | both
+    "login_title": "",
+    "login_subtitle": "",
+    "favicon": "",
+    "footer_show": "0",
+    "footer_text": "",
+}
+
+import re as _re
+def _brand_color(v, fallback):
+    v = (v or "").strip()
+    return v if _re.fullmatch(r"#[0-9a-fA-F]{6}", v) else fallback
+
+
+def get_brand():
+    b = dict(BRAND_DEFAULTS)
+    cur = BRANDING.get()
+    if cur:
+        for k in b:
+            if k in cur and cur[k] is not None:
+                b[k] = cur[k]
+    b["header_color"] = _brand_color(b["header_color"], BRAND_DEFAULTS["header_color"])
+    b["accent_color"] = _brand_color(b["accent_color"], BRAND_DEFAULTS["accent_color"])
+    if b["header_mode"] not in ("text", "logo", "both"):
+        b["header_mode"] = "text"
+    if b["login_mode"] not in ("text", "logo", "both"):
+        b["login_mode"] = "text"
+    return b
+
 
 def page(title, body, username="", role="", tab=""):
     tabs = ""
@@ -152,6 +193,7 @@ def page(title, body, username="", role="", tab=""):
         <a href="/e911" class="{e911}">E911</a>
         <a href="/reports" class="{rep}">Reports</a>
         <a href="/api-keys" class="{k}">API Keys</a>
+        <a href="/branding" class="{brand}">Branding</a>
         <a href="/ucp" class="{me}">My Phone</a>
         </div>""".format(
             me="on" if tab.startswith("ucp") else "",
@@ -168,7 +210,8 @@ def page(title, body, username="", role="", tab=""):
             d="on" if tab=="dash" else "", l="on" if tab=="logins" else "",
             t="on" if tab=="trunks" else "", r="on" if tab=="routes" else "",
             c="on" if tab=="cdr" else "", v="on" if tab=="vm" else "",
-            rec="on" if tab=="rec" else "", k="on" if tab=="keys" else "")
+            rec="on" if tab=="rec" else "", k="on" if tab=="keys" else "",
+            brand="on" if tab=="branding" else "")
     elif role:
         ucp_tabs = [("ucp", "/ucp", "Overview"), ("ucp-calls", "/ucp/calls", "Calls"),
                     ("ucp-vm", "/ucp/voicemail", "Voicemail"),
@@ -183,12 +226,67 @@ def page(title, body, username="", role="", tab=""):
     import html as _html
     shown_role = role + (", office-only admin" if role == "admin" and hide_admin else "")
     nav_user = f'<span>{_html.escape(username, quote=True)} ({_html.escape(shown_role, quote=True)})</span> <a href="/logout">Logout</a>' if username else ""
-    return f"""<!DOCTYPE html><html><head><title>{title} - PBX</title>
+    brand = get_brand()
+    # Header brand: text, logo, or both
+    _logo = brand["logo"].strip()
+    _logo_tag = (f'<img src="{_html.escape(_logo, quote=True)}" alt="" '
+                 f'style="height:28px;vertical-align:middle;border-radius:4px">') if _logo else ""
+    _name = _html.escape(brand["site_name"] or "PBX Panel", quote=True)
+    if brand["header_mode"] == "logo" and _logo_tag:
+        brand_html = _logo_tag
+    elif brand["header_mode"] == "both" and _logo_tag:
+        brand_html = _logo_tag + f' <strong style="margin-left:8px">{_name}</strong>'
+    else:
+        brand_html = f"<strong>{_name}</strong>"
+    # Custom colors (validated hex in get_brand)
+    _color_css = ""
+    if brand["header_color"] != BRAND_DEFAULTS["header_color"]:
+        _color_css += f".nav{{background:{brand['header_color']}}}"
+    if brand["accent_color"] != BRAND_DEFAULTS["accent_color"]:
+        _color_css += (f".tabs a.on{{background:{brand['accent_color']}}}"
+                       f".btn{{background:{brand['accent_color']}}}"
+                       f".btn:hover{{filter:brightness(1.2)}}")
+    # Favicon
+    _fav = brand["favicon"].strip()
+    _fav_tag = (f'<link rel="icon" href="{_html.escape(_fav, quote=True)}">') if _fav else ""
+    # Footer (opt-in)
+    _footer = ""
+    if brand["footer_show"] == "1" and brand["footer_text"].strip():
+        _footer = (f'<div class="wrap"><p class="muted" style="text-align:center;padding:10px 0">'
+                   f'{_html.escape(brand["footer_text"].strip())}</p></div>')
+    return f"""<!DOCTYPE html><html><head><title>{title} - {_name}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>{BASE_CSS}</style></head><body>
-<div class="nav"><strong>PBX Panel</strong><span class="sp"></span>{nav_user}</div>
-<div class="wrap">{tabs}<div class="card">{body}</div></div></body></html>"""
+{_fav_tag}
+<style>{BASE_CSS}{_color_css}</style></head><body>
+<div class="nav">{brand_html}<span class="sp"></span>{nav_user}</div>
+<div class="wrap">{tabs}<div class="card">{body}</div></div>{_footer}</body></html>"""
 
+def login_html():
+    """Login form with branding: logo and/or custom title per admin settings."""
+    import html as _html
+    brand = get_brand()
+    _logo = brand["logo"].strip()
+    _logo_tag = (f'<img src="{_html.escape(_logo, quote=True)}" alt="" '
+                 f'style="max-height:64px;max-width:280px;margin-bottom:8px"><br>') if _logo else ""
+    _title = (brand["login_title"] or "").strip() or brand["site_name"] or "PBX Panel"
+    _sub = (brand["login_subtitle"] or "").strip()
+    mode = brand["login_mode"]
+    if mode == "logo" and _logo_tag:
+        head = _logo_tag
+    elif mode == "both" and _logo_tag:
+        head = _logo_tag + f"<h2>{_html.escape(_title)}</h2>"
+    else:
+        head = f"<h2>{_html.escape(_title)}</h2>"
+    sub = f'<p class="muted">{_html.escape(_sub)}</p>' if _sub else ""
+    return f"""{head}{sub}
+<form method="post" action="/login">
+<input name="username" placeholder="Username" required><br>
+<input name="password" type="password" placeholder="Password" required><br>
+<button class="btn" type="submit">Sign in</button>
+</form>
+"""
+
+# Backwards-compat alias (use login_html() for branded output).
 LOGIN_HTML = """
 <h2>Login</h2>
 <form method="post" action="/login">

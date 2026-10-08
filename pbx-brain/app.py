@@ -725,6 +725,7 @@ def _spy_detach(sess):
         bridge_id = sess.pop("bridge_id", None)
         sess["call_key"] = None
         sess["label"] = None
+        sess["bridged_at"] = None
     if snoop_id:
         SPY_SESSIONS.pop(snoop_id, None)
         try:
@@ -753,6 +754,7 @@ def _spy_attach(sess, call_key, snoop_chan_id, label):
         sess["snoop_id"] = snoop["id"]
         sess["call_key"] = call_key
         sess["label"] = label
+        sess["bridged_at"] = time.time()
     SPY_SESSIONS[snoop["id"]] = spy_id
     log.info("spy: %s now listening to %s (snoop %s)",
              sess["spy_exten"], label, snoop["id"])
@@ -841,6 +843,8 @@ def handle_spy(channel, spy_me, target_exten):
         "bridge_id": None,
         "call_key": None,
         "label": None,
+        "started_at": time.time(),
+        "bridged_at": None,
     }
     SPY_MONITORS[channel.id] = sess
     eligible = _spy_eligible_calls(target)
@@ -2432,6 +2436,27 @@ def _live_calls():
                 "did": info.get("did", ""),
                 "forwarded_from": info.get("forwarded_from", ""),
                 "answered_id": info.get("answered_id"),
+            })
+        except Exception:
+            continue
+    # *555 spy monitor sessions: show who's listening, so the dashboard
+    # reflects them. Not real calls (no CDR/billing impact).
+    for spy_id, sess in list(SPY_MONITORS.items()):
+        try:
+            out.append({
+                "call_id": spy_id,
+                "caller": sess.get("spy_exten", ""),
+                "callee": sess.get("target") or "",
+                "direction": "spy",
+                "state": "bridged" if sess.get("call_key") else "waiting",
+                "started_at": sess.get("started_at"),
+                "bridged_at": sess.get("bridged_at"),
+                "login_id": None,
+                "trunk": "",
+                "did": "",
+                "forwarded_from": "",
+                "answered_id": None,
+                "spy_label": sess.get("label") or "",
             })
         except Exception:
             continue
