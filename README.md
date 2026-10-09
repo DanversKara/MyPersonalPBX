@@ -807,6 +807,9 @@ docs/           API.md (REST API), SCREENSHOTS.md (all screenshots), screenshots
 
 ## 21. SMS/MMS with voip.ms
 
+> Need a VoIP provider? Here is a [voip.ms referral link](https://voip.ms/en/invite/MjM2MjQ4)
+> to get your own account — reasonable plans that work with this project.
+
 Your voip.ms DIDs can send and receive real SMS/MMS, routed to your
 extensions. Each DID maps to one extension: inbound texts go to that
 extension's Zoiper (SIP MESSAGE), My Phone conversation, and any ESP/HA

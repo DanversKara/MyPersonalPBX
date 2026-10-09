@@ -2318,7 +2318,7 @@ def sms_route_edit_page(request: Request, did: str):
 <label>DID (digits, e.g. 15551234567)<br><input name="new_did" value="{v('did', '' if did=='new' else did)}" {'readonly' if r else 'required'}></label><br>
 <label>Destination extensions (check one or more)<br>{opts}</label><br>
 <label>Label<br><input name="label" value="{v('label')}" size="40" placeholder="e.g. Main line"></label><br><br>
-<button class="btn" type="submit">Save</button> <a href="/sms-routes">Cancel</a>
+<button class="btn" type="submit">Save</button> <a class="btn ghost" href="/sms-routes">Cancel</a>
 </form>"""
     return page("Edit SMS route", body, s["username"], s["role"], "sms")
 
@@ -2469,7 +2469,7 @@ def feature_edit_page(request: Request, code: str):
 <table><tr><th>Ext</th><th>Name</th><th>Role</th><th>Access</th></tr>
 {''.join(urows)}
 </table><br>
-<button class="btn" type="submit">Save</button> <a href="/features">Cancel</a>
+<button class="btn" type="submit">Save</button> <a class="btn ghost" href="/features">Cancel</a>
 </form>
 """
     return page("Edit feature", body, s["username"], s["role"], "features")
