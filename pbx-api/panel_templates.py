@@ -282,6 +282,7 @@ def page(title, body, username="", role="", tab=""):
         tabs = """<div class="tabs">
         <a href="/" class="{d}">Dashboard</a>
         <a href="/logins" class="{l}">Logins</a>
+        <a href="/invites" class="{inv}">Invites</a>
         <a href="/trunks" class="{t}">Trunks</a>
         <a href="/routes" class="{r}">Routes</a>
         <a href="/ring-groups" class="{grp}">Ring groups</a>
@@ -313,6 +314,7 @@ def page(title, body, username="", role="", tab=""):
             grp="on" if tab == "groups" else "",
             rep="on" if tab == "reports" else "",
             d="on" if tab=="dash" else "", l="on" if tab=="logins" else "",
+            inv="on" if tab=="invites" else "",
             t="on" if tab=="trunks" else "", r="on" if tab=="routes" else "",
             c="on" if tab=="cdr" else "", v="on" if tab=="vm" else "",
             rec="on" if tab=="rec" else "", k="on" if tab=="keys" else "",

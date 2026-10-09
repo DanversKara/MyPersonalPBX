@@ -384,3 +384,21 @@ CREATE TABLE IF NOT EXISTS reports (
   note TEXT NOT NULL DEFAULT '',             -- reporter's comment
   status TEXT NOT NULL DEFAULT 'open'        -- open | closed
 );
+
+-- Single-use user invites. Admin generates a link; the recipient opens it,
+-- picks their own login password and provides display name + voicemail
+-- email, and the login is created. Token is stored hashed; links die on
+-- use, expiry, or admin revocation.
+CREATE TABLE IF NOT EXISTS invites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,       -- sha256 hex of the URL token
+  exten TEXT NOT NULL,                   -- reserved extension number
+  sip_username TEXT NOT NULL,
+  sip_secret TEXT NOT NULL,              -- shown once at redemption
+  email TEXT NOT NULL DEFAULT '',        -- optional recipient (for the email option)
+  expires_at TEXT NOT NULL,              -- UTC 'YYYY-MM-DD HH:MM:SS'
+  used_at TEXT DEFAULT NULL,
+  revoked_at TEXT DEFAULT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

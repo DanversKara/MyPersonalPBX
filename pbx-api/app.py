@@ -10,6 +10,7 @@ import html
 import os
 import secrets
 import sqlite3
+import hmac
 import subprocess
 import urllib.parse
 import logging
@@ -25,6 +26,7 @@ import ucp
 import ivr_ui
 import billing
 import email_ui
+import mailer
 import network_ui
 import security
 import e911_ui
@@ -153,6 +155,19 @@ def _migrate(c):
     ):
         c.execute("INSERT OR IGNORE INTO feature_codes (code, name, description, default_access)"
                   " VALUES (?,?,?,?)", (code, name, desc, access))
+    c.execute("""CREATE TABLE IF NOT EXISTS invites (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_hash TEXT NOT NULL UNIQUE,
+      exten TEXT NOT NULL,
+      sip_username TEXT NOT NULL,
+      sip_secret TEXT NOT NULL,
+      email TEXT NOT NULL DEFAULT '',
+      expires_at TEXT NOT NULL,
+      used_at TEXT DEFAULT NULL,
+      revoked_at TEXT DEFAULT NULL,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )""")
     c.commit()
 
 
@@ -981,6 +996,308 @@ async def login_edit_save(request: Request, lid: str,
     # retry via POST /system/reload if this fails)
     _best_effort_apply()
     return RedirectResponse("/logins", status_code=302)
+
+
+# ---------------- User invites ----------------
+# Admin generates a single-use link; the recipient opens it, picks their own
+# password, gives display name + voicemail email, and the login is created.
+# Tokens are 256-bit, stored as sha256, single-use, expiring, revocable.
+INVITE_EXTEN_START = 8800
+INVITE_EXTEN_END = 8899
+INVITE_EXPIRY_DAYS = (1, 3, 7, 14, 30)
+INVITE_DEFAULT_DAYS = 7
+
+
+def _invite_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _invite_allocate(c):
+    """First free extension + SIP username, avoiding logins and live invites."""
+    used_ext = {r[0] for r in c.execute("SELECT exten FROM logins WHERE exten != ''").fetchall()}
+    used_ext |= {r[0] for r in c.execute(
+        "SELECT exten FROM invites WHERE used_at IS NULL AND revoked_at IS NULL"
+        " AND expires_at > datetime('now')").fetchall()}
+    used_sip = {r[0] for r in c.execute("SELECT sip_username FROM logins WHERE sip_username != ''").fetchall()}
+    used_sip |= {r[0] for r in c.execute(
+        "SELECT sip_username FROM invites WHERE used_at IS NULL AND revoked_at IS NULL"
+        " AND expires_at > datetime('now')").fetchall()}
+    for n in range(INVITE_EXTEN_START, INVITE_EXTEN_END + 1):
+        e = str(n)
+        if e in used_ext:
+            continue
+        sip_u = "phone%s" % e
+        if sip_u in used_sip:
+            sip_u = "phone%s%02d" % (e, secrets.randbelow(90) + 10)
+            if sip_u in used_sip:
+                continue
+        return e, sip_u
+    return None, None
+
+
+def _invite_base_url(request: Request) -> str:
+    with db() as c:
+        r = c.execute("SELECT value FROM kv_settings WHERE key='panel_url'").fetchone()
+        if r and (r["value"] or "").strip():
+            return r["value"].strip().rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _invite_lookup(token: str):
+    """Live invite row dict, or None. Generic: never says why it failed."""
+    from datetime import datetime as _dt
+    if not token or len(token) > 160:
+        return None
+    th = _invite_token_hash(token)
+    with db() as c:
+        r = c.execute("SELECT * FROM invites WHERE token_hash=?", (th,)).fetchone()
+    if not r or r["used_at"] or r["revoked_at"]:
+        return None
+    try:
+        exp = _dt.strptime(r["expires_at"], "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return None
+    if _dt.utcnow() > exp:
+        return None
+    return dict(r)
+
+
+def _invite_status(r) -> str:
+    from datetime import datetime as _dt
+    if r["used_at"]:
+        return "used"
+    if r["revoked_at"]:
+        return "revoked"
+    try:
+        if _dt.utcnow() > _dt.strptime(r["expires_at"], "%Y-%m-%d %H:%M:%S"):
+            return "expired"
+    except (ValueError, TypeError):
+        return "expired"
+    return "active"
+
+
+@app.get("/invites", response_class=HTMLResponse)
+def invites_page(request: Request, msg: str = ""):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    flash = ""
+    if msg == "noext":
+        flash = "<p class='warn'>No free extensions left in the invite range.</p>"
+    elif msg == "bademail":
+        flash = "<p class='warn'>That doesn't look like an email address.</p>"
+    with db() as c:
+        rows = c.execute("SELECT * FROM invites ORDER BY id DESC LIMIT 200").fetchall()
+    exp_opts = "".join(
+        f"<option value='{d}' {'selected' if d == INVITE_DEFAULT_DAYS else ''}>{d} day{'s' if d != 1 else ''}</option>"
+        for d in INVITE_EXPIRY_DAYS)
+    tr = ""
+    for r in rows:
+        st = _invite_status(r)
+        pill = {"active": "ok", "used": "", "expired": "warn", "revoked": "warn"}[st]
+        tr += (f"<tr><td>{esc(r['exten'])}</td><td>{esc(r['sip_username'])}</td>"
+               f"<td>{esc(r['email']) or '<span class=muted>—</span>'}</td>"
+               f"<td>{esc(r['created_at'])}</td><td>{esc(r['expires_at'])}</td>"
+               f"<td><span class='pill {pill}'>{st}</span></td><td>"
+               + (f"<form method='post' action='/invites/{r['id']}/revoke' style='display:inline'>{_csrf_field(s)}<button class='btn ghost'>Revoke</button></form> " if st == "active" else "")
+               + f"<form method='post' action='/invites/{r['id']}/delete' style='display:inline' onsubmit=\"return confirm('Delete this invite record?')\">{_csrf_field(s)}<button class='btn ghost'>Delete</button></form></td></tr>")
+    body = f"""{flash}<h2>User invites</h2>
+<div class="card"><h3>Generate invite</h3>
+<form method="post" action="/invites/new">
+{_csrf_field(s)}
+<label>Link expires in<br><select name="expires_days">{exp_opts}</select></label><br>
+<label>Email it to (optional)<br><input name="email" size="40" placeholder="newuser@example.com"></label><br>
+<span class="muted">Leave email blank to just copy the link yourself. The extension, SIP username and SIP secret are auto-generated. The invite link is shown once, right after generation.</span><br><br>
+<button class="btn" type="submit">Generate invite</button>
+</form></div>
+<h3>Invites</h3>
+<table><tr><th>Ext</th><th>SIP user</th><th>Emailed to</th><th>Created</th><th>Expires (UTC)</th><th>Status</th><th>Actions</th></tr>
+{tr or '<tr><td colspan=7 class=muted>No invites yet</td></tr>'}</table>"""
+    return page("User invites", body, s["username"], s["role"], "invites")
+
+
+@app.post("/invites/new")
+async def invite_new(request: Request):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    await _check_csrf(request, s)
+    if _get_setting("safety_lock") == "1":
+        return _panel_locked(s, "invites")
+    from datetime import datetime as _dt, timedelta as _td
+    f = await request.form()
+    try:
+        days = int(f.get("expires_days") or INVITE_DEFAULT_DAYS)
+    except ValueError:
+        days = INVITE_DEFAULT_DAYS
+    if days not in INVITE_EXPIRY_DAYS:
+        days = INVITE_DEFAULT_DAYS
+    email = (f.get("email") or "").strip()[:254]
+    if email and "@" not in email:
+        return RedirectResponse("/invites?msg=bademail", status_code=303)
+    with db() as c:
+        exten, sip_u = _invite_allocate(c)
+        if not exten:
+            return RedirectResponse("/invites?msg=noext", status_code=303)
+        token = secrets.token_urlsafe(32)
+        exp = (_dt.utcnow() + _td(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO invites (token_hash, exten, sip_username, sip_secret, email, expires_at, created_by)"
+                  " VALUES (?,?,?,?,?,?,?)",
+                  (_invite_token_hash(token), exten, secrets.token_urlsafe(24), email, exp, s["username"]))
+        iid = c.lastrowid
+        c.commit()
+    link = f"{_invite_base_url(request)}/invite/{token}"
+    mailed = False
+    mail_err = ""
+    if email:
+        try:
+            with db() as c:
+                cfg = mailer.settings(c)
+            mailer.send(cfg, email,
+                        f"Your {_get_setting('brand_site_name') or 'PBX'} phone account invite",
+                        f"Hi,\n\nYou've been invited to set up your phone account.\n\n"
+                        f"Open this link within {days} day{'s' if days != 1 else ''} to choose your password "
+                        f"and finish setup:\n\n{link}\n\n"
+                        f"Your extension will be {exten}. The link stops working after you use it.\n")
+            mailed = True
+        except Exception as e:  # noqa: BLE001 - MailError or SMTP failure
+            mail_err = str(e)[:120]
+    _audit_log(s["username"], "invites.generate",
+               f"id={iid} exten={exten} sip={sip_u} email={email or '-'} mailed={mailed}")
+    # Result page: the ONLY time the raw link is shown. Copy it now.
+    mailed_note = (f"<p class='ok'>Emailed to {esc(email)}.</p>" if mailed else
+                   (f"<p class='warn'>Email failed ({esc(mail_err)}) — copy the link manually.</p>" if email else
+                    "<p class='muted'>No email entered — copy the link yourself.</p>"))
+    body = f"""<h2>Invite generated</h2>{mailed_note}
+<p>Extension <b>{esc(exten)}</b> is reserved for this invite. Link expires in {days} day{'s' if days != 1 else ''},
+is single-use, and can be revoked below.</p>
+<label>Invite link (copy it now — it won't be shown again)<br>
+<input id="invlink" size="80" readonly value="{esc(link)}"></label>
+<button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('invlink').value);this.textContent='Copied!'">Copy link</button>
+<p><a class="btn ghost" href="/invites">Back to invites</a></p>
+<script>document.getElementById('invlink').select();</script>"""
+    return page("Invite generated", body, s["username"], s["role"], "invites")
+
+
+@app.post("/invites/{iid}/revoke")
+async def invite_revoke(request: Request, iid: int):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    await _check_csrf(request, s)
+    with db() as c:
+        c.execute("UPDATE invites SET revoked_at=datetime('now') WHERE id=? AND used_at IS NULL", (iid,))
+        c.commit()
+    _audit_log(s["username"], "invites.revoke", f"id={iid}")
+    return RedirectResponse("/invites", status_code=303)
+
+
+@app.post("/invites/{iid}/delete")
+async def invite_delete(request: Request, iid: int):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    await _check_csrf(request, s)
+    with db() as c:
+        c.execute("DELETE FROM invites WHERE id=?", (iid,))
+        c.commit()
+    _audit_log(s["username"], "invites.delete", f"id={iid}")
+    return RedirectResponse("/invites", status_code=303)
+
+
+_INVITE_BAD = "<p class='warn'>This invite link is invalid or has expired.</p><p><a href='/login'>Go to login</a></p>"
+
+
+@app.get("/invite/{token}", response_class=HTMLResponse)
+def invite_redeem_page(request: Request, token: str):
+    ip = client_ip(request)
+    if not _login_allowed(ip, "invite"):
+        return HTMLResponse("<p class='warn'>Too many attempts — try again later.</p>", status_code=429)
+    inv = _invite_lookup(token)
+    if not inv:
+        _login_failed(ip, "invite")
+        return page("Invite", _INVITE_BAD)
+    body = f"""<h2>Set up your phone account</h2>
+<p class="muted">You've been invited to join. Your extension will be <b>{esc(inv['exten'])}</b>.</p>
+<form method="post" action="/invite/{esc(token)}">
+<input type="hidden" name="token" value="{esc(token)}">
+<label>Display name<br><input name="display_name" size="40" required maxlength="64" placeholder="e.g. Jane Smith"></label><br>
+<label>Voicemail email (optional)<br><input name="vm_email" size="40" maxlength="254" placeholder="you@example.com"></label><br>
+<label>Choose a login password (min 8 characters)<br><input name="password" type="password" required minlength="8"></label><br>
+<label>Confirm password<br><input name="password2" type="password" required minlength="8"></label><br><br>
+<button class="btn" type="submit">Create my account</button>
+</form>"""
+    return page("Accept invite", body)
+
+
+@app.post("/invite/{token}")
+async def invite_redeem(request: Request, token: str):
+    ip = client_ip(request)
+    if not _login_allowed(ip, "invite"):
+        return HTMLResponse("<p class='warn'>Too many attempts — try again later.</p>", status_code=429)
+    f = await request.form()
+    # CSRF: the secret token must match the URL (an attacker can't know it).
+    if not hmac.compare_digest(f.get("token") or "", token or ""):
+        _login_failed(ip, "invite")
+        return page("Invite", _INVITE_BAD, status_code=403)
+    inv = _invite_lookup(token)
+    if not inv:
+        _login_failed(ip, "invite")
+        return page("Invite", _INVITE_BAD)
+    display_name = (f.get("display_name") or "").strip()[:64]
+    vm_email = (f.get("vm_email") or "").strip()[:254]
+    pw1 = f.get("password") or ""
+    pw2 = f.get("password2") or ""
+    err = ""
+    if not display_name:
+        err = "Please enter a display name."
+    elif vm_email and "@" not in vm_email:
+        err = "That voicemail email doesn't look valid."
+    elif len(pw1) < 8:
+        err = "Password must be at least 8 characters."
+    elif not hmac.compare_digest(pw1, pw2):
+        err = "Passwords don't match."
+    if err:
+        _login_failed(ip, "invite")
+        return page("Accept invite",
+                    f"<p class='warn'>{esc(err)}</p><p><a class='btn ghost' href='/invite/{esc(token)}'>Back</a></p>")
+    pwh = bcrypt.hashpw(pw1.encode(), bcrypt.gensalt()).decode()
+    with db() as c:
+        # Atomic single-use claim: exactly one redemption wins the race.
+        cur = c.execute("UPDATE invites SET used_at=datetime('now') WHERE id=? AND used_at IS NULL"
+                        " AND revoked_at IS NULL AND expires_at > datetime('now')", (inv["id"],))
+        if cur.rowcount != 1:
+            c.rollback()
+            return page("Invite", _INVITE_BAD)
+        exten, sip_u = inv["exten"], inv["sip_username"]
+        if c.execute("SELECT 1 FROM logins WHERE exten=? OR username=? OR sip_username=?",
+                     (exten, exten, sip_u)).fetchone():
+            # Extension was taken manually since generation: re-allocate.
+            exten2, sip_u2 = _invite_allocate(c)
+            if not exten2:
+                c.rollback()
+                return page("Invite", "<p class='warn'>No extensions available — please contact your administrator.</p>")
+            c.execute("UPDATE invites SET exten=?, sip_username=? WHERE id=?", (exten2, sip_u2, inv["id"]))
+            exten, sip_u = exten2, sip_u2
+        c.execute("INSERT INTO logins (username, pwhash, role, exten, sip_username, sip_secret,"
+                  " display_name, vm_email, record_admin, user_record, enabled)"
+                  " VALUES (?,?,?,?,?,?,?,?,0,0,1)",
+                  (exten, pwh, "user", exten, sip_u, inv["sip_secret"], display_name, vm_email))
+        c.commit()
+    _best_effort_apply()
+    _audit_log("invite", "invites.redeemed", f"exten={exten} sip={sip_u}")
+    body = f"""<h2>Account created</h2>
+<p class="ok">Welcome, {esc(display_name)}! Your extension is <b>{esc(exten)}</b>.</p>
+<div class="card"><h3>Save these — the SIP secret won't be shown again</h3>
+<table>
+<tr><td>Login username</td><td><b>{esc(exten)}</b></td></tr>
+<tr><td>Extension</td><td><b>{esc(exten)}</b></td></tr>
+<tr><td>SIP username</td><td><b>{esc(sip_u)}</b></td></tr>
+<tr><td>SIP secret</td><td><code>{esc(inv['sip_secret'])}</code></td></tr>
+</table>
+<p class="muted">Use the SIP username/secret in your softphone (e.g. Zoiper), and the login username + the password you chose to sign in to My Phone.</p></div>
+<p><a class="btn" href="/login">Go to login</a></p>"""
+    return page("Account created", body)
 
 
 @app.get("/trunks", response_class=HTMLResponse)

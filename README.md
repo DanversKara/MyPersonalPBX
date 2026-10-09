@@ -416,6 +416,16 @@ Users are extensions: username, panel password, extension number, SIP
 username and password, display name, notification email, admin recording
 (see section 13) and enabled. Disabling a login signs it out everywhere at once.
 
+### Invites
+Onboard new users without handing out passwords: **Invites → Generate invite**
+picks the next free extension, auto-generates the SIP username/secret, and
+gives you a single-use link — shown once, copy it or email it straight to the
+user (SMTP must be set up under Email). The link expires after 1–30 days
+(your choice), dies after one use, and can be revoked anytime. The recipient
+opens it, picks their own login password, and enters display name + voicemail
+email; the login is created on the spot. Tokens are 256-bit and stored hashed,
+so a database read alone can't mint accounts.
+
 ### Trunks
 ![Trunks](docs/screenshots/05-trunks.png)
 Your SIP provider(s): registrar, username, secret and codecs.
