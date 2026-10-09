@@ -577,7 +577,7 @@ def admin_page(request: Request):
         prow += (f'<tr><td><b>{esc(p["name"])}</b><br><span class="muted">{esc(p["description"])}</span></td>'
                  f'<td class="muted">{esc(", ".join(plan_features(p)))}</td><td>{esc(money(p["price_cents"], p["currency"]))}/mo</td>'
                  f'<td>{offered}</td><td>{pub}</td>'
-                 f'<td>{subs}</td><td><a href="/billing/plans/{p["id"]}/edit">Edit</a>'
+                 f'<td>{subs}</td><td><a class="btn ghost" href="/billing/plans/{p["id"]}/edit">Edit</a>'
                  + ("" if published or not mode else
                     f' <form method="post" action="/billing/plans/{p["id"]}/publish" class="inline">{csrf}<button class="link-btn">Publish</button></form>')
                  + "</td></tr>")
@@ -847,7 +847,7 @@ def _plan_form(s, p, err=""):
 <label class="switch"><input type="checkbox" name="active" value="1" {'checked' if p['active'] else ''}> <span>Offer to users</span></label>
 <p class="muted">Changing the price creates a new Stripe price for new subscribers; existing subscribers keep their price until they switch plans.
 Changing what's included applies to current subscribers right away.</p>
-<button class="btn">Save &amp; publish to Stripe</button> <a href="/billing">Cancel</a>
+<button class="btn">Save &amp; publish to Stripe</button> <a class="btn ghost" href="/billing">Cancel</a>
 </form>"""
 
 

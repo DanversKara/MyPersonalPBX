@@ -330,7 +330,7 @@ REMOTE_ALLOWED_PREFIXES = (
     "/ucp", "/login", "/logout", "/auth/login", "/auth/logout", "/auth/me",
     "/stripe/webhook", "/healthz", "/api/vm-greeting", "/api/voicemail-audio/",
     "/api/recording-audio/", "/api/ivr-greeting/", "/api/v1/me", "/favicon",
-    "/hooks/voipms-sms",
+    "/hooks/voipms-sms", "/invite/",
 )
 
 
@@ -866,7 +866,16 @@ def logins_page(request: Request):
         return RedirectResponse("/login")
     with db() as c:
         rows = c.execute("SELECT id, username, role, exten, sip_username, display_name, enabled FROM logins ORDER BY exten").fetchall()
-    tr = "".join(f"<tr><td>{esc(r['username'])}</td><td>{esc(r['role'])}</td><td>{esc(r['exten'])}</td><td>{esc(r['sip_username'])}</td><td>{esc(r['display_name'])}</td><td>{'yes' if r['enabled'] else 'no'}</td><td><a href='/logins/{r['id']}/edit'>Edit</a></td></tr>" for r in rows)
+    tr = "".join(
+        f"<tr><td>{esc(r['username'])}</td><td>{esc(r['role'])}</td><td>{esc(r['exten'])}</td>"
+        f"<td>{esc(r['sip_username'])}</td><td>{esc(r['display_name'])}</td><td>{'yes' if r['enabled'] else 'no'}</td>"
+        f"<td><a class='btn ghost' href='/logins/{r['id']}/edit'>Edit</a>"
+        + ("" if r['id'] == s.get('id') else
+           f" <form method='post' action='/logins/{r['id']}/delete' style='display:inline' "
+           f"onsubmit=\"return confirm('Permanently delete login \\'{esc(r['username'])}\\' (ext {esc(r['exten']) or '-'}) "
+           f"and ALL of their data — call logs, messages, voicemail, recordings? This cannot be undone.')\">"
+           f"{_csrf_field(s)}<button class='btn ghost' type='submit'>Delete</button></form>")
+        + "</td></tr>" for r in rows)
     body = f"<h2>Logins / Extensions</h2><table><tr><th>Username</th><th>Role</th><th>Exten</th><th>SIP user</th><th>Name</th><th>Enabled</th><th></th></tr>{tr}</table>"
     body += "<p><a href='/logins/new/edit' class='btn'>Add login</a></p>"
     return page("Logins", body, s["username"], s["role"], "logins")
@@ -908,7 +917,7 @@ accepted the recording notice in their control panel and their plan includes rec
 to use lawfully.</p>
 <label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
-<a href="/logins">Cancel</a>
+<a class="btn ghost" href="/logins">Cancel</a>
 </form>
 <script>
 function confirmExtenChange(){{
@@ -996,6 +1005,74 @@ async def login_edit_save(request: Request, lid: str,
     # retry via POST /system/reload if this fails)
     _best_effort_apply()
     return RedirectResponse("/logins", status_code=302)
+
+
+@app.post("/logins/{lid}/delete", response_class=HTMLResponse)
+async def login_delete(request: Request, lid: str):
+    """Permanently delete a login, their SIP endpoint, and all their data."""
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    await _check_csrf(request, s)
+    if _get_setting("safety_lock") == "1":
+        return _panel_locked(s, "logins")
+    with db() as c:
+        t = c.execute("SELECT * FROM logins WHERE id=?", (lid,)).fetchone()
+        if not t:
+            return RedirectResponse("/logins", status_code=303)
+        lid_i = int(t["id"])
+        if lid_i == int(s.get("id") or -1):
+            return page("Cannot delete login",
+                        "<h2>Cannot delete login</h2>"
+                        "<p class='warn'>You cannot delete the login you are currently signed in with.</p>"
+                        "<p><a class='btn ghost' href='/logins'>Back to logins</a></p>",
+                        s["username"], s["role"], "logins")
+        if t["role"] == "admin":
+            n = c.execute("SELECT COUNT(*) n FROM logins WHERE role='admin' AND enabled=1 AND id != ?",
+                          (lid_i,)).fetchone()["n"]
+            if not n:
+                return page("Cannot delete login",
+                            "<h2>Cannot delete login</h2>"
+                            "<p class='warn'>This is the last enabled admin account. "
+                            "Promote another login to admin first.</p>"
+                            "<p><a class='btn ghost' href='/logins'>Back to logins</a></p>",
+                            s["username"], s["role"], "logins")
+        exten = (t["exten"] or "").strip()
+        uname = t["username"]
+    # Privacy purge: extension-tied data (recordings+audio, CDR, SMS/MMS,
+    # voicemail boxes+audio), including the login's own voicemail box.
+    purged = ucp.purge_extension_data([exten], moving_login_id=lid_i) if exten else {}
+    with db() as c:
+        # Recordings started by this login that don't match the extension.
+        for r in c.execute("SELECT id, path FROM recordings WHERE login_id=?", (lid_i,)).fetchall():
+            ucp._safe_unlink(r["path"], ucp.REC_ROOT)
+        c.execute("DELETE FROM recordings WHERE login_id=?", (lid_i,))
+        # Any voicemail boxes still owned by this login (purge already took
+        # vm-<ext> and the login's own box; this is belt-and-braces).
+        for b in c.execute("SELECT mailbox, greeting_path FROM voicemail_boxes WHERE login_id=?",
+                           (lid_i,)).fetchall():
+            for m in c.execute("SELECT path FROM voicemail_messages WHERE mailbox=?",
+                               (b["mailbox"],)).fetchall():
+                ucp._safe_unlink(m["path"], ucp.VM_ROOT)
+            ucp._safe_unlink(b["greeting_path"], ucp.VMGREET_DIR)
+            c.execute("DELETE FROM voicemail_messages WHERE mailbox=?", (b["mailbox"],))
+        c.execute("DELETE FROM voicemail_boxes WHERE login_id=?", (lid_i,))
+        # Login-scoped rows (FK cascades are not enforced in sqlite here).
+        for tbl, col in [("login_feature_access", "login_id"), ("message_hidden", "login_id"),
+                         ("user_prefs", "login_id"), ("ivr_menus", "owner_login_id"),
+                         ("user_entitlements", "login_id"), ("billing_customers", "login_id"),
+                         ("api_keys", "login_id"), ("e911_users", "login_id"),
+                         ("blocked_numbers", "login_id")]:
+            c.execute(f"DELETE FROM {tbl} WHERE {col}=?", (lid_i,))
+        c.execute("DELETE FROM logins WHERE id=?", (lid_i,))
+        c.commit()
+    # Sign them out everywhere, drop the SIP endpoint, and audit.
+    drop_sessions(lid_i)
+    _best_effort_apply()
+    _audit_log(s["username"], "logins.delete",
+               f"id={lid_i} user={uname} exten={exten or '-'} purged=" +
+               ", ".join(f"{k}={v}" for k, v in (purged or {}).items()))
+    return RedirectResponse("/logins", status_code=303)
 
 
 # ---------------- User invites ----------------
@@ -1116,7 +1193,7 @@ def invites_page(request: Request, msg: str = ""):
     return page("User invites", body, s["username"], s["role"], "invites")
 
 
-@app.post("/invites/new")
+@app.post("/invites/new", response_class=HTMLResponse)
 async def invite_new(request: Request):
     s = _sess(request)
     if not s or s["role"] != "admin":
@@ -1141,10 +1218,10 @@ async def invite_new(request: Request):
             return RedirectResponse("/invites?msg=noext", status_code=303)
         token = secrets.token_urlsafe(32)
         exp = (_dt.utcnow() + _td(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("INSERT INTO invites (token_hash, exten, sip_username, sip_secret, email, expires_at, created_by)"
-                  " VALUES (?,?,?,?,?,?,?)",
-                  (_invite_token_hash(token), exten, secrets.token_urlsafe(24), email, exp, s["username"]))
-        iid = c.lastrowid
+        cur = c.execute("INSERT INTO invites (token_hash, exten, sip_username, sip_secret, email, expires_at, created_by)"
+                        " VALUES (?,?,?,?,?,?,?)",
+                        (_invite_token_hash(token), exten, sip_u, secrets.token_urlsafe(24), email, exp, s["username"]))
+        iid = cur.lastrowid
         c.commit()
     link = f"{_invite_base_url(request)}/invite/{token}"
     mailed = False
@@ -1173,9 +1250,29 @@ async def invite_new(request: Request):
 is single-use, and can be revoked below.</p>
 <label>Invite link (copy it now — it won't be shown again)<br>
 <input id="invlink" size="80" readonly value="{esc(link)}"></label>
-<button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('invlink').value);this.textContent='Copied!'">Copy link</button>
+<button class="btn" id="copyinv" type="button">Copy link</button>
+<p class="muted">Or copy it manually:<br><code style="word-break:break-all;user-select:all">{esc(link)}</code></p>
 <p><a class="btn ghost" href="/invites">Back to invites</a></p>
-<script>document.getElementById('invlink').select();</script>"""
+<script>
+document.getElementById('copyinv').addEventListener('click', async function() {{
+  var el = document.getElementById('invlink');
+  var v = el.value, ok = false;
+  try {{
+    if (navigator.clipboard && navigator.clipboard.writeText) {{
+      await navigator.clipboard.writeText(v);
+      ok = true;
+    }} else {{
+      throw new Error('no clipboard API');
+    }}
+  }} catch (e) {{
+    el.focus(); el.select();
+    try {{ el.setSelectionRange(0, v.length); }} catch (_e) {{}}
+    try {{ ok = document.execCommand('copy'); }} catch (_e) {{}}
+  }}
+  this.textContent = ok ? 'Copied!' : 'Select the link above to copy';
+}});
+document.getElementById('invlink').select();
+</script>"""
     return page("Invite generated", body, s["username"], s["role"], "invites")
 
 
@@ -1230,7 +1327,7 @@ def invite_redeem_page(request: Request, token: str):
     return page("Accept invite", body)
 
 
-@app.post("/invite/{token}")
+@app.post("/invite/{token}", response_class=HTMLResponse)
 async def invite_redeem(request: Request, token: str):
     ip = client_ip(request)
     if not _login_allowed(ip, "invite"):
@@ -1307,7 +1404,7 @@ def trunks_page(request: Request):
         return RedirectResponse("/login")
     with db() as c:
         rows = c.execute("SELECT name, registrar, username, enabled FROM trunks ORDER BY name").fetchall()
-    tr = "".join(f"<tr><td>{esc(r['name'])}</td><td>{esc(r['registrar'])}</td><td>{esc(r['username'])}</td><td>{'yes' if r['enabled'] else 'no'}</td><td><a href='/trunks/{esc(r['name'])}/edit'>Edit</a></td></tr>" for r in rows)
+    tr = "".join(f"<tr><td>{esc(r['name'])}</td><td>{esc(r['registrar'])}</td><td>{esc(r['username'])}</td><td>{'yes' if r['enabled'] else 'no'}</td><td><a class='btn ghost' href='/trunks/{esc(r['name'])}/edit'>Edit</a></td></tr>" for r in rows)
     # NOTE: trunk name in URL path — names are validated to [A-Za-z0-9_.-]
     # on save (see _valid_name), so URL-embedding is safe.
     body = f"<h2>Trunks</h2><table><tr><th>Name</th><th>Registrar</th><th>Username</th><th>Enabled</th><th></th></tr>{tr}</table>"
@@ -1339,7 +1436,7 @@ def trunk_edit_page(request: Request, name: str):
 <label>Codecs<br><input name="codecs" value="{v('codecs','ulaw,alaw,g722')}" size="40"></label><br>
 <label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
-<a href="/trunks">Cancel</a>
+<a class="btn ghost" href="/trunks">Cancel</a>
 </form>"""
     return page("Edit trunk", body, s["username"], s["role"], "trunks")
 
@@ -1397,7 +1494,7 @@ def routes_page(request: Request):
         if r['ivr_id']:
             return '-'
         return str(r['group_secs'] if r['group_id'] and r['group_secs'] else r['timeout_sec']) + 's'
-    in_tr = "".join(f"<tr><td>{esc(r['did'])}</td><td>{_dest(r)}</td><td>{_secs(r)}</td><td>{'yes' if r['enabled'] else 'no'}</td><td><a href='/routes/inbound/{r['id']}/edit'>Edit</a></td></tr>" for r in inb)
+    in_tr = "".join(f"<tr><td>{esc(r['did'])}</td><td>{_dest(r)}</td><td>{_secs(r)}</td><td>{'yes' if r['enabled'] else 'no'}</td><td><a class='btn ghost' href='/routes/inbound/{r['id']}/edit'>Edit</a></td></tr>" for r in inb)
     out_tr = "".join(f"<tr><td>{esc(r['name'])}</td><td>{esc(r['patterns'])}</td><td>{esc(r['trunk'])}</td><td>{r['priority']}</td><td>{'yes' if r['enabled'] else 'no'}</td></tr>" for r in outb)
     body = f"<h2>Inbound Routes</h2><table><tr><th>DID</th><th>Destination</th><th>Ring time</th><th>Enabled</th><th></th></tr>{in_tr}</table>"
     body += "<p><a href='/routes/inbound/new/edit' class='btn'>Add DID route</a></p>"
@@ -1456,7 +1553,7 @@ def inbound_edit_page(request: Request, rid: str):
 A number that rings a single user uses that user's own ring time and "answer with IVR" setting.</small></p>
 <label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
-<a href="/routes">Cancel</a>
+<a class="btn ghost" href="/routes">Cancel</a>
 </form>
 {('<form method="post" action="/routes/inbound/' + str(t['id']) + '/delete" onsubmit="return confirm(&quot;Delete this route? Calls to this number will no longer ring anyone.&quot;)">' + _csrf_field(s) + '<button class="btn ghost danger">Delete route</button></form>') if t else ''}
 <p><small>Ringing a list: no-answer goes to the first listed extension's voicemail box. Ringing a group: the
@@ -2133,8 +2230,8 @@ def sms_routes_page(request: Request):
     tr = "".join(
         f"<tr><td>{esc(voipms_sms.e164(r['did']))}</td><td>{esc(r['dest_exten']).replace(',', ', ')}</td>"
         f"<td>{esc(r['label'])}</td>"
-        f"<td><a href='/sms-routes/{esc(r['did'])}/edit'>Edit</a> "
-        f"<a href='/sms-routes/{esc(r['did'])}/delete' onclick=\"return confirm('Delete route for {esc(r['did'])}?')\">Delete</a></td></tr>"
+        f"<td><a class='btn ghost' href='/sms-routes/{esc(r['did'])}/edit'>Edit</a> "
+        f"<a class='btn ghost' href='/sms-routes/{esc(r['did'])}/delete' onclick=\"return confirm('Delete route for {esc(r['did'])}?')\">Delete</a></td></tr>"
         for r in routes)
     # webhook URL preview
     host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "your-pbx").split(",")[0].strip()
@@ -2283,7 +2380,7 @@ def features_page(request: Request):
         f"<td>{'Yes' if f['enabled'] else '<b>No</b>'}</td>"
         f"<td>{esc(access_label(f['default_access']))}</td>"
         f"<td>{exc.get(f['code'], 0)}</td>"
-        f"<td><a href='/features/{esc(f['code'])}/edit'>Edit</a></td></tr>"
+        f"<td><a class='btn ghost' href='/features/{esc(f['code'])}/edit'>Edit</a></td></tr>"
         for f in feats)
     body = f"""<h2>Feature codes</h2>
 <p class="muted">Star codes users can dial from their phones (e.g. <code>*97</code> for voicemail).

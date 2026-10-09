@@ -99,7 +99,7 @@ def list_page(request: Request):
         f"{(' (' + esc(names.get(g['vm_exten'], g['vm_exten'])) + ')') if g['vm_mode'] == 'member' and g['vm_exten'] else ''}"
         f"{(': ' + esc(_target_label(g))) if g['vm_mode'] in ('ext', 'group', 'ivr', 'number') else ''}</td>"
         f"<td>{esc(', '.join(used.get(g['id'], [])) or '-')}</td><td>{'yes' if g['enabled'] else 'no'}</td>"
-        f"<td><a href='/ring-groups/{g['id']}/edit'>Edit</a></td></tr>"
+        f"<td><a class='btn ghost' href='/ring-groups/{g['id']}/edit'>Edit</a></td></tr>"
         for g in all_groups()) or '<tr><td colspan="8" class="muted">No ring groups yet.</td></tr>'
     body = f"""{_flash(request)}<h2>Ring groups</h2>
 <p class="muted">Ring several phones at once - the first to answer gets the call. Point a phone number at a group on
@@ -184,7 +184,7 @@ def edit_page(request: Request, gid: str):
 </script>
 <style>.rg-field{{margin:10px 0}}.rg-field select,.rg-field input{{min-width:240px}}</style>
 <label class="switch"><input type="checkbox" name="enabled" value="1" {"checked" if (not g or g['enabled']) else ""}> <span>Enabled</span></label>
-<button class="btn">Save</button> <a href="/ring-groups">Cancel</a>
+<button class="btn">Save</button> <a class="btn ghost" href="/ring-groups">Cancel</a>
 </form>
 {delete}"""
     return HTMLResponse(M.page("Ring group", body, s["username"], s["role"], "groups"))

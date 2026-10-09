@@ -277,7 +277,7 @@ def _editor(request, s, me, menu, restricted, action, cancel, error=""):
 {_dest_picker("fb", _fb(menu), exts, menus, restrict_dests, owner_me, menu["id"])}
 </section>
 </div>
-<p><button class="btn">Save menu</button> <a href="{cancel}">Cancel</a></p>
+<p><button class="btn">Save menu</button> <a class="btn ghost" href="{cancel}">Cancel</a></p>
 </form>{EDITOR_JS}"""
 
 
@@ -429,7 +429,7 @@ def _list_table(menus, base, show_owner, active):
         rows += (f'<tr><td><b>{esc(m["name"])}</b>{"<br><span class=muted>dial " + esc(m["exten"]) + "</span>" if m["exten"] else ""}</td>'
                  + (f'<td>{esc(m["owner"] or "system")}</td>' if show_owner else "")
                  + f'<td class="muted">{keys}</td><td>{state}</td>'
-                 f'<td><a href="{base}/{m["id"]}/edit">Edit</a></td></tr>')
+                 f'<td><a class="btn ghost" href="{base}/{m["id"]}/edit">Edit</a></td></tr>')
     return rows
 
 
