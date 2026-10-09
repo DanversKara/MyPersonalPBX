@@ -706,6 +706,10 @@ async function loadSafety() {
   try {
     const sz = await jgetDetail('/api/v1/safety');
     const ks = sz.kill_switch, lock = sz.safety_lock;
+    try {
+      const ps = await jgetDetail('/api/v1/safety/pin/status');
+      PIN_STATE = {set: !!ps.pin_set, unlocked: !!ps.unlocked};
+    } catch (e) { PIN_STATE = {set: false, unlocked: true}; }
     document.getElementById('safety').innerHTML =
       '<div class="safety-bar' + (ks ? ' engaged' : '') + '">' +
       '<strong>Status:</strong> ' +
@@ -716,11 +720,40 @@ async function loadSafety() {
         (ks ? 'Release kill switch' : 'Kill switch') + '</button>' +
       ' <button class="btn" onclick="safetyAction(\\'/api/v1/safety/lock\\',{locked:' + (!lock) + '})">' +
         (lock ? 'Unlock' : 'Lock') + '</button>' +
+      ' &nbsp;·&nbsp; Edit PIN: <strong>' + (PIN_STATE.set ? (PIN_STATE.unlocked ? 'unlocked' : 'locked') : 'off') + '</strong>' +
+      (PIN_STATE.set && !PIN_STATE.unlocked ? ' <button class="btn" onclick="pinUnlockNow()">Unlock with PIN</button>' : '') +
+      ' <button class="btn ghost" onclick="pinSetChange()">' + (PIN_STATE.set ? 'Change PIN' : 'Set PIN') + '</button>' +
       '</div>';
   } catch (e) {
     document.getElementById('safety').innerHTML =
       '<div class="bad">Could not load safety status: ' + esc(e.message || e) + '</div>';
   }
+}
+let PIN_STATE = {set: false, unlocked: true};
+async function pinUnlockNow() {
+  const pin = prompt('Enter edit PIN:');
+  if (!pin) return;
+  const r = await fetch('/api/v1/safety/pin/unlock', {method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({pin: pin})});
+  if (!r.ok) { alert(r.status === 429 ? 'Too many attempts — try again later.' : 'Wrong PIN.'); return; }
+  refresh();
+}
+async function pinSetChange() {
+  let oldPin = '';
+  if (PIN_STATE.set) {
+    oldPin = prompt('Enter current PIN (cancel to abort):');
+    if (!oldPin) return;
+  }
+  const pin = prompt('New edit PIN — 6 to 12 digits. Leave empty to remove the PIN:');
+  if (pin === null) return;
+  if (pin !== '' && !/^[0-9]{6,12}$/.test(pin)) { alert('PIN must be 6-12 digits.'); return; }
+  const r = await fetch('/api/v1/safety/pin/set', {method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({pin: pin, old_pin: oldPin})});
+  if (!r.ok) { alert(r.status === 403 ? 'Current PIN is wrong.' : 'Failed: HTTP ' + r.status); return; }
+  alert(pin === '' ? 'Edit PIN removed.' : 'Edit PIN set. The panel is now locked until you unlock it.');
+  refresh();
 }
 async function loadDevices() {
   try {
@@ -3678,6 +3711,190 @@ def v1_safety_lock(request: Request, body: LockIn):
                     "ON: changes are blocked" if body.locked else "off: changes allowed",
                     actor=actor_name(request))
     return {"safety_lock": body.locked}
+
+
+# ---------------------------------------------------------------- edit PIN
+# Optional 6-12 digit PIN that gates every admin-panel mutation (save/edit,
+# checkbox toggles, invite generation, kill switch, ...). Reads stay open.
+# Unlocking lasts PIN_GRACE_SECS per session (sliding). Bearer-token API
+# calls are exempt — the PIN is a panel protection, not an API credential.
+PIN_GRACE_SECS = 15 * 60
+_PIN_FAILS: dict[str, list[float]] = {}
+
+
+def _pin_is_set() -> bool:
+    h = _get_setting("safety_pin_hash")
+    return bool(h) and h != "0"
+
+
+def _pin_unlocked(s: dict | None) -> bool:
+    if not _pin_is_set():
+        return True
+    import time as _t
+    try:
+        return bool(s) and (_t.time() - float(s.get("pin_unlocked_at") or 0) < PIN_GRACE_SECS)
+    except (TypeError, ValueError):
+        return False
+
+
+def _pin_touch(s: dict) -> None:
+    import time as _t
+    s["pin_unlocked_at"] = _t.time()
+
+
+def _pin_attempt_ok(ip: str) -> bool:
+    import time as _t
+    now = _t.time()
+    hits = [t for t in _PIN_FAILS.get(ip, []) if now - t < 900]
+    _PIN_FAILS[ip] = hits
+    return len(hits) < 10
+
+
+def _pin_attempt_fail(ip: str, actor: str) -> None:
+    import time as _t
+    _PIN_FAILS.setdefault(ip, []).append(_t.time())
+    if len(_PIN_FAILS[ip]) == 10:
+        security.record("pin_lockout", ip,
+                        "10 wrong edit-PIN attempts in 15 min; this address is blocked for 15 min",
+                        actor=actor)
+
+
+class PinUnlockIn(BaseModel):
+    pin: str = ""
+
+
+class PinSetIn(BaseModel):
+    pin: str = ""      # "" removes the PIN
+    old_pin: str = ""
+
+
+def _pin_valid_format(pin: str) -> bool:
+    return pin.isdigit() and 6 <= len(pin) <= 12
+
+
+@app.get("/api/v1/safety/pin/status")
+def v1_pin_status(request: Request):
+    _v1_admin(request)
+    s = _sess(request)
+    return {"pin_set": _pin_is_set(), "unlocked": _pin_unlocked(s)}
+
+
+@app.post("/api/v1/safety/pin/unlock")
+async def v1_pin_unlock(request: Request, body: PinUnlockIn):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        raise HTTPException(401, "login required")
+    _check_csrf_v1(request)
+    ip = client_ip(request)
+    if not _pin_is_set():
+        return {"unlocked": True}
+    if not _pin_attempt_ok(ip):
+        raise HTTPException(429, "Too many wrong PIN attempts — try again later")
+    ok = bcrypt.checkpw((body.pin or "").encode(),
+                        _get_setting("safety_pin_hash").encode())
+    if not ok:
+        _pin_attempt_fail(ip, s["username"])
+        raise HTTPException(403, "Wrong PIN")
+    _pin_touch(s)
+    security.record("pin_unlock", ip, "edit PIN accepted; panel unlocked for 15 min",
+                    actor=s["username"])
+    return {"unlocked": True}
+
+
+@app.post("/api/v1/safety/pin/lock")
+async def v1_pin_lock(request: Request):
+    """Relock immediately (the Unlock button's counterpart)."""
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        raise HTTPException(401, "login required")
+    _check_csrf_v1(request)
+    s["pin_unlocked_at"] = 0
+    return {"unlocked": False}
+
+
+@app.post("/api/v1/safety/pin/set")
+async def v1_pin_set(request: Request, body: PinSetIn):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        raise HTTPException(401, "login required")
+    _check_csrf_v1(request)
+    pin = (body.pin or "").strip()
+    if pin and not _pin_valid_format(pin):
+        raise HTTPException(400, "PIN must be 6-12 digits")
+    if _pin_is_set():
+        if not body.old_pin or not bcrypt.checkpw(
+                body.old_pin.encode(), _get_setting("safety_pin_hash").encode()):
+            raise HTTPException(403, "Current PIN is wrong")
+    if pin:
+        _set_setting("safety_pin_hash", bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode())
+    else:
+        _set_setting("safety_pin_hash", "")
+    s["pin_unlocked_at"] = 0  # changing the PIN relocks immediately
+    security.record("pin_change", client_ip(request),
+                    "edit PIN set" if pin else "edit PIN removed", actor=s["username"])
+    return {"pin_set": bool(pin)}
+
+
+_PIN_EXEMPT_EXACT = frozenset({
+    "/api/v1/safety/pin/unlock", "/api/v1/safety/pin/set",
+    "/api/v1/safety/pin/status", "/api/v1/safety/pin/lock",
+    "/login", "/logout", "/auth/login", "/auth/logout",
+})
+_PIN_EXEMPT_PREFIX = ("/ucp", "/hooks/", "/invite/", "/stripe/webhook")
+
+
+def _pin_required_html(s: dict) -> str:
+    import json as _json
+    tok = _json.dumps(_csrf_token(s))
+    return f"""<h2>PIN required</h2>
+<p class='warn'>The edit PIN is on — unlock the panel to make changes.</p>
+<form id="pinform" onsubmit="return pinUnlockSubmit(event)">
+<input type="password" id="pinentry" inputmode="numeric" pattern="[0-9]*" maxlength="12"
+ placeholder="6-12 digit PIN" autocomplete="off" style="font-size:18px;letter-spacing:4px">
+<button class="btn" type="submit">Unlock</button></form>
+<p class="muted">After unlocking you have 15 minutes. Then go back and retry your change.</p>
+<p><a class="btn ghost" href="javascript:history.back()">Back</a></p>
+<script>
+var PIN_CSRF = {tok};
+async function pinUnlockSubmit(e) {{
+  e.preventDefault();
+  var p = document.getElementById('pinentry').value;
+  var r = await fetch('/api/v1/safety/pin/unlock', {{method: 'POST', credentials: 'same-origin',
+    headers: {{'Content-Type': 'application/json', 'X-CSRF-Token': PIN_CSRF}},
+    body: JSON.stringify({{pin: p}})}});
+  if (r.ok) {{
+    document.getElementById('pinform').innerHTML = '<p class="ok">Unlocked — go back and retry your change.</p>';
+  }} else {{
+    alert(r.status === 429 ? 'Too many attempts — try again later.' : 'Wrong PIN.');
+  }}
+  return false;
+}}
+</script>"""
+
+
+@app.middleware("http")
+async def _pin_guard(request: Request, call_next):
+    """When the edit PIN is set, block admin-session mutations until unlocked.
+
+    Bearer-token API calls are exempt (separate credential). Reads are free.
+    """
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        path = request.url.path
+        bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
+        if (not bearer and path not in _PIN_EXEMPT_EXACT
+                and not path.startswith(_PIN_EXEMPT_PREFIX) and _pin_is_set()):
+            s = _sess(request)
+            if s and s.get("role") == "admin":
+                if not _pin_unlocked(s):
+                    if path.startswith("/api/"):
+                        return JSONResponse(
+                            {"detail": "Edit PIN required — unlock to make changes.",
+                             "pin_required": True}, status_code=403)
+                    return HTMLResponse(
+                        page("PIN required", _pin_required_html(s),
+                             s["username"], s["role"], ""), status_code=403)
+                _pin_touch(s)  # sliding 15-minute grace
+    return await call_next(request)
 
 
 def _panel_locked(s, tab):

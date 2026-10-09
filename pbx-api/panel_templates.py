@@ -127,6 +127,8 @@ table.keys td.key{font-weight:700;font-size:18px;width:34px;text-align:center}
 .vm-greeting{margin-bottom:18px}
 .greet-up{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
 .bulkbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
+.pinbar{margin:0 0 12px;padding:8px 12px;border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pinbar.ok{border-left-color:#2e7d32}
 .btn.danger{color:#b31d1d;border-color:#b31d1d}
 [data-theme="dark"] .btn.danger{color:#f87171;border-color:#f87171}
 .scrollbox{max-height:420px;overflow-y:auto;border:1px solid var(--border);border-radius:6px}
@@ -275,6 +277,84 @@ def theme_logo_imgs(light_src, dark_src, css_class, style):
     return base
 
 
+# Global edit-PIN guard for admin pages (plain string, not an f-string).
+# - Slim lock banner (filled by renderPinbar).
+# - Wraps window.fetch: on 403 + pin_required, prompts for the PIN, unlocks,
+#   then retries the request once.
+# - Intercepts form submits while locked: unlock first, then submit.
+_PIN_ADMIN_JS = """<script>
+(function(){
+  var _fetch = window.fetch;
+  var unlocking = null;
+  function csrfToken(){
+    return window.CSRF_TOKEN || ((document.querySelector('input[name="csrf_token"]')||{}).value) || '';
+  }
+  function pinPromptUnlock(){
+    if (!unlocking) {
+      unlocking = (async function(){
+        try {
+          var pin = prompt('Enter the edit PIN to make this change:');
+          if (!pin) throw new Error('cancelled');
+          var r = await _fetch('/api/v1/safety/pin/unlock', {method:'POST', credentials:'same-origin',
+            headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},
+            body: JSON.stringify({pin:pin})});
+          if (!r.ok) throw new Error(r.status===429 ? 'Too many attempts — try again later.' : 'Wrong PIN.');
+          await renderPinbar();
+          return true;
+        } finally { unlocking = null; }
+      })();
+    }
+    return unlocking;
+  }
+  window.fetch = function(url, opts){
+    opts = opts || {};
+    var method = ((opts.method)||'GET').toUpperCase();
+    return _fetch(url, opts).then(function(r){
+      if (r.status !== 403 || method === 'GET' || method === 'HEAD') return r;
+      return r.clone().json().then(function(j){ return !!(j && j.pin_required); }, function(){ return false; })
+        .then(function(need){
+          if (!need) return r;
+          return pinPromptUnlock().then(function(){ return _fetch(url, opts); }, function(){ return r; });
+        });
+    });
+  };
+  var pinSet = false, pinLocked = false;
+  async function renderPinbar(){
+    var bar = document.getElementById('pinbar');
+    var st = null;
+    try {
+      var r = await _fetch('/api/v1/safety/pin/status', {credentials:'same-origin'});
+      if (r.ok) st = await r.json();
+    } catch(e){}
+    if (!st || !st.pin_set) { pinSet = false; pinLocked = false; if (bar) bar.innerHTML = ''; return; }
+    pinSet = true; pinLocked = !st.unlocked;
+    if (!bar) return;
+    if (st.unlocked) {
+      bar.innerHTML = '<div class="pinbar ok"><span>Unlocked — edits allowed.</span> <button class="btn ghost" id="pinlocknow" type="button">Lock now</button></div>';
+      document.getElementById('pinlocknow').onclick = function(){
+        _fetch('/api/v1/safety/pin/lock', {method:'POST', credentials:'same-origin',
+          headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()}}).then(renderPinbar);
+      };
+    } else {
+      bar.innerHTML = '<div class="pinbar"><span>Edits locked — a PIN is needed to save or change anything.</span> <button class="btn" id="pinunlock" type="button">Unlock with PIN</button></div>';
+      document.getElementById('pinunlock').onclick = function(){ pinPromptUnlock().catch(function(){}); };
+    }
+  }
+  document.addEventListener('submit', function(e){
+    var f = e.target;
+    if (f.dataset.pinChecked || !pinSet || !pinLocked) return;
+    e.preventDefault();
+    pinPromptUnlock().then(function(){
+      f.dataset.pinChecked = '1';
+      if (f.requestSubmit) f.requestSubmit(); else f.submit();
+    }, function(){});
+  }, true);
+  renderPinbar();
+  setInterval(renderPinbar, 60000);
+})();
+</script>"""
+
+
 def page(title, body, username="", role="", tab=""):
     tabs = ""
     hide_admin = HIDE_ADMIN.get()
@@ -377,13 +457,19 @@ def page(title, body, username="", role="", tab=""):
                   """title="Toggle dark / light mode">🌙</button>"""
                   """<script>try{document.getElementById("theme-toggle").textContent="""
                   """document.documentElement.getAttribute("data-theme")==="dark"?"🌙":"☀️";}catch(e){}</script>""")
+    # Edit-PIN guard: banner + fetch/form interception on admin pages.
+    # The dashboard has full PIN controls in its safety bar, so it gets the
+    # interceptors but no duplicate banner.
+    _is_admin_page = (role == "admin" and not hide_admin)
+    _pinbar_div = '<div id="pinbar"></div>' if (_is_admin_page and tab != "dash") else ""
+    _pin_js = _PIN_ADMIN_JS if _is_admin_page else ""
     return f"""<!DOCTYPE html><html><head><title>{title} - {_name}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {_theme_js}
 {_fav_tag}
 <style>{BASE_CSS}{_color_css}</style></head><body>
 <div class="{_nav_cls}">{brand_html}<span class="sp"></span>{_theme_btn}{nav_user}</div>
-<div class="wrap">{tabs}<div class="card">{body}</div></div>{_footer}</body></html>"""
+<div class="wrap">{tabs}{_pinbar_div}<div class="card">{body}</div></div>{_footer}{_pin_js}</body></html>"""
 
 def login_html():
     """Login form with branding: logo and/or custom title per admin settings."""
