@@ -1,0 +1,10 @@
+1. Time Conditions
+- Calendar linked to Time Conditions
+
+2. Home Assistant
+- SMS Display
+- Someone is Calling (maybe thru voip_stack?)
+- send SMS thru HA
+- place a call from HA to PBX - voip_stack im sure.
+
+3. Android App?
