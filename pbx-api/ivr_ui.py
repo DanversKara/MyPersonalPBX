@@ -608,7 +608,7 @@ async def admin_save(request: Request, menu_id: str):
     if not s:
         return RedirectResponse("/login")
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "ivr")
     m = None if menu_id == "new" else _menu(int(menu_id))
     if menu_id != "new" and not m:
@@ -633,7 +633,7 @@ async def admin_delete(request: Request, menu_id: int):
     if not s:
         return RedirectResponse("/login")
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "ivr")
     m = _menu(menu_id)
     if m:
@@ -646,7 +646,7 @@ async def admin_access_user(request: Request, login_id: int):
     if not s:
         return RedirectResponse("/login")
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "ivr")
     form = await request.form()
     v = (form.get("quota") or "").strip()
@@ -663,7 +663,7 @@ async def admin_access_default(request: Request):
     if not s:
         return RedirectResponse("/login")
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "ivr")
     form = await request.form()
     v = (form.get("quota") or "").strip()

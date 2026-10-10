@@ -1,18 +1,8 @@
-# Never commit runtime data or secrets
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
-*.pem
-*.key
-*.crt
-*.pass
-.env
-*.env
-notify.env
 __pycache__/
 *.pyc
-*.wav
-*.pcap
-*.zip
-/var/
+*.db
+*.db-journal
+*.db.bak*
+.env
+venv/
+*-venv/

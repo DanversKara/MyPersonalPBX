@@ -84,9 +84,21 @@ these endpoints and refreshes every 10s.
 # status
 curl -s -H "$AUTH" http://127.0.0.1:8001/api/v1/safety
 
-# safety lock: when ON, routine mutations (API + panel) are rejected with 403
+# status returns {"kill_switch":..,"safety_lock":..,"lock_mode":"off"|"full"|"admin"}
+
+# safety lock, full (default): routine mutations on the admin panel, the API
+# AND My Phone (UCP) are rejected with 403
 curl -s -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"locked":true}' http://127.0.0.1:8001/api/v1/safety/lock
+  -d '{"locked":true,"mode":"full"}' http://127.0.0.1:8001/api/v1/safety/lock
+
+# safety lock, admin only: admin panel + API are frozen, but users can keep
+# using My Phone (send texts, change their settings, voicemail, ...)
+curl -s -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"locked":true,"mode":"admin"}' http://127.0.0.1:8001/api/v1/safety/lock
+
+# release either lock
+curl -s -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"locked":false}' http://127.0.0.1:8001/api/v1/safety/lock
 
 # kill switch: hangs up all active calls, renders an empty pjsip.conf
 # (no registrations, no trunk) and reloads. Bypasses the safety lock.
@@ -98,6 +110,6 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"engaged":false}' http://127.0.0.1:8001/api/v1/safety/kill-switch
 ```
 
-Both are also on the dashboard: a status banner with Kill switch and
-Lock/Unlock buttons.
+Both are also on the dashboard: a status banner with Kill switch,
+Lock admin / Lock everything, and Unlock buttons.
 

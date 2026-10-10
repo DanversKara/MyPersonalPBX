@@ -195,7 +195,7 @@ async def _post(request):
     if not s:
         raise HTTPException(403)
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return s, M._panel_locked(s, "groups")
     return s, None
 

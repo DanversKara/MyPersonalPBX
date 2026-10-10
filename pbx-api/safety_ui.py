@@ -264,7 +264,7 @@ async def report_action(request: Request, rid: int):
     if not s:
         raise HTTPException(403)
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "reports")
     f = await request.form()
     act = f.get("action")

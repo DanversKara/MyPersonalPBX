@@ -126,7 +126,7 @@ It’s a work in progress, and I’m looking forward to seeing where it goes.
   safety net, outbound via the voip.ms API from Zoiper, My Phone or ESP/HA devices.
 
 **Safety and security**
-- Kill switch (stop every call at once) and safety lock (freeze all changes).
+- Kill switch (stop every call at once) and safety lock (freeze admin changes only, or everything including My Phone).
 - Sign-in lockouts, fail2ban on the edge, flood limit, security alerts by email,
   a live Activity feed.
 - **911 always connects** (by design), with per-user E911 addresses behind a separate unlock code - **untested, see section 12**.
@@ -398,8 +398,13 @@ changed under Network, but it isn't recommended.
 - **Status bar**:
   - **Kill switch** hangs up every call and disconnects every phone. Use it
     to stop abuse such as toll fraud. Release it to go back to normal.
-  - **Lock** turns on the safety lock: calls keep working, but nobody can
-    change anything (handy overnight). Both always work and both send an alert.
+  - **Lock admin** turns on the safety lock for the admin side only: calls
+    and My Phone keep working (users can still text, check voicemail and
+    change their own settings), but nothing in the admin panel or API can
+    be changed.
+  - **Lock everything** also freezes My Phone: calls keep working, but nobody
+    can change anything (handy overnight). Kill switch and lock always work
+    and both send an alert.
 - **Tiles**: live calls, devices online, sign-ins and failures in the last
   24 hours, IPs blocked in the last 24 hours.
 - **Live calls**: who is calling whom, by name, with type
@@ -525,8 +530,7 @@ see section 16) with their panel username and password.
 | **Calls** | 90-day history (can't be deleted), recordings, **Block** and **Report** for each call |
 | **Voicemail** | listen, download, move, delete; greeting upload or record by phone (`*98`) |
 | **Recordings** | the user's own recordings |
-| **Messages** | conversations, send a text to any extension even Zoiper/supported apps, hey maybe even an ESP? i have calls working on ESP see my [ESP32-S3-Box-3 project](https://github.com/DanversKara/ESP32-S3-Box-3)
-, so im sure you can program on screen messages., **Block**, **Report**; updates by itself |
+| **Messages** | conversations, send a text to any extension (including Zoiper and other SIP apps), **Block**, **Report**; updates by itself. ESP32 devices can make calls too, see the [ESP32-S3-Box-3 project](https://github.com/DanversKara/ESP32-S3-Box-3) |
 | **IVR** | personal menus (if their plan allows) |
 | **Billing** | choose, switch or cancel a plan (Stripe) |
 | **Settings** | DND, forwarding, ring time, answer with IVR, "Record my calls" (with legal acknowledgement), notification email, text emails on/off, receive/send texts on/off, block list, 911 notice, phone setup, SIP password, panel password |

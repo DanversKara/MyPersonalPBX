@@ -258,7 +258,7 @@ async def save_alerts(request: Request):
     if not s or s["role"] != "admin":
         raise HTTPException(403)
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "email")
     f = await request.form()
     to = mailer.clean(f.get("sec_alert_to"))

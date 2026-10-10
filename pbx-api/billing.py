@@ -710,7 +710,7 @@ def _parse_lim(v, allow_unlimited=True, field=""):
 
 async def admin_access_defaults(request: Request):
     s = await _admin_post(request)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "billing")
     f = await request.form()
     try:
@@ -730,7 +730,7 @@ async def admin_access_defaults(request: Request):
 
 async def admin_access_user(request: Request, login_id: int):
     s = await _admin_post(request)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "billing")
     f = await request.form()
     try:
@@ -768,7 +768,7 @@ async def _admin_post(request):
 
 async def admin_settings(request: Request):
     s = await _admin_post(request)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "billing")
     f = await request.form()
     sk = (f.get("stripe_secret") or "").strip()
@@ -863,7 +863,7 @@ def admin_plan_edit(request: Request, plan_id: str):
 
 async def admin_plan_save(request: Request, plan_id: str):
     s = await _admin_post(request)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "billing")
     old = None if plan_id == "new" else _plan(int(plan_id))
     if plan_id != "new" and not old:
@@ -936,7 +936,7 @@ async def admin_plan_save(request: Request, plan_id: str):
 
 async def admin_plan_publish(request: Request, plan_id: int):
     s = await _admin_post(request)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "billing")
     p = _plan(plan_id)
     if not p:

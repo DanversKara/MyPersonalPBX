@@ -311,7 +311,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 
 -- Safety defaults: kill switch (0=off) halts all calls + registrations;
--- safety lock (0=off) makes the API/panel read-only for routine mutations.
+-- safety lock: '0'=off, '1'=full (API/panel AND My Phone read-only),
+-- 'admin'=admin only (API/panel read-only, My Phone keeps working).
 INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('kill_switch', '0');
 INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('safety_lock', '0');
 

@@ -211,7 +211,8 @@ def _consent(me):
 
 
 def _locked():
-    return M._get_setting("safety_lock") == "1"
+    # Only the full safety lock freezes My Phone; the admin-only lock leaves it usable.
+    return M._ucp_locked()
 
 
 def _audit(me, action, detail=""):

@@ -222,10 +222,10 @@ def main():
     # --- safety: kill switch + safety lock ---
     r = requests.get(f"{BASE}/api/v1/safety", headers=A, timeout=10)
     check("safety state", r.status_code == 200 and
-          r.json() == {"kill_switch": False, "safety_lock": False}, r.text)
+          r.json() == {"kill_switch": False, "safety_lock": False, "lock_mode": "off"}, r.text)
     r = requests.post(f"{BASE}/api/v1/safety/lock", headers=A, timeout=10,
                       json={"locked": True})
-    check("lock on", r.json() == {"safety_lock": True}, r.text)
+    check("lock on", r.json() == {"safety_lock": True, "lock_mode": "full"}, r.text)
     r = requests.post(f"{BASE}/api/v1/extensions", headers=A, timeout=10, json={
         "username": "locked-ext", "exten": "8877"})
     check("create blocked when locked -> 403", r.status_code == 403, r.text)
@@ -252,7 +252,20 @@ def main():
     check("trunk endpoint restored after release", "ep-trunk-voipms" in pjsip)
     r = requests.post(f"{BASE}/api/v1/safety/lock", headers=A, timeout=10,
                       json={"locked": False})
-    check("unlocked", r.json() == {"safety_lock": False}, r.text)
+    check("unlocked", r.json() == {"safety_lock": False, "lock_mode": "off"}, r.text)
+    # admin-only lock: admin API frozen, mode reported
+    r = requests.post(f"{BASE}/api/v1/safety/lock", headers=A, timeout=10,
+                      json={"locked": True, "mode": "admin"})
+    check("admin-only lock on", r.json() == {"safety_lock": True, "lock_mode": "admin"}, r.text)
+    r = requests.post(f"{BASE}/api/v1/extensions", headers=A, timeout=10, json={
+        "username": "locked-ext", "exten": "8877"})
+    check("create blocked under admin-only lock -> 403", r.status_code == 403, r.text)
+    r = requests.post(f"{BASE}/api/v1/safety/lock", headers=A, timeout=10,
+                      json={"locked": True, "mode": "bogus"})
+    check("bad lock mode -> 422", r.status_code == 422, r.text[:200])
+    r = requests.post(f"{BASE}/api/v1/safety/lock", headers=A, timeout=10,
+                      json={"locked": False})
+    check("unlocked again", r.json()["lock_mode"] == "off", r.text)
     r = requests.post(f"{BASE}/api/v1/extensions", headers=A, timeout=15, json={
         "username": "unlocked-ext", "exten": "8877"})
     check("mutations work after unlock -> 201", r.status_code == 201, r.text[:200])

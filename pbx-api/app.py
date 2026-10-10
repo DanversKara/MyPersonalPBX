@@ -14,6 +14,7 @@ import hmac
 import subprocess
 import urllib.parse
 import logging
+from typing import Literal
 
 log = logging.getLogger("pbx-api")
 
@@ -662,10 +663,17 @@ function stat(n, label) {
   return '<div class="stat"><b>' + n + '</b><span>' + label + '</span></div>';
 }
 async function safetyAction(url, body) {
+  // (A 403 for the edit PIN is caught by the page-wide fetch wrapper, which
+  // asks for the PIN and retries; anything still failing shows the reason.)
   const r = await fetch(url, {method: 'POST', credentials: 'same-origin',
     headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
     body: JSON.stringify(body)});
-  if (!r.ok) { alert('Failed: HTTP ' + r.status); return; }
+  if (!r.ok) {
+    let j = {};
+    try { j = await r.json(); } catch (_) {}
+    alert('Failed: HTTP ' + r.status + (j.detail ? ' — ' + j.detail : ''));
+    return;
+  }
   refresh();
 }
 // Each section loads independently: one failing source (e.g. the brain or
@@ -706,6 +714,16 @@ async function loadSafety() {
   try {
     const sz = await jgetDetail('/api/v1/safety');
     const ks = sz.kill_switch, lock = sz.safety_lock;
+    const mode = sz.lock_mode || (lock ? 'full' : 'off');
+    const lockLabel = mode === 'admin' ? 'ON (admin only — My Phone still works)'
+                    : mode === 'full' ? 'ON (everything, incl. My Phone)' : 'off';
+    const lockBtns = lock
+      ? ' <button class="btn" onclick="safetyAction(\\'/api/v1/safety/lock\\',{locked:false})">Unlock</button>' +
+        (mode === 'admin'
+          ? ' <button class="btn ghost" title="Also freeze My Phone" onclick="safetyAction(\\'/api/v1/safety/lock\\',{locked:true,mode:\\'full\\'})">Lock everything</button>'
+          : ' <button class="btn ghost" title="Let users use My Phone again" onclick="safetyAction(\\'/api/v1/safety/lock\\',{locked:true,mode:\\'admin\\'})">Admin only</button>')
+      : ' <button class="btn" title="Freeze admin panel + API; users can still use My Phone" onclick="safetyAction(\\'/api/v1/safety/lock\\',{locked:true,mode:\\'admin\\'})">Lock admin</button>' +
+        ' <button class="btn" title="Freeze admin panel, API and My Phone" onclick="safetyAction(\\'/api/v1/safety/lock\\',{locked:true,mode:\\'full\\'})">Lock everything</button>';
     try {
       const ps = await jgetDetail('/api/v1/safety/pin/status');
       PIN_STATE = {set: !!ps.pin_set, unlocked: !!ps.unlocked};
@@ -715,11 +733,10 @@ async function loadSafety() {
       '<strong>Status:</strong> ' +
       (ks ? '<span class="bad"><strong>KILL SWITCH ENGAGED</strong> — all calls halted, no registrations</span>'
           : '<span class="ok">Active</span>') +
-      ' &nbsp;·&nbsp; Safety lock: <strong>' + (lock ? 'ON' : 'off') + '</strong>' +
+      ' &nbsp;·&nbsp; Safety lock: <strong>' + lockLabel + '</strong>' +
       ' &nbsp;<button class="btn" onclick="if (confirm(\\'' + (ks ? 'Release the kill switch? Phones will register again.' : 'KILL SWITCH: hang up every call and disconnect all phones?') + '\\')) safetyAction(\\'/api/v1/safety/kill-switch\\',{engaged:' + (!ks) + '})">' +
         (ks ? 'Release kill switch' : 'Kill switch') + '</button>' +
-      ' <button class="btn" onclick="safetyAction(\\'/api/v1/safety/lock\\',{locked:' + (!lock) + '})">' +
-        (lock ? 'Unlock' : 'Lock') + '</button>' +
+      lockBtns +
       ' &nbsp;·&nbsp; Edit PIN: <strong>' + (PIN_STATE.set ? (PIN_STATE.unlocked ? 'unlocked' : 'locked') : 'off') + '</strong>' +
       (PIN_STATE.set && !PIN_STATE.unlocked ? ' <button class="btn" onclick="pinUnlockNow()">Unlock with PIN</button>' : '') +
       ' <button class="btn ghost" onclick="pinSetChange()">' + (PIN_STATE.set ? 'Change PIN' : 'Set PIN') + '</button>' +
@@ -975,7 +992,7 @@ async def login_edit_save(request: Request, lid: str,
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "logins")
     await _check_csrf(request, s)
     import subprocess
@@ -1047,7 +1064,7 @@ async def login_delete(request: Request, lid: str):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "logins")
     with db() as c:
         t = c.execute("SELECT * FROM logins WHERE id=?", (lid,)).fetchone()
@@ -1232,7 +1249,7 @@ async def invite_new(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "invites")
     from datetime import datetime as _dt, timedelta as _td
     f = await request.form()
@@ -1483,7 +1500,7 @@ async def trunk_edit_save(request: Request, name: str,
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "trunks")
     await _check_csrf(request, s)
     en = 1 if enabled else 0
@@ -1606,7 +1623,7 @@ async def routes_prefix(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "routes")
     f = await request.form()
     mode = f.get("mode") if f.get("mode") in ("off", "optional", "required") else "off"
@@ -1626,7 +1643,7 @@ async def inbound_delete(request: Request, rid: int):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "routes")
     with db() as c:
         r = c.execute("SELECT did FROM inbound_routes WHERE id=?", (rid,)).fetchone()
@@ -1646,7 +1663,7 @@ async def inbound_edit_save(request: Request, rid: str,
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "routes")
     await _check_csrf(request, s)
     import json
@@ -1728,7 +1745,7 @@ async def cdr_delete(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "cdr")
     form = await request.form()
     everything = form.get("mode") == "all"
@@ -1851,7 +1868,7 @@ async def rec_settings_save(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "rec")
     f = await request.form()
     import time as _t
@@ -1885,7 +1902,7 @@ async def rec_announcement_upload(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "rec")
     f = await request.form()
     up = f.get("file")
@@ -1915,7 +1932,7 @@ async def rec_announcement_remove(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "rec")
     old = _get_setting("rec_announce_path")
     _set_setting("rec_announce_path", "")
@@ -2328,7 +2345,7 @@ async def sms_route_edit_save(request: Request, did: str):
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "msgs")
     await _check_csrf(request, s)
     f = await request.form()
@@ -2367,7 +2384,7 @@ async def sms_routes_settings_save(request: Request):
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "msgs")
     await _check_csrf(request, s)
     f = await request.form()
@@ -2480,7 +2497,7 @@ async def feature_edit_save(request: Request, code: str):
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "features")
     await _check_csrf(request, s)
     f = await request.form()
@@ -2662,7 +2679,7 @@ async def branding_save(request: Request,
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "branding")
     await _check_csrf(request, s)
     f = await request.form()
@@ -2765,7 +2782,7 @@ async def _admin_bulk_form(request, tab):
     if not s or s["role"] != "admin":
         return None, RedirectResponse("/login", status_code=303), False, []
     await _check_csrf(request, s)
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return None, _panel_locked(s, tab), False, []
     form = await request.form()
     everything = form.get("mode") == "all"
@@ -3263,7 +3280,7 @@ async def apikeys_create(request: Request, username: str = Form(...), name: str 
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "keys")
     await _check_csrf(request, s)
     try:
@@ -3302,7 +3319,7 @@ async def apikeys_revoke(request: Request, key_id: int):
     s = _sess(request)
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         return _panel_locked(s, "keys")
     await _check_csrf(request, s)
     with db() as c:
@@ -3629,6 +3646,8 @@ class SafetyIn(BaseModel):
 
 class LockIn(BaseModel):
     locked: bool = True
+    # "full" = everything incl. My Phone; "admin" = admin panel + API only.
+    mode: Literal["full", "admin"] = "full"
 
 
 def _get_setting(key: str) -> str:
@@ -3661,8 +3680,30 @@ def actor_name(request: Request) -> str:
         return ""
 
 
+# Safety lock modes (kv_settings.safety_lock):
+#   "0"     off
+#   "1"     full lock: admin panel, API and My Phone (UCP) are all read-only
+#   "admin" admin-only lock: admin panel + API read-only, My Phone keeps working
+LOCK_MODES = {"0": "off", "1": "full", "admin": "admin"}
+
+
+def _lock_mode() -> str:
+    """'off', 'full' or 'admin'. Unknown stored values fail closed (full)."""
+    return LOCK_MODES.get(_get_setting("safety_lock"), "full")
+
+
+def _admin_locked() -> bool:
+    """True when admin-side changes are blocked (full or admin-only lock)."""
+    return _lock_mode() != "off"
+
+
+def _ucp_locked() -> bool:
+    """True when My Phone (UCP) changes are blocked (full lock only)."""
+    return _lock_mode() == "full"
+
+
 def _safety_allows_mutation():
-    if _get_setting("safety_lock") == "1":
+    if _admin_locked():
         raise HTTPException(403, "safety lock is engaged — disengage it to make changes")
 
 
@@ -3682,7 +3723,7 @@ def _brain_hangup_all() -> int:
 def v1_safety(request: Request):
     _v1_admin(request)
     return {"kill_switch": _get_setting("kill_switch") == "1",
-            "safety_lock": _get_setting("safety_lock") == "1"}
+            "safety_lock": _admin_locked(), "lock_mode": _lock_mode()}
 
 
 @app.post("/api/v1/safety/kill-switch")
@@ -3706,11 +3747,15 @@ def v1_kill_switch(request: Request, body: SafetyIn):
 def v1_safety_lock(request: Request, body: LockIn):
     _v1_admin(request)
     _check_csrf_v1(request)
-    _set_setting("safety_lock", "1" if body.locked else "0")
-    security.record("safety_lock", client_ip(request),
-                    "ON: changes are blocked" if body.locked else "off: changes allowed",
-                    actor=actor_name(request))
-    return {"safety_lock": body.locked}
+    if not body.locked:
+        value, detail = "0", "off: changes allowed"
+    elif body.mode == "admin":
+        value, detail = "admin", "ON (admin only): admin changes blocked, My Phone still works"
+    else:
+        value, detail = "1", "ON (everything): admin and My Phone changes blocked"
+    _set_setting("safety_lock", value)
+    security.record("safety_lock", client_ip(request), detail, actor=actor_name(request))
+    return {"safety_lock": body.locked, "lock_mode": _lock_mode()}
 
 
 # ---------------------------------------------------------------- edit PIN

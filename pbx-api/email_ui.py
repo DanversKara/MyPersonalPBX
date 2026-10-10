@@ -110,7 +110,7 @@ async def save(request: Request):
     if not s:
         raise HTTPException(403)
     await M._check_csrf(request, s)
-    if M._get_setting("safety_lock") == "1":
+    if M._admin_locked():
         return M._panel_locked(s, "email")
     f = await request.form()
     host = mailer.clean(f.get("smtp_host"))
