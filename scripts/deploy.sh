@@ -104,6 +104,9 @@ ln -sf "$SRC_DIR/scripts/update.sh" /usr/local/bin/pbx-update
 # Login notice when GitHub has a newer version (tells only, never updates).
 sed "s|@@SRC_DIR@@|$SRC_DIR|g" "$SRC_DIR/scripts/update-check.sh" > /etc/profile.d/pbx-update-check.sh
 chmod 644 /etc/profile.d/pbx-update-check.sh
+# Shells that don't read the login files (Proxmox console, `pct enter`).
+grep -q pbx-update-check /etc/bash.bashrc 2>/dev/null || \
+    echo '[ -r /etc/profile.d/pbx-update-check.sh ] && . /etc/profile.d/pbx-update-check.sh  # own-pbx update notice' >> /etc/bash.bashrc
 systemctl daemon-reload
 systemctl enable pbx-brain pbx-api pbx-agi
 # restart (not just start) so already-running services pick up new code
