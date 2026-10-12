@@ -157,10 +157,25 @@ request_route {
         if (!is_method("ACK")) {
             xlog("L_INFO", "edge: in-call $rm from $si to $ru\n");
         }
-        # Safety: if the next hop is ourselves (client preloaded a Route
-        # header for the outbound proxy), this is really a new request.
+        # Next hop is ourselves again:
+        #  - From Asterisk: on in-call requests to a remote phone (BYE,
+        #    re-INVITE) Asterisk adds the phone's Path after our
+        #    Record-Routes, i.e. one more Route pointing at us with the
+        #    phone's connection in received=. Send it to that connection.
+        #    Before, the hang-up went back to Asterisk (481) and the phone
+        #    stayed connected after the other side hung up.
+        #  - Otherwise (a client preloaded a Route for the outbound proxy):
+        #    really a new request, for Asterisk.
         if (is_myself("$du")) {
-            $du = "sip:@@ASTERISK_IP@@:5060";
+            $var(rcv) = "";
+            if ($si == "@@ASTERISK_IP@@") {
+                $var(rcv) = $(hdr(Route)[-1]{nameaddr.uri}{uri.param,received}{s.unquote});
+            }
+            if ($var(rcv) =~ "^sips?:") {
+                $du = $var(rcv);
+            } else {
+                $du = "sip:@@ASTERISK_IP@@:5060";
+            }
         }
         # Direction for SRTP: $si==Asterisk means toward the phone (offer
         # SRTP); otherwise toward Asterisk (plain RTP, phone's SRTP is
