@@ -942,6 +942,59 @@ CONFERENCES = {}  # room -> bridge_id
 DISA_SESSIONS = {}  # channel_id -> {stage, digits, me}
 
 
+DISA_PIN_PROMPT = "sound:agent-pass"     # "...password, followed by the pound key"
+DISA_BAD_PIN = "sound:auth-incorrect"     # "Password incorrect"
+DISA_IDLE_SEC = 20                        # no key for this long -> hang up
+
+
+def _disa_play(sess, media):
+    """Replace whatever DISA is playing (prompt / dial tone) with media."""
+    _disa_stop(sess)
+    try:
+        sess["pb"] = (sess["chan"].play(media) or {}).get("id")
+    except Exception:
+        log.info("DISA: playing %s failed", media)
+
+
+def _disa_stop(sess):
+    pid = sess.pop("pb", None)
+    if pid:
+        try:
+            CLIENT.delete("playbacks/%s" % pid)
+        except Exception:
+            pass
+
+
+def _disa_end(chan_id, prompt=None):
+    """Drop the DISA session and hang up (after `prompt`, if given)."""
+    sess = DISA_SESSIONS.pop(chan_id, None)
+    if not sess:
+        return
+    t = sess.pop("timer", None)
+    if t:
+        t.cancel()
+    _disa_stop(sess)
+    if prompt:
+        play_then(sess["chan"], prompt, lambda: _hangup(chan_id))
+    else:
+        _hangup(chan_id)
+
+
+def _disa_idle(sess):
+    """(Re)start the no-key timer: an abandoned *70 call doesn't stay up."""
+    t = sess.get("timer")
+    if t:
+        t.cancel()
+    cid = sess["chan"].id
+    def _timeout():
+        if DISA_SESSIONS.get(cid) is sess:
+            log.info("DISA: no keys for %ss on %s, hanging up", DISA_IDLE_SEC, cid)
+            _disa_end(cid)
+    sess["timer"] = threading.Timer(float(DISA_IDLE_SEC), _timeout)
+    sess["timer"].daemon = True
+    sess["timer"].start()
+
+
 def handle_disa(channel, me):
     """*70: DISA - PIN entry then dial tone for outbound/internal."""
     import bcrypt
@@ -955,12 +1008,15 @@ def handle_disa(channel, me):
         return
     try:
         channel.answer()
-        # Play beep to prompt for PIN
-        channel.play("tone:beep")
-        DISA_SESSIONS[channel.id] = {
+        sess = DISA_SESSIONS[channel.id] = {
             "stage": "pin", "digits": "", "me": me,
-            "pin_hash": pin_hash_row["value"],
+            "pin_hash": pin_hash_row["value"], "chan": channel,
         }
+        # "Please enter your password followed by the pound key."
+        # (There is no "beep" tone in indications.conf: the old tone:beep
+        # played nothing, so callers heard silence.)
+        _disa_play(sess, DISA_PIN_PROMPT)
+        _disa_idle(sess)
         log.info("DISA: %s prompted for PIN", me["exten"])
     except Exception:
         log.exception("DISA failed")
@@ -1090,51 +1146,42 @@ def on_dtmf(channel, event):
         return
     import bcrypt
     digit = event.get("digit", "")
+    _disa_idle(sess)
     if sess["stage"] == "pin":
         if digit == "#":
             # Validate PIN
             pin = sess["digits"]
-            if bcrypt.checkpw(pin.encode(), sess["pin_hash"].encode()):
+            if pin and bcrypt.checkpw(pin.encode(), sess["pin_hash"].encode()):
                 sess["stage"] = "dial"
                 sess["digits"] = ""
-                try:
-                    channel.play("tone:dial")
-                    log.info("DISA: PIN accepted for %s", sess["me"]["exten"])
-                except Exception:
-                    pass
+                _disa_play(sess, "tone:dial")   # until the first digit
+                log.info("DISA: PIN accepted for %s", sess["me"]["exten"])
             else:
                 log.info("DISA: wrong PIN from %s", sess["me"]["exten"])
-                try:
-                    channel.hangup()
-                except Exception:
-                    pass
-                DISA_SESSIONS.pop(chan_id, None)
+                _disa_end(chan_id, DISA_BAD_PIN)
         elif digit.isdigit():
+            _disa_stop(sess)   # typing over the prompt
             sess["digits"] += digit
             if len(sess["digits"]) > 12:
-                try:
-                    channel.hangup()
-                except Exception:
-                    pass
-                DISA_SESSIONS.pop(chan_id, None)
+                _disa_end(chan_id, DISA_BAD_PIN)
     elif sess["stage"] == "dial":
         if digit == "#":
-            # Dial the collected digits as an internal call
+            # Dial the collected digits as if the phone had dialed them.
             dest = sess["digits"]
             me = sess["me"]
             DISA_SESSIONS.pop(chan_id, None)
+            sess["timer"].cancel()
+            _disa_stop(sess)
+            if not dest:
+                _hangup(chan_id)
+                return
             log.info("DISA: %s dialing %s", me["exten"], dest)
-            # Reuse handle_internal logic by faking the dialed number
-            # We need to route this channel as if they dialed dest
             handle_internal(channel, dest)
         elif digit.isdigit() or digit == "*":
+            _disa_stop(sess)   # dial tone off at the first digit
             sess["digits"] += digit
             if len(sess["digits"]) > 15:
-                try:
-                    channel.hangup()
-                except Exception:
-                    pass
-                DISA_SESSIONS.pop(chan_id, None)
+                _disa_end(chan_id)
 
 
 def handle_conference(channel, me, room):
@@ -2558,7 +2605,9 @@ def on_stasis_end(channel, event):
         vm_cleanup(channel.id)
         with LEG_LOCK:
             hangup_other_leg(channel.id)
-        DISA_SESSIONS.pop(channel.id, None)
+        _disa_sess = DISA_SESSIONS.pop(channel.id, None)
+        if _disa_sess and _disa_sess.get("timer"):
+            _disa_sess["timer"].cancel()
         MIDCALL_DIGITS.pop(channel.id, None)
         mon = SPY_MONITORS.pop(channel.id, None)
         if mon is not None:
