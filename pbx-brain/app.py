@@ -185,6 +185,10 @@ def handle_internal(channel, dialed):
             return
         handle_voicemail_check(channel)
         return
+    if dialed == "*86":
+        # Mid-call only (press it during a call); dialing it alone does nothing.
+        deny_and_hangup(channel, DENIED_PROMPT, "*86 dialed outside a call")
+        return
     if dialed == "*98":
         if not feature_allowed("*98", me):
             deny_and_hangup(channel, DENIED_PROMPT, "*98 not allowed")
@@ -369,15 +373,56 @@ def num_norm(v):
     return d[1:] if len(d) == 11 and d.startswith("1") else d
 
 
-def blocked_by(login_id, number):
-    """True if user `login_id` blocked calls/texts from `number`."""
+BLOCK_ACTIONS = ("disconnected", "voicemail", "forward")
+
+
+def block_rule(login_id, number):
+    """User `login_id`'s call-filtering rule for `number`, or None if not
+    blocked: {"action": disconnected|voicemail|forward, "target": ...}."""
     n = num_norm(number)
     if not login_id or not n:
-        return False
+        return None
     try:
-        return q1("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?", (login_id, n)) is not None
+        r = q1("SELECT * FROM blocked_numbers WHERE login_id=? AND number=?", (login_id, n))
     except sqlite3.OperationalError:
-        return False
+        return None
+    if not r:
+        return None
+    r = dict(r)
+    action = r.get("action") or "disconnected"
+    return {"action": action if action in BLOCK_ACTIONS else "disconnected",
+            "target": (r.get("target") or "").strip()}
+
+
+def blocked_by(login_id, number):
+    """True if user `login_id` blocked calls/texts from `number`."""
+    return block_rule(login_id, number) is not None
+
+
+def apply_block(channel, me, callee, rule, caller_label, hops=0, **ring_kw):
+    """A caller `callee` blocked is calling them: do what the user chose in
+    Call filtering. 'forward' sends the call on (falls back to voicemail if
+    that fails), 'voicemail' goes straight to their box, 'disconnected'
+    plays "not in service" and hangs up. me / ring_kw as for forward_to."""
+    action = rule["action"]
+    log.info("%s filters %s: %s %s", callee["exten"], caller_label, action, rule.get("target") or "")
+    if action == "forward":
+        if rule.get("target") and forward_to(channel, me, callee, rule["target"], hops,
+                                             caller_label=caller_label, **ring_kw):
+            return
+        action = "voicemail"
+    if action == "voicemail":
+        CALLS[channel.id] = {
+            "caller": caller_label, "callee": callee["exten"],
+            "start": CALLS.get(channel.id, {}).get("start", time.time()),
+            "direction": ring_kw.get("direction") or "inbound",
+            "login_id": None if ring_kw.get("direction", "inbound") == "inbound" else me["id"],
+            "callee_id": callee["id"], "hops": hops,
+            "did": (ring_kw.get("extra") or {}).get("did", ""),
+        }
+        route_to_voicemail(channel.id, callee["exten"])
+        return
+    deny_and_hangup(channel, DISCONNECTED_PROMPT, "caller %s blocked by %s" % (caller_label, callee["exten"]))
 
 
 def ring_local(channel, me, callee, hops=0, caller_label=None,
@@ -389,9 +434,10 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
 
     For a forwarded inbound call, `me` is the forwarding user and
     caller_label / caller_id carry the outside caller's number."""
-    if blocked_by(callee["id"], caller_label or me["exten"]):
-        log.info("%s blocked calls from %s", callee["exten"], caller_label or me["exten"])
-        deny_and_hangup(channel, why="caller blocked by %s" % callee["exten"])
+    rule = block_rule(callee["id"], caller_label or me["exten"])
+    if rule:
+        apply_block(channel, me, callee, rule, caller_label or me["exten"], hops,
+                    caller_id=caller_id, direction=direction, extra=extra)
         return
     prev = CALLS.get(channel.id, {})
     info = {"caller": caller_label or me["exten"], "callee": callee["exten"],
@@ -535,7 +581,9 @@ def on_legb_answer(b_channel):
             CLIENT.channels.get(a_id).answer()
         except Exception:
             log.info("answer A %s: already up", a_id)
-        bridge = CLIENT.bridges.create(type="mixing")
+        # dtmf_events: keep Asterisk from natively bridging the RTP, so the
+        # phones' key presses still reach us (mid-call *86 block).
+        bridge = CLIENT.bridges.create(type="mixing,dtmf_events")
         # Add one channel at a time: ARI only honors the last id
         # when several are passed in a single addChannel call.
         bridge.add_channel(a_id)
@@ -922,6 +970,104 @@ def handle_disa(channel, me):
             pass
 
 
+# ---------------------------------------------------------------- mid-call block
+# During a call someone made to them, a user presses *86 on their own phone:
+# the call ends, the caller hears "not in service" and lands on the user's
+# block list (they can change what that caller gets later in My Phone ->
+# Settings -> Call filtering). Only key presses from the answering user's
+# own leg count: the caller's keys arrive on the other channel and are
+# ignored, so a caller can never block themselves into (or out of) anything.
+
+MIDCALL_BLOCK_CODE = "*86"
+MIDCALL_WINDOW = 3.0     # seconds allowed between the code's keys
+MIDCALL_DIGITS = {}      # b_channel_id -> (digits so far, time of last key)
+MAX_BLOCKS = 200         # same limit as My Phone (pbx-api/safety_ui.py)
+
+
+def _call_answered_by(b_id):
+    """The A-leg id of the bridged call whose answering leg is `b_id`,
+    if that leg is a local user's phone (not a trunk). Else None."""
+    for a_id, info in list(CALLS.items()):
+        if info.get("b_id") == b_id and info.get("bridged_at") and info.get("answered_id"):
+            return a_id
+    return None
+
+
+def midcall_dtmf(chan_id, digit):
+    """Collect keys pressed on an answered user leg. Returns True if the key
+    belonged to such a leg (whether or not it completed the code)."""
+    a_id = _call_answered_by(chan_id)
+    if not a_id:
+        MIDCALL_DIGITS.pop(chan_id, None)
+        return False
+    now = time.time()
+    buf, last = MIDCALL_DIGITS.get(chan_id, ("", 0.0))
+    if now - last > MIDCALL_WINDOW:
+        buf = ""
+    buf = (buf + digit)[-len(MIDCALL_BLOCK_CODE):]
+    MIDCALL_DIGITS[chan_id] = (buf, now)
+    if buf == MIDCALL_BLOCK_CODE:
+        MIDCALL_DIGITS.pop(chan_id, None)
+        try:
+            midcall_block(a_id, chan_id)
+        except Exception:
+            log.exception("mid-call block failed")
+    return True
+
+
+def midcall_block(a_id, b_id):
+    """The user on leg b_id pressed the block code: block the caller on a_id,
+    play them "not in service", and end the call."""
+    info = CALLS.get(a_id) or {}
+    user = q1("SELECT * FROM logins WHERE id=? AND enabled=1", (info.get("answered_id"),))
+    if not user:
+        return
+    user = dict(user)
+    if not feature_allowed(MIDCALL_BLOCK_CODE, user):
+        log.info("%s pressed %s but may not use it", user["exten"], MIDCALL_BLOCK_CODE)
+        return
+    caller = info.get("caller") or ""
+    n = num_norm(caller)
+    if n and n != num_norm(user["exten"]):
+        try:
+            with db() as c:
+                full = c.execute("SELECT COUNT(*) FROM blocked_numbers WHERE login_id=?",
+                                 (user["id"],)).fetchone()[0] >= MAX_BLOCKS
+                if full:
+                    log.warning("%s block list full: %s not added", user["exten"], n)
+                else:
+                    # An existing rule (e.g. "forward") is kept as the user set it.
+                    c.execute("INSERT OR IGNORE INTO blocked_numbers (login_id, number) VALUES (?,?)",
+                              (user["id"], n))
+                    c.execute("INSERT INTO audit (actor, action, detail) VALUES (?,?,?)",
+                              (user["username"], "ucp.block.midcall", n))
+        except sqlite3.Error:
+            log.exception("mid-call block: saving %s for %s failed", n, user["exten"])
+        log.info("%s blocked %s mid-call", user["exten"], n)
+    else:
+        # Withheld / unknown number: nothing to block, but still end the call.
+        log.info("%s pressed %s on a caller with no number (%r): call ended",
+                 user["exten"], MIDCALL_BLOCK_CODE, caller)
+    with LEG_LOCK:
+        bridge_id = BRIDGED.pop(a_id, None)
+        if bridge_id:
+            try:
+                CLIENT.bridges.get(bridge_id).remove_channel(a_id)
+            except Exception:
+                pass
+    # The user hears a beep (done), then their leg ends; the caller is told
+    # the number is not in service and hung up.
+    try:
+        play_then(CLIENT.channels.get(b_id), "sound:beep", lambda: _hangup(b_id))
+    except Exception:
+        _hangup(b_id)
+    try:
+        deny_and_hangup(CLIENT.channels.get(a_id), DISCONNECTED_PROMPT,
+                        "mid-call block by %s" % user["exten"])
+    except Exception:
+        _hangup(a_id)
+
+
 def on_dtmf(channel, event):
     """Handle DTMF for IVR menus, DISA PIN entry and dialing."""
     if channel.id in SPY_MONITORS:
@@ -936,11 +1082,13 @@ def on_dtmf(channel, event):
     if channel.id in VMS:
         vms_dtmf(channel.id, event.get("digit", ""))
         return
-    import bcrypt
+    if channel.id in BRIDGED and midcall_dtmf(channel.id, event.get("digit", "")):
+        return
     chan_id = channel.id
     sess = DISA_SESSIONS.get(chan_id)
     if not sess:
         return
+    import bcrypt
     digit = event.get("digit", "")
     if sess["stage"] == "pin":
         if digit == "#":
@@ -1765,15 +1913,17 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
             return
     # Who actually rings: skip users on DND, follow forward-always.
     targets, first_login = [], None
-    blocked_n = 0
+    first_block = None   # (callee, rule) of the first user who blocked the caller
     for exten in ring_extens:
         callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1",
                     (exten,))
         if not callee:
             continue
-        if blocked_by(callee["id"], caller_num):
+        rule = block_rule(callee["id"], caller_num)
+        if rule:
             log.info("%s blocked %s: not rung", exten, caller_num)
-            blocked_n += 1
+            if first_block is None:
+                first_block = (callee, rule)
             continue
         if first_login is None:
             first_login = callee
@@ -1811,9 +1961,12 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
         if all(t["id"] != callee["id"] for t in targets):
             targets.append(callee)
     vm_login, vm_copies = _group_vm(group, first_login)
-    if not targets and blocked_n:
-        # Everyone this call would ring has blocked the caller.
-        deny_and_hangup(channel, why="caller %s blocked by everyone rung" % caller_num)
+    if not targets and first_block and first_login is None:
+        # Everyone this call would ring has blocked the caller: the first
+        # one's Call filtering choice (not in service / voicemail / forward).
+        callee, rule = first_block
+        apply_block(channel, callee, callee, rule, caller_num, caller_id=caller_id,
+                    direction="internal" if internal else "inbound", extra={"did": did})
         return
     if not targets:
         # Everyone on DND (or no valid users): the group's no-answer choice,
@@ -1924,6 +2077,8 @@ def quota(login_id, feature):
 UNLIMITED = -1
 RECORDING_CONSENT_VERSION = 1
 DENIED_PROMPT = "sound:cannot-complete-as-dialed"
+# What a blocked caller hears: "The number you have dialed is not in service."
+DISCONNECTED_PROMPT = "sound:ss-noservice"
 UNAVAILABLE_PROMPT = "sound:vm-nobodyavail"
 
 
@@ -2404,6 +2559,7 @@ def on_stasis_end(channel, event):
         with LEG_LOCK:
             hangup_other_leg(channel.id)
         DISA_SESSIONS.pop(channel.id, None)
+        MIDCALL_DIGITS.pop(channel.id, None)
         mon = SPY_MONITORS.pop(channel.id, None)
         if mon is not None:
             _spy_stop_monitor(mon)

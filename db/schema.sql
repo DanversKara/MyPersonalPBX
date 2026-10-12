@@ -366,10 +366,16 @@ CREATE TABLE IF NOT EXISTS ring_groups (
 
 -- Numbers a user blocked (extensions or outside numbers, digits only; US
 -- numbers as 10 digits). Blocked callers can't ring or text that user.
+-- What a blocked caller gets (call filtering, chosen per number in My Phone):
+-- 'disconnected' = "the number you have dialed is not in service" + hang up,
+-- 'voicemail' = straight to the user's voicemail, 'forward' = sent on to
+-- `target` (an extension or outside number).
 CREATE TABLE IF NOT EXISTS blocked_numbers (
   login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
   number TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  action TEXT NOT NULL DEFAULT 'disconnected',
+  target TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (login_id, number)
 );
 

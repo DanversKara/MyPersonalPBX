@@ -74,6 +74,11 @@ def _migrate(c):
         return {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
     if "ivr_id" not in cols("inbound_routes"):
         c.execute("ALTER TABLE inbound_routes ADD COLUMN ivr_id INTEGER DEFAULT NULL")
+    # Call filtering: what a blocked caller gets (see schema.sql).
+    if "action" not in cols("blocked_numbers"):
+        c.execute("ALTER TABLE blocked_numbers ADD COLUMN action TEXT NOT NULL DEFAULT 'disconnected'")
+    if "target" not in cols("blocked_numbers"):
+        c.execute("ALTER TABLE blocked_numbers ADD COLUMN target TEXT NOT NULL DEFAULT ''")
     if "ring_seconds" not in cols("user_prefs"):
         c.execute("ALTER TABLE user_prefs ADD COLUMN ring_seconds INTEGER NOT NULL DEFAULT 0")
     if "answer_ivr_id" not in cols("user_prefs"):
@@ -153,6 +158,9 @@ def _migrate(c):
         ("*555", "ChanSpy monitor", "Stay on the line and listen to calls: *555<ext> monitors one extension (auto-follows new calls), bare *555 scans any active call; * / # hops between calls", "admin"),
         ("*60", "Conference room", "Join conference room 60", "all"),
         ("*70", "DISA", "Outside dial tone after entering a PIN", "all"),
+        ("*86", "Block caller (mid-call)", "Press *86 during a call someone made to you: the call ends, the caller"
+         " hears \"not in service\" and is added to your block list (change what they get in My Phone"
+         " -> Settings -> Call filtering). Only works from your own phone, never from the caller's side", "all"),
     ):
         c.execute("INSERT OR IGNORE INTO feature_codes (code, name, description, default_access)"
                   " VALUES (?,?,?,?)", (code, name, desc, access))

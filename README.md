@@ -533,7 +533,7 @@ see section 16) with their panel username and password.
 | **Messages** | conversations, send a text to any extension (including Zoiper and other SIP apps), **Block**, **Report**; updates by itself. ESP32 devices can make calls too, see the [ESP32-S3-Box-3 project](https://github.com/DanversKara/ESP32-S3-Box-3) |
 | **IVR** | personal menus (if their plan allows) |
 | **Billing** | choose, switch or cancel a plan (Stripe) |
-| **Settings** | DND, forwarding, ring time, answer with IVR, "Record my calls" (with legal acknowledgement), notification email, text emails on/off, receive/send texts on/off, block list, 911 notice, phone setup, SIP password, panel password |
+| **Settings** | DND, forwarding, ring time, answer with IVR, "Record my calls" (with legal acknowledgement), notification email, text emails on/off, receive/send texts on/off, call filtering (block list: per number choose "not in service", straight to voicemail, or forward to another number), 911 notice, phone setup, SIP password, panel password |
 
 ![Overview](docs/screenshots/20-myphone-overview.png)
 ![Calls](docs/screenshots/21-myphone-calls.png)
@@ -559,6 +559,7 @@ see section 16) with their panel username and password.
 | `*555<ext>` | Monitor an extension's calls: stays on the line, auto-follows new calls (admins only by default) |
 | `*555` | Scan mode: listen to any active call on the system |
 | `*70` | DISA: outside dial tone after a PIN (only if a PIN has been configured) |
+| `*86` *(during a call)* | Block the caller: press it mid-call on a call someone made to you. The call ends, the caller hears "the number you have dialed is not in service", and their number goes on your block list. Only keys from your own phone count; the caller pressing `*86` does nothing |
 | ring group or IVR number | Ring that group or menu |
 
 While monitoring (`*555`), press `*` / `1` for the previous call and `#` / `2`
