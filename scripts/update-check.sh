@@ -5,7 +5,11 @@
 # no set -e, quiet on any error, and it only ever tells - it never updates
 # (an update restarts the phone services and would drop live calls).
 # At most one check against GitHub per hour; a slow network gives up after 5 s.
-if [ "$(id -u)" -eq 0 ] && [ -t 1 ] && [ -d "@@SRC_DIR@@/.git" ]; then
+# Also sourced from /etc/bash.bashrc, for shells that skip the login files
+# (Proxmox console / `pct enter` on a container); PBX_UPDATE_CHECKED stops
+# it from showing twice when both run.
+if [ -z "${PBX_UPDATE_CHECKED:-}" ] && [ "$(id -u)" -eq 0 ] && [ -t 1 ] && [ -d "@@SRC_DIR@@/.git" ]; then
+    export PBX_UPDATE_CHECKED=1
     (
         cd "@@SRC_DIR@@" || exit 0
         stamp=/run/pbx-update-check
