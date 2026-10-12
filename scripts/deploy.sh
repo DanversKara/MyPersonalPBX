@@ -99,6 +99,8 @@ chmod -R go-w /opt/pbx
 cp "$SRC_DIR/scripts/sudoers-pbx-apply-config" /etc/sudoers.d/pbx-apply-config
 chmod 440 /etc/sudoers.d/pbx-apply-config
 visudo -cf /etc/sudoers.d/pbx-apply-config
+# `pbx-update` shortcut: pull + deploy + edge in one command (scripts/update.sh).
+ln -sf "$SRC_DIR/scripts/update.sh" /usr/local/bin/pbx-update
 systemctl daemon-reload
 systemctl enable pbx-brain pbx-api pbx-agi
 # restart (not just start) so already-running services pick up new code

@@ -217,9 +217,21 @@ cd /root/own-pbx
 #    creates the pbx service user, folders and Python environments.
 ./scripts/install.sh
 
-# 2. Deploy: database, Asterisk configs, services. Run this again after every update.
+# 2. Deploy: database, Asterisk configs, services.
 ./scripts/deploy.sh
 ```
+
+**Updating later:** one command, as root on the PBX:
+
+```bash
+pbx-update
+```
+
+It downloads the latest code (the project folder must be a `git clone`),
+re-deploys the PBX, and, only if the edge files changed, copies `kamailio/`
+to the edge box and runs `update-edge.sh` there. The first time the edge needs
+updating it asks for the edge's address and remembers it. `pbx-update --edge`
+updates the edge even when nothing in it changed.
 
 At the end of the first deploy you are asked to **create the admin login**
 (at least 12 characters). Then open the panel from a computer on your network:
