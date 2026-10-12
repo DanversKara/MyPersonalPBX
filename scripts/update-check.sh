@@ -18,11 +18,12 @@ if [ -z "${PBX_UPDATE_CHECKED:-}" ] && [ "$(id -u)" -eq 0 ] && [ -t 1 ] && [ -d 
         fi
         n=$(git rev-list --no-merges --count HEAD..origin/main 2>/dev/null) || exit 0
         if [ "${n:-0}" -gt 0 ]; then
-            echo ""
+            # Bold yellow, so it stands out from the login banner.
+            printf '\n\033[1;33m'
             echo "  own-pbx: $n new update(s) on GitHub:"
             git log --no-merges --format='    - %s' HEAD..origin/main 2>/dev/null | head -5
             echo "  Run: pbx-update   (restarts phone services: pick a quiet moment)"
-            echo ""
+            printf '\033[0m\n'
         fi
     )
 fi
