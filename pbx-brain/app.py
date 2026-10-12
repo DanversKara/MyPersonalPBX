@@ -1084,11 +1084,11 @@ def on_dtmf(channel, event):
         return
     if channel.id in BRIDGED and midcall_dtmf(channel.id, event.get("digit", "")):
         return
-    import bcrypt
     chan_id = channel.id
     sess = DISA_SESSIONS.get(chan_id)
     if not sess:
         return
+    import bcrypt
     digit = event.get("digit", "")
     if sess["stage"] == "pin":
         if digit == "#":
