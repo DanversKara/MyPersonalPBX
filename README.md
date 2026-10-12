@@ -233,6 +233,11 @@ to the edge box and runs `update-edge.sh` there. The first time the edge needs
 updating it asks for the edge's address and remembers it. `pbx-update --edge`
 updates the edge even when nothing in it changed.
 
+When you log in to the PBX as root (SSH or console), it checks GitHub (at
+most once an hour) and tells you if there is an update to install. It never
+installs anything by itself: an update restarts the phone services and would
+drop calls in progress, so you choose when to run `pbx-update`.
+
 At the end of the first deploy you are asked to **create the admin login**
 (at least 12 characters). Then open the panel from a computer on your network:
 

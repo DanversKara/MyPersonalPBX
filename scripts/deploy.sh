@@ -101,6 +101,9 @@ chmod 440 /etc/sudoers.d/pbx-apply-config
 visudo -cf /etc/sudoers.d/pbx-apply-config
 # `pbx-update` shortcut: pull + deploy + edge in one command (scripts/update.sh).
 ln -sf "$SRC_DIR/scripts/update.sh" /usr/local/bin/pbx-update
+# Login notice when GitHub has a newer version (tells only, never updates).
+sed "s|@@SRC_DIR@@|$SRC_DIR|g" "$SRC_DIR/scripts/update-check.sh" > /etc/profile.d/pbx-update-check.sh
+chmod 644 /etc/profile.d/pbx-update-check.sh
 systemctl daemon-reload
 systemctl enable pbx-brain pbx-api pbx-agi
 # restart (not just start) so already-running services pick up new code
