@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Never back up or transfer the sign-in token or PIN. -->
+<data-extraction-rules>
+    <cloud-backup><exclude domain="sharedpref" path="." /><exclude domain="database" path="." /></cloud-backup>
+    <device-transfer><exclude domain="sharedpref" path="." /><exclude domain="database" path="." /></device-transfer>
+</data-extraction-rules>

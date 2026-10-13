@@ -34,6 +34,7 @@ import e911_ui
 import ring_groups_ui
 import safety_ui
 import voipms_sms
+import app_api
 
 
 def esc(x):
@@ -339,7 +340,7 @@ REMOTE_ALLOWED_PREFIXES = (
     "/ucp", "/login", "/logout", "/auth/login", "/auth/logout", "/auth/me",
     "/stripe/webhook", "/healthz", "/api/vm-greeting", "/api/voicemail-audio/",
     "/api/recording-audio/", "/api/ivr-greeting/", "/api/v1/me", "/favicon",
-    "/hooks/voipms-sms", "/invite/",
+    "/hooks/voipms-sms", "/invite/", "/api/v1/app/",
 )
 
 
@@ -2138,6 +2139,7 @@ def _handle_voipms_inbound(params: dict) -> tuple[bool, str]:
         c.commit()
     # Deliver to Zoiper/softphones via pbx-brain (best effort; stored anyway)
     for d in valid:
+        app_api.push_exten(d, "message")
         try:
             import json as _json, urllib.request as _ur
             brain_url = os.environ.get("PBX_BRAIN_STATUS", "http://127.0.0.1:8099") + "/messages/send"
@@ -3972,3 +3974,4 @@ security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])
 safety_ui.install(_sys.modules[__name__])
+app_api.install(_sys.modules[__name__])

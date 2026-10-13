@@ -88,7 +88,8 @@ SUBTABS = [("ucp", "/ucp", "Overview"), ("ucp-calls", "/ucp/calls", "Calls"),
            ("ucp-msg", "/ucp/messages", "Messages"),
            ("ucp-ivr", "/ucp/ivr", "IVR"),
            ("ucp-bill", "/ucp/billing", "Billing"),
-           ("ucp-set", "/ucp/settings", "Settings")]
+           ("ucp-set", "/ucp/settings", "Settings"),
+           ("ucp-app", "/ucp/app", "App")]
 RING_CHOICES = (10, 15, 20, 25, 30, 45, 60, 90, 120)   # mirrors pbx-brain
 DEFAULT_RING = 30
 
@@ -100,7 +101,14 @@ def esc(x):
 
 
 def _me(request: Request):
-    """(session, login row dict) or (None, None)."""
+    """(session, login row dict) or (None, None).
+
+    The Android app signs in with a device token (Authorization: Bearer
+    pbxd_...) instead of the session cookie; see app_api.py.
+    """
+    if request.headers.get("authorization", "").lower().startswith("bearer "):
+        row = M.app_api.device_login(request)
+        return (M.app_api.device_session(row), row) if row else (None, None)
     s = M._sess(request)
     if not s:
         return None, None
@@ -980,6 +988,7 @@ async def msg_send(request: Request):
                   (me["exten"], to, body, me["id"]))
         c.commit()
     # Push to the recipient's phone (best effort; it's stored either way).
+    M.app_api.push_notify(dest["id"], "message")
     try:
         import json as _json
         import urllib.request as _ur
