@@ -25,13 +25,15 @@ import java.util.concurrent.TimeUnit
 @Serializable data class Since(val messages: List<Msg> = emptyList())
 @Serializable data class Overview(
     val me: Who, val dnd: Boolean = false, val new_voicemail: Int = 0, val missed_24h: Int = 0,
+    /** Missed calls this phone hasn't looked at yet (cleared by callsSeen). */
+    val missed_new: Int? = null,
     val texts_left: Int? = null, val registered: Boolean? = null, val latest_message_id: Long = 0,
     val locked: Boolean = false,
 )
 @Serializable data class Call(
     val id: Long, val kind: String = "", val other: String = "", val started_at: String = "",
     val duration_sec: Int? = null, val bill_sec: Int? = null, val disposition: String? = null,
-    val recording_id: Long? = null,
+    val recording_id: Long? = null, val hidden: Boolean = false,
 )
 @Serializable data class Calls(val calls: List<Call> = emptyList())
 @Serializable data class Vm(
@@ -121,9 +123,7 @@ class Api(base: String, private val token: String?) {
 
     private fun obj(vararg p: Pair<String, String>) = JsonObject(p.associate { it.first to JsonPrimitive(it.second) })
 
-    // ---- sign in
-    suspend fun login(user: String, pass: String, device: String): LoginResp =
-        postJson("/app/login", obj("username" to user, "password" to pass, "device_name" to device))
+    // ---- sign in (pairing code only; the app never handles the panel password)
     suspend fun pair(code: String, device: String): LoginResp =
         postJson("/app/pair", obj("code" to code, "device_name" to device))
     suspend fun logout() { exec(Request.Builder().url(url("/app/logout")).post(ByteArray(0).toRequestBody())) }
@@ -133,11 +133,27 @@ class Api(base: String, private val token: String?) {
     suspend fun threads(): Threads = get("/me/threads")
     suspend fun thread(peer: String): ThreadResp = get("/me/threads/${java.net.URLEncoder.encode(peer, "UTF-8")}", mapOf("limit" to 300))
     suspend fun since(after: Long): Since = get("/me/messages/since", mapOf("after" to after))
-    suspend fun calls(missed: Boolean): Calls = get("/me/calls", mapOf("missed" to if (missed) 1 else 0))
+    /** view: "all", "missed" or "hidden". */
+    suspend fun calls(view: String): Calls = get("/me/calls", mapOf("view" to view, "missed" to if (view == "missed") 1 else 0))
     suspend fun voicemail(folder: String): Vms = get("/me/voicemail", mapOf("folder" to folder))
     suspend fun settings(): Settings = get("/me/settings")
     suspend fun devices(): Devices = get("/me/devices")
     fun voicemailAudioUrl(id: Long) = url("/me/voicemail/$id/audio")
+
+    /** Download a voicemail to [dest] with this client (token + same TLS/proxy
+     *  path as every other call), so playback never depends on MediaPlayer's
+     *  own HTTP stack. */
+    suspend fun downloadVoicemail(id: Long, dest: java.io.File) = withContext(Dispatchers.IO) {
+        val b = Request.Builder().url(voicemailAudioUrl(id))
+        authHeaders().forEach { (k, v) -> b.header(k, v) }
+        http.newCall(b.build()).execute().use { r ->
+            if (!r.isSuccessful) throw ApiException(r.code, errorText(r.body?.string() ?: "", r.code))
+            val tmp = java.io.File(dest.path + ".part")
+            r.body!!.byteStream().use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
+            if (!tmp.renameTo(dest)) { tmp.copyTo(dest, overwrite = true); tmp.delete() }
+        }
+        dest
+    }
     fun recordingAudioUrl(id: Long) = url("/me/recordings/$id/audio")
     suspend fun deleteDevice(id: Long) { exec(Request.Builder().url(url("/me/devices/$id")).delete()) }
 
@@ -145,6 +161,9 @@ class Api(base: String, private val token: String?) {
     suspend fun send(to: String, body: String) = form("/me/messages/send", listOf("to" to to, "body" to body))
     suspend fun deleteMessages(ids: List<Long> = emptyList(), peers: List<String> = emptyList()) =
         form("/me/messages/delete", ids.map { "ids" to it.toString() } + peers.map { "convs" to it })
+    suspend fun hideCalls(ids: Collection<Long>, unhide: Boolean = false) =
+        form("/me/calls/hide", ids.map { "ids" to it.toString() } + if (unhide) listOf("unhide" to "1") else emptyList())
+    suspend fun callsSeen() { exec(Request.Builder().url(url("/me/calls/seen")).post(ByteArray(0).toRequestBody())) }
     suspend fun deleteVoicemail(ids: List<Long>, folder: String) =
         form("/me/voicemail/delete", ids.map { "ids" to it.toString() } + ("folder" to folder))
     suspend fun heard(id: Long) = form("/me/voicemail/$id/heard", emptyList())

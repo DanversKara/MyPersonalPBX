@@ -57,7 +57,7 @@ def device_login(request: Request):
         return None
     with M.db() as c:
         r = c.execute(
-            "SELECT d.id AS device_id, d.pwsig AS device_pwsig, l.* FROM app_devices d"
+            "SELECT d.id AS device_id, d.pwsig AS device_pwsig, d.calls_seen_id, l.* FROM app_devices d"
             " JOIN logins l ON l.id = d.login_id"
             " WHERE d.token_hash=? AND d.expires_at > datetime('now') AND l.enabled=1",
             (_hash(tok),)).fetchone()
@@ -97,9 +97,10 @@ def _issue(login, name: str) -> dict:
         old = c.execute("SELECT id FROM app_devices WHERE login_id=? ORDER BY id DESC LIMIT -1 OFFSET ?",
                         (login["id"], MAX_DEVICES - 1)).fetchall()
         c.executemany("DELETE FROM app_devices WHERE id=?", [(o["id"],) for o in old])
-        c.execute("INSERT INTO app_devices (login_id, name, token_hash, pwsig, expires_at)"
-                  " VALUES (?,?,?,?,datetime('now', ?))",
-                  (login["id"], name, _hash(tok), M._pw_sig(login["pwhash"]), f"+{DEVICE_TTL_DAYS} days"))
+        top = c.execute("SELECT COALESCE(MAX(id), 0) FROM cdr").fetchone()[0]
+        c.execute("INSERT INTO app_devices (login_id, name, token_hash, pwsig, expires_at, calls_seen_id)"
+                  " VALUES (?,?,?,?,datetime('now', ?),?)",
+                  (login["id"], name, _hash(tok), M._pw_sig(login["pwhash"]), f"+{DEVICE_TTL_DAYS} days", top))
         c.commit()
     M.ucp._audit(dict(login), "app.signin", name)
     return {"token": tok, "ttl_days": DEVICE_TTL_DAYS, "me": _who(login)}
@@ -186,12 +187,16 @@ def me_overview(request: Request):
     with M.db() as c:
         new_vm = c.execute("SELECT COUNT(*) FROM voicemail_messages WHERE mailbox=? AND folder='INBOX'"
                            " AND is_read=0", (box or "\x00",)).fetchone()[0]
-    missed = [x for x in U._my_calls(me, limit=200, missed_only=True)
+    hidden = _hidden_calls(me["id"])
+    missed_new = [x for x in U._my_calls(me, limit=200, missed_only=True)
+                  if x["id"] > (me.get("calls_seen_id") or 0) and x["id"] not in hidden]
+    missed = [x for x in missed_new
               if x.get("started_at", "") >= time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))]
     devs = U._device_status(me)
     msgs = U._my_messages(me, limit=1)
     return {"me": _who(me), "dnd": bool(p["dnd"]), "new_voicemail": new_vm,
-            "missed_24h": len(missed), "texts_left": U._left(me, "messages"),
+            "missed_24h": len(missed), "missed_new": len(missed_new),
+            "texts_left": U._left(me, "messages"),
             "registered": None if devs is None else len(devs) > 0,
             "latest_message_id": msgs[0]["id"] if msgs else 0,
             "locked": U._locked()}
@@ -232,11 +237,59 @@ def me_messages_since(request: Request, after: int = 0):
     return {"messages": [_msg(me, m) for m in rows]}
 
 
-def me_calls(request: Request, missed: int = 0, before: int = 0, limit: int = 100):
+def _hidden_calls(login_id) -> set:
+    with M.db() as c:
+        return {r[0] for r in c.execute("SELECT cdr_id FROM call_hidden WHERE login_id=?", (login_id,))}
+
+
+def me_calls(request: Request, missed: int = 0, view: str = "", before: int = 0, limit: int = 100):
+    """view: all (default), missed, or hidden. Hidden calls are left out of
+    all/missed and only listed under hidden; nothing is deleted (the call
+    history is purged for everyone after 90 days)."""
     me = _need(request)
-    rows = M.ucp._my_calls(me, limit=1000, missed_only=bool(missed))
+    view = view if view in ("all", "missed", "hidden") else ("missed" if missed else "all")
+    hidden = _hidden_calls(me["id"])
+    rows = M.ucp._my_calls(me, limit=1000, missed_only=view == "missed")
+    rows = [r for r in rows if (r["id"] in hidden) == (view == "hidden")]
     keep = ("id", "kind", "other", "started_at", "duration_sec", "bill_sec", "disposition", "recording_id")
-    return {"calls": [{k: r.get(k) for k in keep if k in r} for r in _paged(rows, before, limit)]}
+    return {"view": view, "seen_id": me.get("calls_seen_id") or 0,
+            "calls": [{k: r.get(k) for k in keep if k in r} | {"hidden": r["id"] in hidden}
+                      for r in _paged(rows, before, limit)]}
+
+
+def _own_call_ids(me, ids) -> list:
+    """Only calls that are in this user's own history."""
+    mine = {r["id"] for r in M.ucp._my_calls(me, limit=5000)}
+    return [i for i in ids if i in mine]
+
+
+async def me_calls_hide(request: Request):
+    """Form: ids=..&ids=..  (unhide=1 to show them again)."""
+    me = _need(request)
+    f = await request.form()
+    try:
+        ids = [int(x) for x in f.getlist("ids")][:1000]
+    except ValueError:
+        raise HTTPException(400, "bad ids")
+    ids = _own_call_ids(me, ids)
+    with M.db() as c:
+        if f.get("unhide") == "1":
+            c.executemany("DELETE FROM call_hidden WHERE cdr_id=? AND login_id=?", [(i, me["id"]) for i in ids])
+        else:
+            c.executemany("INSERT OR IGNORE INTO call_hidden (cdr_id, login_id) VALUES (?,?)",
+                          [(i, me["id"]) for i in ids])
+        c.commit()
+    return {"ok": True, "code": "ok", "message": f"{len(ids)} call(s) updated.", "count": len(ids)}
+
+
+async def me_calls_seen(request: Request):
+    """The user looked at Calls: clear this phone's missed-call badge."""
+    me = _need(request)
+    with M.db() as c:
+        top = c.execute("SELECT COALESCE(MAX(id), 0) FROM cdr").fetchone()[0]
+        c.execute("UPDATE app_devices SET calls_seen_id=? WHERE id=?", (top, me["device_id"]))
+        c.commit()
+    return {"ok": True, "seen_id": top}
 
 
 def me_voicemail(request: Request, folder: str = "INBOX"):
@@ -504,6 +557,8 @@ def install(app_module):
     app.get("/api/v1/me/threads/{peer}")(me_thread)
     app.get("/api/v1/me/messages/since")(me_messages_since)
     app.get("/api/v1/me/calls")(me_calls)
+    app.post("/api/v1/me/calls/hide")(me_calls_hide)
+    app.post("/api/v1/me/calls/seen")(me_calls_seen)
     app.get("/api/v1/me/voicemail")(me_voicemail)
     app.get("/api/v1/me/voicemail/{msg_id}/audio")(me_vm_audio)
     app.get("/api/v1/me/recordings")(me_recordings)

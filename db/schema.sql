@@ -134,6 +134,14 @@ CREATE TABLE IF NOT EXISTS message_hidden (
   PRIMARY KEY (message_id, login_id)
 );
 
+-- Calls a user hid from their own history. Hiding never deletes: the call
+-- stays in the CDR and is purged with it after 90 days (rows here go too).
+CREATE TABLE IF NOT EXISTS call_hidden (
+  cdr_id INTEGER NOT NULL REFERENCES cdr(id) ON DELETE CASCADE,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  PRIMARY KEY (cdr_id, login_id)
+);
+
 -- voip.ms SMS/MMS routing: which DID goes to which extension.
 -- did is stored normalized (e.g. 15551234567 for +1 555-123-4567).
 -- dest_exten is the internal extension (e.g. 8801) that receives inbound
@@ -422,6 +430,7 @@ CREATE TABLE IF NOT EXISTS app_devices (
   push_endpoint TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_used_at TEXT,
-  expires_at TEXT NOT NULL
+  expires_at TEXT NOT NULL,
+  calls_seen_id INTEGER NOT NULL DEFAULT 0   -- newest call shown in the app (missed-call badge)
 );
 CREATE INDEX IF NOT EXISTS idx_app_devices_hash ON app_devices(token_hash);
