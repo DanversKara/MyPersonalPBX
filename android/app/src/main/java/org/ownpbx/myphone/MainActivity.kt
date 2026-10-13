@@ -26,6 +26,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
         enableEdgeToEdge()
         model = Holder.model ?: AppModel(Store(applicationContext)).also { Holder.model = it }
         model.onSecureChanged = { applySecure() }

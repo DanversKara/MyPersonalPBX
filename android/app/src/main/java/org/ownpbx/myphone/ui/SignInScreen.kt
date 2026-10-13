@@ -90,11 +90,16 @@ fun SignInScreen(model: AppModel) {
         go()
     }
     fun scan() {
-        scanner.launch(ScanOptions()
-            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            .setPrompt("Scan the QR code from My Phone > App")
-            .setBeepEnabled(false)
-            .setOrientationLocked(false))
+        try {
+            scanner.launch(ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("Scan the QR code from My Phone > App")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false))
+        } catch (e: Exception) {
+            error = "The scanner couldn't start (${e.javaClass.simpleName}). " +
+                "Scan the QR code with your phone's camera app instead, or type the code."
+        }
     }
 
     Scaffold { pad ->
