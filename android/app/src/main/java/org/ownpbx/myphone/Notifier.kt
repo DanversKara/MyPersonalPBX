@@ -40,6 +40,7 @@ object Notifier {
     const val EXTRA_PEER = "org.ownpbx.myphone.PEER"
     private const val ID_CALLS = 2
     private const val ID_VOICEMAIL = 3
+    private const val ID_TEST = 9
     private const val ID_MSG_BASE = 1000
     private const val GROUP_MESSAGES = "messages"
     private const val WORK_PERIODIC = "pbx-check"
@@ -120,13 +121,18 @@ object Notifier {
         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
 
     /** Ask the PBX what's new and notify (quietly record it when [seenOnly]
-     *  or the app is on screen). Returns false if signed out. */
-    suspend fun run(ctx: Context, seenOnly: Boolean): Boolean {
+     *  or the app is on screen, unless [force]). Saves a one-line status
+     *  for Settings and returns it. */
+    suspend fun run(ctx: Context, seenOnly: Boolean, force: Boolean = false): String {
         val store = Store(ctx)
-        if (store.token == null) { stop(ctx); return false }
-        val quiet = seenOnly || appVisible || !store.notifyOn || !canNotify(ctx)
-        val api = store.api()
+        if (store.token == null) { stop(ctx); return "Signed out" }
         val nm = NotificationManagerCompat.from(ctx)
+        val blocked = !canNotify(ctx) || !nm.areNotificationsEnabled()
+        val quiet = seenOnly || (appVisible && !force) || !store.notifyOn || blocked
+        val firstRun = store.notifMsgId == 0L || store.notifCallId == 0L || store.notifVmId == 0L
+        val api = store.api()
+        var posted = 0
+        var found = 0
 
         // ---- texts
         val ov = api.overview()
@@ -135,6 +141,7 @@ object Notifier {
         } else if (ov.latest_message_id > store.notifMsgId) {
             val fresh = api.since(store.notifMsgId).messages.filter { !it.mine && it.id > store.notifMsgId }
             store.notifMsgId = maxOf(store.notifMsgId, ov.latest_message_id)
+            found += fresh.size
             if (!quiet) fresh.groupBy { it.peer }.forEach { (peer, msgs) ->
                 val who = prettyNumber(peer)
                 val showText = store.notifyShowText
@@ -153,7 +160,7 @@ object Notifier {
                     lines.takeLast(6).forEach { st.addLine(it) }
                 })
                 else if (showText) b.setStyle(NotificationCompat.BigTextStyle().bigText(lines.last()))
-                nm.notify(msgId(peer), b.build())
+                nm.notify(msgId(peer), b.build()); posted++
             }
         }
 
@@ -165,7 +172,9 @@ object Notifier {
         } else {
             val fresh = missed.filter { it.id > store.notifCallId && it.kind == "missed" }
             store.notifCallId = maxOf(store.notifCallId, topCall)
+            found += fresh.size
             if (!quiet && fresh.isNotEmpty()) {
+                posted++
                 val who = fresh.map { prettyNumber(it.other.ifEmpty { "Unknown" }) }.distinct()
                 nm.notify(ID_CALLS, base(ctx, CH_CALLS)
                     .setContentTitle(if (fresh.size == 1) "Missed call" else "${fresh.size} missed calls")
@@ -187,7 +196,9 @@ object Notifier {
         } else {
             val fresh = vms.filter { it.id > store.notifVmId && it.is_read == 0 }
             store.notifVmId = maxOf(store.notifVmId, topVm)
+            found += fresh.size
             if (!quiet && fresh.isNotEmpty()) {
+                posted++
                 val first = fresh.maxBy { it.id }
                 val from = prettyNumber(first.caller.ifEmpty { "Unknown caller" })
                 nm.notify(ID_VOICEMAIL, base(ctx, CH_VOICEMAIL)
@@ -201,6 +212,33 @@ object Notifier {
                     .build())
             }
         }
+        val status = when {
+            firstRun -> "First check: noted what's already there (only newer things notify)"
+            found == 0 -> "Nothing new"
+            blocked -> "$found new, but Android is blocking this app's notifications"
+            !store.notifyOn -> "$found new (notifications are off)"
+            quiet -> "$found new, already shown in the app"
+            else -> "$found new, $posted notification(s)"
+        }
+        record(store, status)
+        return status
+    }
+
+    fun record(store: Store, status: String) {
+        store.lastCheckAt = System.currentTimeMillis()
+        store.lastCheckInfo = status
+    }
+
+    /** Settings > Send a test notification. */
+    fun test(ctx: Context): Boolean {
+        createChannels(ctx)
+        val nm = NotificationManagerCompat.from(ctx)
+        if (!canNotify(ctx) || !nm.areNotificationsEnabled()) return false
+        nm.notify(ID_TEST, base(ctx, CH_MESSAGES)
+            .setContentTitle("Test notification")
+            .setContentText("Notifications from My Phone are working.")
+            .setContentIntent(open(ctx, "messages", null, ID_TEST))
+            .build())
         return true
     }
 }
@@ -209,12 +247,15 @@ object Notifier {
  *  periodic run is soon enough. */
 class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
+        val store = Store(applicationContext)
         try {
             Notifier.run(applicationContext, inputData.getBoolean("seen_only", false))
         } catch (e: ApiException) {
             if (e.status == 401) Notifier.stop(applicationContext)   // signed out on the PBX
+            Notifier.record(store, "PBX answered with error ${e.status}")
         } catch (e: Exception) {
             // Offline or PBX unreachable: try again next time.
+            Notifier.record(store, "Couldn't reach the PBX (${e.javaClass.simpleName})")
         }
         return Result.success()
     }

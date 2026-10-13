@@ -80,6 +80,8 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
     var notifyOn by remember { mutableStateOf(store.notifyOn) }
     var notifyText by remember { mutableStateOf(store.notifyShowText) }
     val ctx = LocalContext.current
+    var lastCheck by remember { mutableStateOf(store.lastCheckAt to store.lastCheckInfo) }
+    var checking by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun load() {
@@ -167,6 +169,24 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         SwitchRow(Icons.Filled.Sms, "Show text in notifications",
             "Off: just \"New message\" and who it's from", notifyText, enabled = notifyOn) {
             notifyText = it; store.notifyShowText = it
+        }
+        ClickRow(Icons.Filled.NotificationsActive, "Send a test notification", "Shows one now, to check sound and pop-ups") {
+            if (!Notifier.test(ctx)) model.notice = "Android is blocking notifications for this app. Turn them on under Sounds and pop-ups."
+        }
+        ClickRow(Icons.Filled.Sync, if (checking) "Checking..." else "Check now",
+            lastCheck.let { (at, info) ->
+                if (at == 0L) "No background check has run yet"
+                else "Last check ${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(at))}: $info"
+            }) {
+            if (!checking) {
+                checking = true
+                model.bg.launch {
+                    try { Notifier.run(ctx.applicationContext, seenOnly = false, force = true) }
+                    catch (e: Exception) { Notifier.record(store, "Couldn't reach the PBX (${e.javaClass.simpleName})") }
+                    lastCheck = store.lastCheckAt to store.lastCheckInfo
+                    checking = false
+                }
+            }
         }
         ClickRow(Icons.Filled.Tune, "Sounds and pop-ups", "Android's notification settings for this app") {
             try {

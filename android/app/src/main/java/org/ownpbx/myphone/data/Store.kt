@@ -67,6 +67,12 @@ class Store(context: Context) {
     var notifyAsked: Boolean
         get() = prefs.getBoolean("notify_asked", false)
         set(v) = prefs.edit().putBoolean("notify_asked", v).apply()
+    var lastCheckAt: Long
+        get() = prefs.getLong("last_check_at", 0)
+        set(v) = prefs.edit().putLong("last_check_at", v).apply()
+    var lastCheckInfo: String
+        get() = prefs.getString("last_check_info", "") ?: ""
+        set(v) = prefs.edit().putString("last_check_info", v).apply()
     var notifMsgId: Long
         get() = prefs.getLong("notif_msg", 0)
         set(v) = prefs.edit().putLong("notif_msg", v).apply()
