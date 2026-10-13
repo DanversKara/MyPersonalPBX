@@ -55,6 +55,27 @@ class Store(context: Context) {
     var secureScreen: Boolean
         get() = prefs.getBoolean("secure_screen", true)
         set(v) = prefs.edit().putBoolean("secure_screen", v).apply()
+    // Notifications: on/off, whether texts show their words, and the newest
+    // item already notified (or seen in the app) for each kind. 0 = not set
+    // yet; the first check only records where things stand.
+    var notifyOn: Boolean
+        get() = prefs.getBoolean("notify_on", true)
+        set(v) = prefs.edit().putBoolean("notify_on", v).apply()
+    var notifyShowText: Boolean
+        get() = prefs.getBoolean("notify_text", true)
+        set(v) = prefs.edit().putBoolean("notify_text", v).apply()
+    var notifyAsked: Boolean
+        get() = prefs.getBoolean("notify_asked", false)
+        set(v) = prefs.edit().putBoolean("notify_asked", v).apply()
+    var notifMsgId: Long
+        get() = prefs.getLong("notif_msg", 0)
+        set(v) = prefs.edit().putLong("notif_msg", v).apply()
+    var notifCallId: Long
+        get() = prefs.getLong("notif_call", 0)
+        set(v) = prefs.edit().putLong("notif_call", v).apply()
+    var notifVmId: Long
+        get() = prefs.getLong("notif_vm", 0)
+        set(v) = prefs.edit().putLong("notif_vm", v).apply()
     var lastSeenMessageId: Long
         get() = prefs.getLong("last_seen_msg", 0)
         set(v) = prefs.edit().putLong("last_seen_msg", v).apply()

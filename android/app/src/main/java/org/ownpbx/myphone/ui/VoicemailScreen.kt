@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.ownpbx.myphone.Notifier
 import org.ownpbx.myphone.data.ApiException
 import org.ownpbx.myphone.data.Vm
 import java.io.File
@@ -50,7 +51,12 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
     val scope = rememberCoroutineScope()
     val cacheDir = remember { File(ctx.cacheDir, "voicemail").apply { mkdirs() } }
 
-    suspend fun refresh() { model.guard { it.voicemail(folder) }?.let { items = it.voicemail } }
+    suspend fun refresh() {
+        model.guard { it.voicemail(folder) }?.let { r ->
+            items = r.voicemail
+            if (folder == "INBOX") Notifier.seen(model.store, vmId = r.voicemail.maxOfOrNull { it.id } ?: 0)
+        }
+    }
     LaunchedEffect(folder) { items = null; selected = emptySet(); refresh() }
 
     fun release() {

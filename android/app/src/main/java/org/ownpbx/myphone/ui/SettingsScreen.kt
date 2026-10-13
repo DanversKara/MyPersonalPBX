@@ -13,6 +13,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import org.ownpbx.myphone.Notifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -75,6 +77,9 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
     var bio by remember { mutableStateOf(store.biometric) }
     var secure by remember { mutableStateOf(store.secureScreen) }
     var lockAfter by remember { mutableIntStateOf(store.lockAfterSec) }
+    var notifyOn by remember { mutableStateOf(store.notifyOn) }
+    var notifyText by remember { mutableStateOf(store.notifyShowText) }
+    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
 
     suspend fun load() {
@@ -151,6 +156,23 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                     })
             }
             ClickRow(Icons.Filled.PersonAddDisabled, "Block a number") { edit = "block" }
+        }
+
+        Section("Notifications")
+        SwitchRow(Icons.Filled.Notifications, "Notifications",
+            "New texts, missed calls and voicemail. Checked about every 15 minutes.", notifyOn) {
+            notifyOn = it; store.notifyOn = it
+            if (it) Notifier.schedule(ctx) else Notifier.stop(ctx)
+        }
+        SwitchRow(Icons.Filled.Sms, "Show text in notifications",
+            "Off: just \"New message\" and who it's from", notifyText, enabled = notifyOn) {
+            notifyText = it; store.notifyShowText = it
+        }
+        ClickRow(Icons.Filled.Tune, "Sounds and pop-ups", "Android's notification settings for this app") {
+            try {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+            } catch (_: Exception) {}
         }
 
         Section("App security")

@@ -31,6 +31,10 @@ Services, no Firebase, no analytics.
   (audio is downloaded over the app's own connection, then played), text
   back, block, move between New and Old, swipe or multi-select delete with
   Undo.
+- Notifications for new texts, missed calls and voicemail. A background
+  check (WorkManager) asks the PBX about every 15 minutes; tapping one opens
+  that tab or chat. Settings > Notifications turns them off or hides the text
+  of messages; things already seen in the app aren't notified again.
 - Settings with switches: DND, forwarding, ring time, record my calls,
   texts in/out, email, blocked numbers, PIN, password, signed-in phones,
   sign out.
@@ -47,5 +51,5 @@ gradle -p android assembleDebug    # Gradle 8.9+, JDK 17, Android SDK 34
 
 ## Next
 
-Push notifications (UnifiedPush), Quick Settings DND tile, recordings
+Instant push (UnifiedPush via ntfy) on top of the 15-minute check, Quick Settings DND tile, recordings
 screen, release signing + F-Droid, then the built-in SIP phone.

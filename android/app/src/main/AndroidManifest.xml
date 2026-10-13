@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- Camera: only to scan the pairing QR code (asked when you tap Scan). -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Notifications for new texts, missed calls and voicemail (Android 13+ asks). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- usesCleartextTraffic: allows http:// to a PBX on the home network.

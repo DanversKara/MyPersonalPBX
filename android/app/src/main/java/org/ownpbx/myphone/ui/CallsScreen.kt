@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import org.ownpbx.myphone.Notifier
 import org.ownpbx.myphone.data.Call
 
 /** Call history. Users can't delete calls (the PBX keeps them 90 days, then
@@ -35,7 +36,13 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
     val scope = rememberCoroutineScope()
     val hiddenView = view == "hidden"
 
-    suspend fun refresh() { model.guard { it.calls(view) }?.let { calls = it.calls } }
+    suspend fun refresh() {
+        model.guard { it.calls(view) }?.let { r ->
+            calls = r.calls
+            if (view != "hidden") Notifier.seen(model.store,
+                missedCallId = r.calls.filter { it.kind == "missed" }.maxOfOrNull { it.id } ?: 0)
+        }
+    }
     LaunchedEffect(view) { calls = null; selected = emptySet(); refresh() }
 
     /** Hide (or, in the Hidden view, show again) right away; Undo reverses it. */

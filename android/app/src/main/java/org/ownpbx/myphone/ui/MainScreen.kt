@@ -3,7 +3,15 @@
 
 package org.ownpbx.myphone.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
+import org.ownpbx.myphone.Notifier
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
@@ -32,6 +40,41 @@ fun MainScreen(model: AppModel) {
     var overview by remember { mutableStateOf<Overview?>(null) }
     val snack = remember { SnackbarHostState() }
 
+    val ctx = LocalContext.current
+
+    // Notifications: start the background check, and ask once (Android 13+).
+    val askNotify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (!ok) model.notice = "Notifications are off. You can turn them on in Android settings."
+    }
+    LaunchedEffect(Unit) {
+        Notifier.schedule(ctx)
+        if (Build.VERSION.SDK_INT >= 33 && model.store.notifyOn && !model.store.notifyAsked &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            model.store.notifyAsked = true
+            try { askNotify.launch(Manifest.permission.POST_NOTIFICATIONS) } catch (_: Exception) {}
+        }
+    }
+    // A tapped notification: jump to that tab / chat.
+    LaunchedEffect(model.openTarget) {
+        val (what, who) = model.openTarget ?: return@LaunchedEffect
+        model.openTarget = null
+        when (what) {
+            "calls" -> { chatWith = null; tab = Tab.Calls }
+            "voicemail" -> { chatWith = null; tab = Tab.Voicemail }
+            "messages" -> { tab = Tab.Messages; chatWith = who }
+        }
+    }
+    // What's on screen no longer needs a notification.
+    LaunchedEffect(tab, chatWith) {
+        when {
+            chatWith != null -> Notifier.clear(ctx, "messages", chatWith)
+            tab == Tab.Messages -> Notifier.clear(ctx, "messages")
+            tab == Tab.Calls -> Notifier.clear(ctx, "calls")
+            tab == Tab.Voicemail -> Notifier.clear(ctx, "voicemail")
+            else -> {}
+        }
+    }
+
     LaunchedEffect(model.notice) {
         model.notice?.let { snack.showSnackbar(it); model.notice = null }
     }
@@ -43,7 +86,11 @@ fun MainScreen(model: AppModel) {
     }
     LaunchedEffect(Unit) {
         while (true) {
-            model.guard { it.overview() }?.let { overview = it }
+            model.guard { it.overview() }?.let {
+                overview = it
+                // Texts are listed in the app while it's open: no notification for them later.
+                Notifier.seen(model.store, msgId = it.latest_message_id)
+            }
             if (tab == Tab.Calls && (overview?.missed_new ?: 0) > 0) markCallsSeen()
             delay(30_000)
         }

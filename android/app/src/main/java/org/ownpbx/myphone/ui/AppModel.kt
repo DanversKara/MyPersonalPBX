@@ -28,6 +28,10 @@ class AppModel(val store: Store) {
     /** Server + code from a pairing link the phone's camera opened; the
      *  sign-in screen fills them in (the user still taps Connect). */
     var pendingPair by mutableStateOf<org.ownpbx.myphone.data.PairInfo?>(null)
+    /** Where a tapped notification wants to go: "messages" | "calls" | "voicemail", plus a chat peer. */
+    var openTarget by mutableStateOf<Pair<String, String?>?>(null)
+    /** Set by the activity: stop background checks and clear notifications. */
+    var onSignedOut: () -> Unit = {}
     var onSecureChanged: () -> Unit = {}
 
     /** Outlives every screen: deletes/hides started here finish even if the
@@ -89,6 +93,7 @@ class AppModel(val store: Store) {
     }
 
     fun signedOut(message: String? = null) {
+        onSignedOut()
         store.wipe()
         stage = Stage.SignIn
         notice = message
