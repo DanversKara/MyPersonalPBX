@@ -53,7 +53,11 @@ fun SignInScreen(model: AppModel) {
                 model.notice = null
                 model.stage = Stage.SetPin
             } catch (e: ApiException) {
-                error = e.message
+                // 404, or the PBX's "office network only" 403: the server
+                // doesn't have the app sign-in yet (older own-pbx).
+                error = if (e.status == 404 || (e.status == 403 && e.message.orEmpty().contains("network")))
+                    "Your PBX doesn't support the app yet. Update it (run pbx-update on the PBX) and try again."
+                else e.message
             } catch (e: Exception) {
                 error = "Can't reach $base. Check the address and your connection."
             } finally {
