@@ -77,6 +77,10 @@ object Notifier {
     /** The app showed the user items up to these ids: don't notify them later.
      *  (Only moves forward, and only once a first check has set a baseline.) */
     fun seen(store: Store, msgId: Long = 0, missedCallId: Long = 0, vmId: Long = 0) {
+        // Screens keep refreshing for a while after the app goes to the
+        // background; that must not count as the user seeing anything (it
+        // used to swallow every new text before it could be notified).
+        if (!appVisible) return
         if (msgId > store.notifMsgId && store.notifMsgId != 0L) store.notifMsgId = msgId
         if (missedCallId > store.notifCallId && store.notifCallId != 0L) store.notifCallId = missedCallId
         if (vmId > store.notifVmId && store.notifVmId != 0L) store.notifVmId = vmId

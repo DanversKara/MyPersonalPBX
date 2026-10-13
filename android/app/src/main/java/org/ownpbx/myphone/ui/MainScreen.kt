@@ -87,6 +87,8 @@ fun MainScreen(model: AppModel) {
     }
     LaunchedEffect(Unit) {
         while (true) {
+            // Don't poll from the background: the notification service does that.
+            if (!Notifier.appVisible) { delay(2_000); continue }
             model.guard { it.overview() }?.let {
                 overview = it
                 // Texts are listed in the app while it's open: no notification for them later.

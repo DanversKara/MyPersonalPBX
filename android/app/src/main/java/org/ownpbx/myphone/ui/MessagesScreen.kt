@@ -42,7 +42,7 @@ fun MessagesScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier
         model.guard { it.threads() }?.let { threads = it.threads }
         loading = false
     }
-    LaunchedEffect(Unit) { while (true) { refresh(); delay(10_000) } }
+    LaunchedEffect(Unit) { while (true) { if (org.ownpbx.myphone.Notifier.appVisible) refresh(); delay(10_000) } }
 
     fun delete(peers: Set<String>) {
         selected = emptySet()

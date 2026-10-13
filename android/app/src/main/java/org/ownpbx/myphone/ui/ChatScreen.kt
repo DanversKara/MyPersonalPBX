@@ -45,7 +45,7 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
             it.messages.firstOrNull()?.let { m -> model.store.markSeen(peer, m.id) }
         }
     }
-    LaunchedEffect(peer) { while (true) { refresh(); delay(5_000) } }
+    LaunchedEffect(peer) { while (true) { if (org.ownpbx.myphone.Notifier.appVisible) refresh(); delay(5_000) } }
 
     fun send() {
         val body = text.trim()
