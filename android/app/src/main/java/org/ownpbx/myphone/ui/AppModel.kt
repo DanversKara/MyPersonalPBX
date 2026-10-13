@@ -83,13 +83,33 @@ class AppModel(val store: Store) {
     private fun initialStage() = when {
         store.token == null -> Stage.SignIn
         store.pinHash == null -> Stage.SetPin
+        leftRecently() -> Stage.Ready
         else -> Stage.Locked
+    }
+
+    /** True if the user left the app unlocked less than "lock after" ago. */
+    fun leftRecently(): Boolean {
+        val at = store.leftUnlockedAt
+        val now = android.os.SystemClock.elapsedRealtime()
+        return at > 0 && now >= at && now - at < store.lockAfterSec * 1000L
+    }
+
+    /** Called when the app goes to the background. */
+    fun leaving() {
+        store.leftUnlockedAt = if (stage == Stage.Ready) android.os.SystemClock.elapsedRealtime() else 0
+    }
+
+    /** Called when the app comes back: lock if away too long. */
+    fun returning() {
+        if (stage == Stage.Ready && store.leftUnlockedAt > 0 && !leftRecently()) lock()
+        store.leftUnlockedAt = 0
     }
 
     fun api(): Api = store.api()
 
     fun lock() {
         if (stage == Stage.Ready && store.pinHash != null) stage = Stage.Locked
+        store.leftUnlockedAt = 0
     }
 
     fun signedOut(message: String? = null) {

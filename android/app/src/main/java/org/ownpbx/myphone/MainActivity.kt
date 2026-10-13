@@ -22,7 +22,6 @@ object Holder {
 
 class MainActivity : FragmentActivity() {
     private lateinit var model: AppModel
-    private var stoppedAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,7 +66,7 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) {
-            stoppedAt = SystemClock.elapsedRealtime()
+            model.leaving()
             Notifier.appVisible = false
         }
     }
@@ -76,9 +75,7 @@ class MainActivity : FragmentActivity() {
         super.onStart()
         Notifier.appVisible = true
         Notifier.schedule(applicationContext)
-        if (stoppedAt > 0 && SystemClock.elapsedRealtime() - stoppedAt >= model.store.lockAfterSec * 1000L) {
-            model.lock()
-        }
-        stoppedAt = 0
+        LiveService.sync(applicationContext)
+        model.returning()
     }
 }

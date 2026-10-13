@@ -7,6 +7,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Notifications for new texts, missed calls and voicemail (Android 13+ asks). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- "Instant" notifications: a foreground service that stays connected to the PBX. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Settings > Notifications > "Let it run in the background" asks Android directly. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- usesCleartextTraffic: allows http:// to a PBX on the home network.
@@ -37,6 +43,18 @@
                 <data android:scheme="myphone" android:host="pair" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".LiveService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <!-- ZXing scanner: follow the phone's rotation (portrait by default). -->
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"

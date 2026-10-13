@@ -257,6 +257,42 @@ def me_calls(request: Request, missed: int = 0, view: str = "", before: int = 0,
                       for r in _paged(rows, before, limit)]}
 
 
+def _latest(me) -> dict:
+    """Newest ids the phone cares about: any visible text, a missed call
+    the user hasn't hidden, an Inbox voicemail."""
+    U = M.ucp
+    msgs = U._my_messages(me, limit=1)
+    hidden = _hidden_calls(me["id"])
+    missed = [c["id"] for c in U._my_calls(me, limit=50, missed_only=True) if c["id"] not in hidden]
+    box = U._mailbox(me["id"])
+    vm = 0
+    if box:
+        with M.db() as c:
+            vm = c.execute("SELECT COALESCE(MAX(id), 0) FROM voicemail_messages WHERE mailbox=? AND folder='INBOX'",
+                           (box,)).fetchone()[0]
+    return {"msg": msgs[0]["id"] if msgs else 0, "call": max(missed, default=0), "vm": vm}
+
+
+WAIT_MAX = 55          # under Cloudflare's 100 s idle limit
+WAIT_STEP = 2.0        # seconds between DB looks while waiting
+
+
+async def me_wait(request: Request, msg: int = 0, call: int = 0, vm: int = 0, timeout: int = 50):
+    """Long poll for the app's "Instant" mode: answers as soon as there is a
+    text, missed call or Inbox voicemail newer than the ids given, or after
+    `timeout` seconds. Cheap: a few indexed queries every 2 s per waiting phone."""
+    import asyncio
+    me = _need(request)
+    timeout = max(0, min(int(timeout or 0), WAIT_MAX))
+    deadline = time.monotonic() + timeout
+    while True:
+        cur = await asyncio.to_thread(_latest, me)
+        changed = cur["msg"] > msg or cur["call"] > call or cur["vm"] > vm
+        if changed or time.monotonic() >= deadline or await request.is_disconnected():
+            return cur | {"changed": changed}
+        await asyncio.sleep(WAIT_STEP)
+
+
 def _own_call_ids(me, ids) -> list:
     """Only calls that are in this user's own history."""
     mine = {r["id"] for r in M.ucp._my_calls(me, limit=5000)}
@@ -589,6 +625,7 @@ def install(app_module):
     app.get("/api/v1/me/calls")(me_calls)
     app.post("/api/v1/me/calls/hide")(me_calls_hide)
     app.post("/api/v1/me/calls/seen")(me_calls_seen)
+    app.get("/api/v1/me/wait")(me_wait)
     app.get("/api/v1/me/voicemail")(me_voicemail)
     app.get("/api/v1/me/voicemail/{msg_id}/audio")(me_vm_audio)
     app.get("/api/v1/me/recordings")(me_recordings)

@@ -82,6 +82,14 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
     val ctx = LocalContext.current
     var lastCheck by remember { mutableStateOf(store.lastCheckAt to store.lastCheckInfo) }
     var checking by remember { mutableStateOf(false) }
+    var checkEvery by remember { mutableIntStateOf(store.checkEvery) }
+    val power = ctx.getSystemService(android.os.PowerManager::class.java)
+    var unrestricted by remember { mutableStateOf(power?.isIgnoringBatteryOptimizations(ctx.packageName) == true) }
+    // Re-read after coming back from Android's battery screen.
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        unrestricted = power?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+        onPauseOrDispose {}
+    }
     val scope = rememberCoroutineScope()
 
     suspend fun load() {
@@ -161,10 +169,38 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         }
 
         Section("Notifications")
-        SwitchRow(Icons.Filled.Notifications, "Notifications",
-            "New texts, missed calls and voicemail. Checked about every 15 minutes.", notifyOn) {
+        SwitchRow(Icons.Filled.Notifications, "Notifications", "New texts, missed calls and voicemail", notifyOn) {
             notifyOn = it; store.notifyOn = it
-            if (it) Notifier.schedule(ctx) else Notifier.stop(ctx)
+            if (it) { Notifier.schedule(ctx); org.ownpbx.myphone.LiveService.sync(ctx) } else Notifier.stop(ctx)
+        }
+        var everyMenu by remember { mutableStateOf(false) }
+        Box {
+            ClickRow(Icons.Filled.Speed, "Check for new things",
+                org.ownpbx.myphone.LiveService.describe(checkEvery) +
+                    if (checkEvery < 900) " · shows a small \"Connected\" notification" else "") { if (notifyOn) everyMenu = true }
+            DropdownMenu(everyMenu, { everyMenu = false }) {
+                listOf(0 to "Instant (stays connected)", 30 to "Every 30 seconds", 60 to "Every 1 minute",
+                    300 to "Every 5 minutes", 900 to "Every 15 minutes (saves battery)").forEach { (v, label) ->
+                    DropdownMenuItem({ Text(label) }, {
+                        everyMenu = false; checkEvery = v; store.checkEvery = v
+                        // Restart so the new pace applies now.
+                        ctx.stopService(android.content.Intent(ctx, org.ownpbx.myphone.LiveService::class.java))
+                        org.ownpbx.myphone.LiveService.sync(ctx)
+                    })
+                }
+            }
+        }
+        if (notifyOn && checkEvery < 900 && !unrestricted) {
+            ClickRow(Icons.Filled.BatteryAlert, "Let it run in the background",
+                "Android's battery saver can pause the connection. Tap and choose Allow.") {
+                try {
+                    ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:" + ctx.packageName)))
+                } catch (_: Exception) {
+                    try { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                    catch (_: Exception) {}
+                }
+            }
         }
         SwitchRow(Icons.Filled.Sms, "Show text in notifications",
             "Off: just \"New message\" and who it's from", notifyText, enabled = notifyOn) {

@@ -153,5 +153,9 @@ calls drop out of `all`/`missed` and are listed under `view=hidden` until the
 the missed calls this phone hasn't seen and the user hasn't hidden; `POST
 /me/calls/seen` (the app calls it when Calls is opened) resets it to 0. The
 Android app signs in with pairing codes only; `/app/login` stays for other
-API clients. My Phone > App shows each code as a QR code (needs the `segno`
+API clients. `GET /me/wait?msg=&call=&vm=&timeout=50` is a long poll for the app's
+Instant notifications: it answers as soon as there is a text, unhidden missed
+call or Inbox voicemail newer than the ids given (checked every 2 s), or after
+`timeout` seconds (max 55, under Cloudflare's 100 s limit), with the newest
+ids and `changed`. My Phone > App shows each code as a QR code (needs the `segno`
 package; deploy.sh installs it) holding `myphone://pair?s=<server>&c=<code>`.

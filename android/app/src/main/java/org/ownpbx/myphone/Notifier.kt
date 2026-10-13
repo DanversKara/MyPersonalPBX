@@ -83,6 +83,7 @@ object Notifier {
     }
 
     fun stop(ctx: Context) {
+        ctx.stopService(Intent(ctx, LiveService::class.java))
         WorkManager.getInstance(ctx).cancelUniqueWork(WORK_PERIODIC)
         NotificationManagerCompat.from(ctx).cancelAll()
     }

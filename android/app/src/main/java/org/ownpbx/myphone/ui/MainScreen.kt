@@ -48,6 +48,7 @@ fun MainScreen(model: AppModel) {
     }
     LaunchedEffect(Unit) {
         Notifier.schedule(ctx)
+        org.ownpbx.myphone.LiveService.sync(ctx)
         if (Build.VERSION.SDK_INT >= 33 && model.store.notifyOn && !model.store.notifyAsked &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             model.store.notifyAsked = true
