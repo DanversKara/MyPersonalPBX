@@ -81,8 +81,9 @@ fun SignInScreen(model: AppModel) {
                 supportingText = { Text("Include http:// or https://. Without it, https:// is used.") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
             if (server.trim().startsWith("http://")) {
-                Text("This address isn't encrypted (http). Only use it on your home network or VPN.",
-                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                // Just a note, not an error: http:// is fine at home and sign-in still works.
+                Text("Note: http:// isn't encrypted. That's OK on your home Wi-Fi or a VPN.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 SegmentedButton(!usePair, { usePair = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Password") }
