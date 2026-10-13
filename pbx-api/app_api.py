@@ -488,6 +488,29 @@ def _new_pair_code(login_id: int) -> str:
     return code
 
 
+PAIR_SCHEME = "myphone"
+
+
+def pair_link(server: str, code: str) -> str:
+    """What the QR code holds: myphone://pair?s=<server>&c=<code>. The app
+    reads it from its own scanner or when the phone camera opens the link."""
+    return f"{PAIR_SCHEME}://pair?" + urllib.parse.urlencode({"s": server, "c": code})
+
+
+def pair_qr_svg(server: str, code: str) -> str:
+    """Inline SVG QR code for the pairing link, or "" if segno isn't installed."""
+    try:
+        import io
+        import segno
+    except ImportError:
+        return ""
+    buf = io.BytesIO()
+    segno.make(pair_link(server, code), error="m").save(
+        buf, kind="svg", scale=6, border=2, xmldecl=False, svgns=True, dark="#000", light="#fff",
+        title="Pairing QR code")
+    return buf.getvalue().decode()
+
+
 def app_page(request: Request, code: str = ""):
     s, me = M.ucp._me(request)
     if not s:
@@ -504,10 +527,17 @@ def app_page(request: Request, code: str = ""):
     ) or "<tr><td colspan='4' class='muted'>No phones signed in.</td></tr>"
     shown = ""
     if code:
-        host = request.headers.get("host", "")
-        shown = (f"<div class='flash ok'>Pairing code: <b style='font-size:22px;letter-spacing:3px'>"
-                 f"{esc(code)}</b><br>Server: <code>{'https' if M.is_https(request) else 'http'}://{esc(host)}</code><br>"
-                 f"Enter both in the app within 5 minutes. The code works once.</div>")
+        server = f"{'https' if M.is_https(request) else 'http'}://{request.headers.get('host', '')}"
+        qr = pair_qr_svg(server, code)
+        qr_html = (f"<div style='background:#fff;padding:10px;border-radius:8px;display:inline-block;"
+                   f"line-height:0'>{qr}</div>" if qr else "")
+        shown = (f"<div class='flash ok' style='display:flex;gap:20px;align-items:center;flex-wrap:wrap'>"
+                 f"{qr_html}<div>"
+                 + ("<b>Scan this with the My Phone app</b> (Scan QR code on the sign-in screen) "
+                    "or with your phone's camera.<br><br>Or type it in:<br>" if qr else "")
+                 + f"Pairing code: <b style='font-size:22px;letter-spacing:3px'>{esc(code)}</b><br>"
+                 f"Server: <code>{esc(server)}</code><br>"
+                 f"Works once, within 5 minutes.</div></div>")
     body = f"""{shown}
 <p>The My Phone app for Android keeps you signed in for {DEVICE_TTL_DAYS} days after you last used it.
 Changing your password signs out every phone.</p>

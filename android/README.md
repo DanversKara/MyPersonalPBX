@@ -12,7 +12,11 @@ Services, no Firebase, no analytics.
 ## What works (v0.1)
 
 - Sign in with a one-time pairing code from My Phone > App on the web (the
-  app never sees your panel password). Stays signed in 60 days after last use.
+  app never sees your panel password): tap **Scan QR code**, or type the code.
+  The QR code holds `myphone://pair?s=<server>&c=<code>`, so the phone's own
+  camera app can open it too. Stays signed in 60 days after last use.
+- The server box starts with `myphone.defaultServer` from `gradle.properties`
+  (override with `-Pmyphone.defaultServer=...`).
 - App PIN: 6 or 12 digits (PBKDF2 hash in Keystore-encrypted storage),
   optional fingerprint/face, growing wait after wrong PINs, sign-out after 10.
   Lock immediately / after 1, 5 or 15 minutes away. Screenshots blocked

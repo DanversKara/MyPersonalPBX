@@ -17,6 +17,9 @@ class AppModel(val store: Store) {
     var stage by mutableStateOf(initialStage())
     /** One-shot message for the snackbar. */
     var notice by mutableStateOf<String?>(null)
+    /** Server + code from a pairing link the phone's camera opened; the
+     *  sign-in screen fills them in (the user still taps Connect). */
+    var pendingPair by mutableStateOf<org.ownpbx.myphone.data.PairInfo?>(null)
     var onSecureChanged: () -> Unit = {}
 
     private fun initialStage() = when {

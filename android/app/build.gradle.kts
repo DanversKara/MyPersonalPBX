@@ -13,8 +13,11 @@ android {
         applicationId = "org.ownpbx.myphone"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
+        val defaultServer = (project.findProperty("myphone.defaultServer") as String?).orEmpty()
+            .replace("\\", "").replace("\"", "")
+        buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
     }
 
     buildTypes {
@@ -29,7 +32,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     // F-Droid / reproducible builds: no dependency metadata blob.
     dependenciesInfo { includeInApk = false; includeInBundle = false }
 }
@@ -47,6 +50,8 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // QR scanning for pairing: ZXing (Apache-2.0), no Google Play Services.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     debugImplementation("androidx.compose.ui:ui-tooling")

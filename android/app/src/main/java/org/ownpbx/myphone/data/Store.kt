@@ -21,7 +21,7 @@ class Store(context: Context) {
     )
 
     var server: String
-        get() = prefs.getString("server", "") ?: ""
+        get() = prefs.getString("server", null)?.takeIf { it.isNotBlank() } ?: org.ownpbx.myphone.BuildConfig.DEFAULT_SERVER
         set(v) = prefs.edit().putString("server", v).apply()
     var token: String?
         get() = prefs.getString("token", null)
