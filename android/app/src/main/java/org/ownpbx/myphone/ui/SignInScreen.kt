@@ -56,10 +56,11 @@ fun SignInScreen(model: AppModel) {
                 // 404, or the PBX's "office network only" 403: the server
                 // doesn't have the app sign-in yet (older own-pbx).
                 error = if (e.status == 404 || (e.status == 403 && e.message.orEmpty().contains("network")))
-                    "Your PBX doesn't support the app yet. Update it (run pbx-update on the PBX) and try again."
-                else e.message
+                    "Your PBX at $base doesn't support the app yet (HTTP ${e.status}). Check the address " +
+                        "(http:// or https://, nothing after the name) or run pbx-update on the PBX."
+                else "${e.message} (HTTP ${e.status} from $base)"
             } catch (e: Exception) {
-                error = "Can't reach $base. Check the address and your connection."
+                error = "Can't reach $base. Check the address (http:// or https://) and your connection."
             } finally {
                 busy = false
             }
@@ -77,6 +78,7 @@ fun SignInScreen(model: AppModel) {
                 style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), singleLine = true,
                 label = { Text("PBX address") }, placeholder = { Text("https://pbx.example.com") },
+                supportingText = { Text("Include http:// or https://. Without it, https:// is used.") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
             if (server.trim().startsWith("http://")) {
                 Text("This address isn't encrypted (http). Only use it on your home network or VPN.",
