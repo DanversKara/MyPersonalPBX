@@ -365,6 +365,17 @@ def push_notify(login_id: int, kind: str):
         threading.Thread(target=send, args=(ep,), daemon=True).start()
 
 
+def push_exten(exten: str, kind: str):
+    """push_notify() for whoever owns this extension."""
+    try:
+        with M.db() as c:
+            r = c.execute("SELECT id FROM logins WHERE exten=? AND enabled=1", (exten,)).fetchone()
+    except Exception:
+        return
+    if r:
+        push_notify(r["id"], kind)
+
+
 # ---------------------------------------------------------------- changes
 
 def _flash_json(resp):

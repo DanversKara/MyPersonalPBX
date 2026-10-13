@@ -2139,6 +2139,7 @@ def _handle_voipms_inbound(params: dict) -> tuple[bool, str]:
         c.commit()
     # Deliver to Zoiper/softphones via pbx-brain (best effort; stored anyway)
     for d in valid:
+        app_api.push_exten(d, "message")
         try:
             import json as _json, urllib.request as _ur
             brain_url = os.environ.get("PBX_BRAIN_STATUS", "http://127.0.0.1:8099") + "/messages/send"
