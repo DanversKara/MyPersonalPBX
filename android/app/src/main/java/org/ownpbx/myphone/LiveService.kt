@@ -39,6 +39,8 @@ import org.ownpbx.myphone.data.Store
 class LiveService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
+    @Volatile private var waitMissing = false
+    @Volatile private var waitMissingSince = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,7 +69,14 @@ class LiveService : Service() {
             if (!wanted(store)) { stopSelf(); return }
             try {
                 val every = store.checkEvery
-                if (every == 0) {
+                if (every == 0 && waitMissing) {
+                    // Older PBX without /me/wait: check every minute until it's updated.
+                    Notifier.run(this, seenOnly = false)
+                    Notifier.record(store, store.lastCheckInfo.substringBefore(" ·") +
+                        " · Instant needs a PBX update (run pbx-update); checking every minute")
+                    delay(60_000)
+                    if (System.currentTimeMillis() - waitMissingSince > 15 * 60_000L) waitMissing = false   // try again
+                } else if (every == 0) {
                     // First run sets the baselines; after that wait for something newer.
                     if (store.notifMsgId == 0L || store.notifCallId == 0L || store.notifVmId == 0L) {
                         Notifier.run(this, seenOnly = false)
@@ -86,6 +95,9 @@ class LiveService : Service() {
                 throw e
             } catch (e: ApiException) {
                 if (e.status == 401) { Notifier.stop(this); stopSelf(); return }   // signed out on the PBX
+                if (e.status == 404 || e.status == 405) {
+                    waitMissing = true; waitMissingSince = System.currentTimeMillis(); continue
+                }
                 Notifier.record(store, "PBX answered with error ${e.status}; retrying")
                 delay(backoff); backoff = (backoff * 2).coerceAtMost(120_000L)
             } catch (e: Exception) {
@@ -96,7 +108,10 @@ class LiveService : Service() {
     }
 
     companion object {
-        const val CH_ONGOING = "connection"
+        // "connection" (0.5.0) counted toward the launcher's dot; a channel's
+        // badge setting can't be changed later, so it's replaced by "live".
+        const val CH_ONGOING = "live"
+        private const val CH_OLD = "connection"
         private const val ID_ONGOING = 7
 
         fun wanted(store: Store) = store.token != null && store.notifyOn && store.checkEvery < 900
@@ -122,9 +137,13 @@ class LiveService : Service() {
 
         private fun ongoing(ctx: Context, store: Store): android.app.Notification {
             if (Build.VERSION.SDK_INT >= 26) {
-                ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(
-                    NotificationChannel(CH_ONGOING, "Connection to your PBX", NotificationManager.IMPORTANCE_MIN)
-                        .apply { description = "Shown while My Phone stays connected for fast notifications. You can hide it." })
+                val nm = ctx.getSystemService(NotificationManager::class.java)
+                nm.deleteNotificationChannel(CH_OLD)
+                nm.createNotificationChannel(
+                    NotificationChannel(CH_ONGOING, "Connection to your PBX", NotificationManager.IMPORTANCE_MIN).apply {
+                        description = "Shown while My Phone stays connected for fast notifications. You can hide it."
+                        setShowBadge(false)          // never puts a dot / number on the app icon
+                    })
             }
             val open = PendingIntent.getActivity(ctx, ID_ONGOING, Intent(ctx, MainActivity::class.java),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -135,6 +154,8 @@ class LiveService : Service() {
                     else describe(store.checkEvery))
                 .setOngoing(true)
                 .setShowWhen(false)
+                .setNumber(0)
+                .setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
                 .setPriority(NotificationCompat.PRIORITY_MIN)
                 .setContentIntent(open)
                 .build()
