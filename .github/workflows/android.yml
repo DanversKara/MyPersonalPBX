@@ -22,7 +22,10 @@ jobs:
       - name: Build debug APK
         run: gradle -p android assembleDebug --no-daemon
       - name: Show resolved androidx.fragment version
-        run: gradle -p android :app:dependencyInsight --dependency androidx.fragment:fragment --configuration debugRuntimeClasspath --no-daemon | head -20
+        run: |
+          v=$(gradle -p android -q :app:dependencies --configuration debugRuntimeClasspath --no-daemon | grep -o 'androidx.fragment:fragment:[^ ]*' | sort -u | tr '\n' ' ')
+          echo "$v"
+          echo "::notice title=androidx.fragment::$v"
       - uses: actions/upload-artifact@v4
         with:
           name: my-phone-debug-apk
