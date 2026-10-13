@@ -406,7 +406,8 @@ def page(title, body, username="", role="", tab=""):
                     ("ucp-msg", "/ucp/messages", "Messages"),
                     ("ucp-ivr", "/ucp/ivr", "IVR"),
                     ("ucp-bill", "/ucp/billing", "Billing"),
-                    ("ucp-set", "/ucp/settings", "Settings")]
+                    ("ucp-set", "/ucp/settings", "Settings"),
+                    ("ucp-app", "/ucp/app", "App")]
         tabs = '<div class="tabs">' + "".join(
             f'<a href="{h}" class="{"on" if k == tab else ""}">{label}</a>'
             for k, h, label in ucp_tabs) + "</div>"

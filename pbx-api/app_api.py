@@ -453,7 +453,7 @@ def app_page(request: Request, code: str = ""):
     if code:
         host = request.headers.get("host", "")
         shown = (f"<div class='flash ok'>Pairing code: <b style='font-size:22px;letter-spacing:3px'>"
-                 f"{esc(code)}</b><br>Server: <code>{esc(request.url.scheme)}://{esc(host)}</code><br>"
+                 f"{esc(code)}</b><br>Server: <code>{'https' if M.is_https(request) else 'http'}://{esc(host)}</code><br>"
                  f"Enter both in the app within 5 minutes. The code works once.</div>")
     body = f"""{shown}
 <p>The My Phone app for Android keeps you signed in for {DEVICE_TTL_DAYS} days after you last used it.
