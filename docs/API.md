@@ -113,3 +113,36 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
 Both are also on the dashboard: a status banner with Kill switch,
 Lock admin / Lock everything, and Unlock buttons.
 
+
+## My Phone app API (Android)
+
+Long sign-in for the Android app; see `pbx-api/app_api.py` and
+`docs/ANDROID_APP_PLAN.md`. Device tokens (`pbxd_...`) only work for the
+signed-in user's own My Phone data, never for admin pages.
+
+```bash
+# sign in (or: POST /api/v1/app/pair {"code":"ABCD2345"} with a code from My Phone > App)
+curl -s -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"...","device_name":"Pixel 8"}' \
+  https://pbx.example/api/v1/app/login        # -> {"token":"pbxd_...","ttl_days":60,...}
+AUTH="Authorization: Bearer pbxd_..."
+
+curl -s -H "$AUTH" https://pbx.example/api/v1/me/overview
+curl -s -H "$AUTH" https://pbx.example/api/v1/me/threads
+curl -s -H "$AUTH" https://pbx.example/api/v1/me/threads/8801
+curl -s -H "$AUTH" -d to=8801 -d body=hello https://pbx.example/api/v1/me/messages/send
+curl -s -H "$AUTH" -d ids=12 -d ids=13 -d convs=8801 https://pbx.example/api/v1/me/messages/delete
+```
+
+| Reads (GET) | Changes (POST, form fields like the web forms) |
+|---|---|
+| `/me/overview`, `/me/threads`, `/me/threads/{peer}?before=&limit=`, `/me/messages/since?after=` | `/me/messages/send`, `/me/messages/delete` (`ids`, `convs`, or `mode=all`) |
+| `/me/calls?missed=1`, `/me/voicemail?folder=Old`, `/me/voicemail/{id}/audio` | `/me/voicemail/delete`, `/me/voicemail/{id}/heard`, `/me/voicemail/{id}/move` |
+| `/me/recordings`, `/me/recordings/{id}/audio` | `/me/recordings/delete` |
+| `/me/settings`, `/me/devices` | `/me/settings/calls`, `/me/settings/prefs`, `/me/settings/messaging`, `/me/settings/password`, `/me/dnd`, `/me/block`, `/me/report` |
+
+Changes answer `{"ok": bool, "code": "<key>", "message": "<text>"}` (HTTP 400
+on a refused change, 423 when the safety lock is on). Also:
+`DELETE /me/devices/{id}`, `PUT /me/push {"endpoint":"https://..."}`
+(UnifiedPush), `POST /api/v1/app/logout`. Tokens expire 60 days after last
+use; a password change signs out every other phone.

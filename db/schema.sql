@@ -409,3 +409,19 @@ CREATE TABLE IF NOT EXISTS invites (
   created_by TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Android app (My Phone app): one row per signed-in phone. Long sign-in with
+-- a sliding expiry; only the sha256 of the bearer token is stored. A password
+-- change (pwsig mismatch) or "Sign out" in My Phone > App ends it.
+CREATE TABLE IF NOT EXISTS app_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL UNIQUE,
+  pwsig TEXT NOT NULL,
+  push_endpoint TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_app_devices_hash ON app_devices(token_hash);

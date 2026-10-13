@@ -34,6 +34,7 @@ import e911_ui
 import ring_groups_ui
 import safety_ui
 import voipms_sms
+import app_api
 
 
 def esc(x):
@@ -339,7 +340,7 @@ REMOTE_ALLOWED_PREFIXES = (
     "/ucp", "/login", "/logout", "/auth/login", "/auth/logout", "/auth/me",
     "/stripe/webhook", "/healthz", "/api/vm-greeting", "/api/voicemail-audio/",
     "/api/recording-audio/", "/api/ivr-greeting/", "/api/v1/me", "/favicon",
-    "/hooks/voipms-sms", "/invite/",
+    "/hooks/voipms-sms", "/invite/", "/api/v1/app/",
 )
 
 
@@ -3972,3 +3973,4 @@ security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])
 safety_ui.install(_sys.modules[__name__])
+app_api.install(_sys.modules[__name__])
