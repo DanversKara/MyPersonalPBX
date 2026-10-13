@@ -235,7 +235,7 @@ def me_messages_since(request: Request, after: int = 0):
 def me_calls(request: Request, missed: int = 0, before: int = 0, limit: int = 100):
     me = _need(request)
     rows = M.ucp._my_calls(me, limit=1000, missed_only=bool(missed))
-    keep = ("id", "kind", "other", "started_at", "duration_sec", "billsec", "disposition", "recording_id")
+    keep = ("id", "kind", "other", "started_at", "duration_sec", "bill_sec", "disposition", "recording_id")
     return {"calls": [{k: r.get(k) for k in keep if k in r} for r in _paged(rows, before, limit)]}
 
 
