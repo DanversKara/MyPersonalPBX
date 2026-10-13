@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Voicemail
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.coroutines.delay
@@ -41,7 +42,8 @@ fun MainScreen(model: AppModel) {
         }
     }
 
-    chatWith?.let { peer ->
+    val peer = chatWith
+    if (peer != null) {
         BackHandler { chatWith = null }
         ChatScreen(model, peer, snack) { chatWith = null }
         return
