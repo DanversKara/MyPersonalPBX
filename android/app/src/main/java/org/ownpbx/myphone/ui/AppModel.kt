@@ -3,9 +3,17 @@
 
 package org.ownpbx.myphone.ui
 
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.ownpbx.myphone.data.Api
 import org.ownpbx.myphone.data.ApiException
 import org.ownpbx.myphone.data.Store
@@ -21,6 +29,52 @@ class AppModel(val store: Store) {
      *  sign-in screen fills them in (the user still taps Connect). */
     var pendingPair by mutableStateOf<org.ownpbx.myphone.data.PairInfo?>(null)
     var onSecureChanged: () -> Unit = {}
+
+    /** Outlives every screen: deletes/hides started here finish even if the
+     *  user switches tabs or leaves the app while the Undo bar is up. (Screen
+     *  scopes are cancelled when the screen goes away, which used to drop the
+     *  change, so deleted voicemail / hidden calls came back.) */
+    val bg = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Items removed on screen while their change is pending ("vm:12",
+     *  "call:5", "conv:8801"). Screens filter these out, so a freshly opened
+     *  screen doesn't flash them back before the server catches up. */
+    var gone by mutableStateOf(setOf<String>())
+
+    /** Show "<text> · Undo"; unless Undo is tapped, run [commit] on the PBX.
+     *  The bar times out on its own so a queued one can't hold a change back. */
+    fun undoable(snack: SnackbarHostState, text: String, keys: Set<String>,
+                 commit: suspend (Api) -> org.ownpbx.myphone.data.Result, after: suspend () -> Unit = {}) {
+        gone = gone + keys
+        bg.launch {
+            val r = withTimeoutOrNull(8_000) {
+                snack.showSnackbar(text, actionLabel = "Undo", duration = SnackbarDuration.Short)
+            }
+            if (r != SnackbarResult.ActionPerformed) {
+                change(commit)
+                after()
+            }
+            gone = gone - keys
+        }
+    }
+
+    /** Run [commit] now (reversible changes like hiding a call), then offer
+     *  Undo, which runs [revert]. */
+    fun doThenUndo(snack: SnackbarHostState, text: String, keys: Set<String>,
+                   commit: suspend (Api) -> org.ownpbx.myphone.data.Result,
+                   revert: suspend (Api) -> org.ownpbx.myphone.data.Result, after: suspend () -> Unit = {}) {
+        gone = gone + keys
+        bg.launch {
+            val ok = change(commit)
+            after()
+            gone = gone - keys
+            if (!ok) return@launch
+            val r = withTimeoutOrNull(8_000) {
+                snack.showSnackbar(text, actionLabel = "Undo", duration = SnackbarDuration.Short)
+            }
+            if (r == SnackbarResult.ActionPerformed) { change(revert); after() }
+        }
+    }
 
     private fun initialStage() = when {
         store.token == null -> Stage.SignIn

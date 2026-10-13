@@ -32,7 +32,6 @@ fun MessagesScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier
     var threads by remember { mutableStateOf<List<ChatThread>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf(setOf<String>()) }
-    var hidden by remember { mutableStateOf(setOf<String>()) }   // swiped away, waiting for Undo
     var query by remember { mutableStateOf("") }
     var compose by remember { mutableStateOf(false) }
     var confirmBulk by remember { mutableStateOf(false) }
@@ -46,23 +45,14 @@ fun MessagesScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier
     LaunchedEffect(Unit) { while (true) { refresh(); delay(10_000) } }
 
     fun delete(peers: Set<String>) {
-        hidden = hidden + peers
         selected = emptySet()
-        scope.launch {
-            val r = snack.showSnackbar(
-                if (peers.size == 1) "Conversation deleted" else "${peers.size} conversations deleted",
-                actionLabel = "Undo", duration = SnackbarDuration.Short)
-            if (r == SnackbarResult.ActionPerformed) {
-                hidden = hidden - peers
-            } else {
-                model.change { it.deleteMessages(peers = peers.toList()) }
-                refresh()
-                hidden = hidden - peers
-            }
-        }
+        model.undoable(snack, if (peers.size == 1) "Conversation deleted" else "${peers.size} conversations deleted",
+            peers.map { "conv:$it" }.toSet(),
+            commit = { it.deleteMessages(peers = peers.toList()) },
+            after = { refresh() })
     }
 
-    val shown = threads.filter { it.peer !in hidden }
+    val shown = threads.filter { "conv:${it.peer}" !in model.gone }
         .filter { query.isBlank() || it.peer.contains(query.filter { c -> c.isDigit() }.ifEmpty { query }) ||
             it.last.body.contains(query, ignoreCase = true) }
 

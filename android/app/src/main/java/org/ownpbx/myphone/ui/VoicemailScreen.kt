@@ -38,7 +38,6 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
     var folder by rememberSaveable { mutableStateOf("INBOX") }
     var items by remember { mutableStateOf<List<Vm>?>(null) }
     var selected by remember { mutableStateOf(setOf<Long>()) }
-    var hidden by remember { mutableStateOf(setOf<Long>()) }
     var openId by remember { mutableStateOf<Long?>(null) }
     var state by remember { mutableStateOf(PlayState.Idle) }
     var errorText by remember { mutableStateOf("") }
@@ -131,29 +130,27 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
 
     fun delete(ids: Set<Long>) {
         if (openId in ids) close()
-        hidden = hidden + ids; selected = emptySet()
-        scope.launch {
-            val r = snack.showSnackbar(if (ids.size == 1) "Voicemail deleted" else "${ids.size} voicemails deleted",
-                actionLabel = "Undo", duration = SnackbarDuration.Short)
-            if (r != SnackbarResult.ActionPerformed) {
-                if (model.change { it.deleteVoicemail(ids.toList(), folder) }) ids.forEach { File(cacheDir, "$it.wav").delete() }
-                refresh()
-            }
-            hidden = hidden - ids
-        }
+        selected = emptySet()
+        val inFolder = folder
+        model.undoable(snack, if (ids.size == 1) "Voicemail deleted" else "${ids.size} voicemails deleted",
+            ids.map { "vm:$it" }.toSet(),
+            commit = { api ->
+                api.deleteVoicemail(ids.toList(), inFolder).also { r ->
+                    if (r.ok) ids.forEach { File(cacheDir, "$it.wav").delete() }
+                }
+            },
+            after = { refresh() })
     }
 
     fun moveTo(v: Vm, to: String) {
         if (openId == v.id) close()
-        hidden = hidden + v.id
-        scope.launch {
-            model.change { it.moveVoicemail(v.id, to) }
-            snack.showSnackbar(if (to == "Old") "Moved to Old" else "Moved to New")
-            refresh(); hidden = hidden - v.id
-        }
+        model.doThenUndo(snack, if (to == "Old") "Moved to Old" else "Moved to New", setOf("vm:${v.id}"),
+            commit = { it.moveVoicemail(v.id, to) },
+            revert = { it.moveVoicemail(v.id, if (to == "Old") "INBOX" else "Old") },
+            after = { refresh() })
     }
 
-    val shown = items?.filter { it.id !in hidden }
+    val shown = items?.filter { "vm:${it.id}" !in model.gone }
 
     Scaffold(modifier = modifier, topBar = {
         if (selected.isNotEmpty()) TopAppBar(

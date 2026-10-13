@@ -31,7 +31,6 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
     var view by rememberSaveable { mutableStateOf("all") }
     var calls by remember { mutableStateOf<List<Call>?>(null) }
     var selected by remember { mutableStateOf(setOf<Long>()) }
-    var gone by remember { mutableStateOf(setOf<Long>()) }
     var menuFor by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
     val hiddenView = view == "hidden"
@@ -39,24 +38,19 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
     suspend fun refresh() { model.guard { it.calls(view) }?.let { calls = it.calls } }
     LaunchedEffect(view) { calls = null; selected = emptySet(); refresh() }
 
-    /** Hide (or, in the Hidden view, show again) with Undo. */
+    /** Hide (or, in the Hidden view, show again) right away; Undo reverses it. */
     fun move(ids: Set<Long>) {
         if (ids.isEmpty()) return
-        gone = gone + ids; selected = emptySet()
-        scope.launch {
-            val n = ids.size
-            val what = if (n == 1) "Call" else "$n calls"
-            val r = snack.showSnackbar(if (hiddenView) "$what moved back" else "$what hidden",
-                actionLabel = "Undo", duration = SnackbarDuration.Short)
-            if (r != SnackbarResult.ActionPerformed) {
-                model.change { it.hideCalls(ids, unhide = hiddenView) }
-                refresh()
-            }
-            gone = gone - ids
-        }
+        selected = emptySet()
+        val unhide = hiddenView
+        val what = if (ids.size == 1) "Call" else "${ids.size} calls"
+        model.doThenUndo(snack, if (unhide) "$what moved back" else "$what hidden", ids.map { "call:$it" }.toSet(),
+            commit = { it.hideCalls(ids, unhide = unhide) },
+            revert = { it.hideCalls(ids, unhide = !unhide) },
+            after = { refresh() })
     }
 
-    val shown = calls?.filter { it.id !in gone }
+    val shown = calls?.filter { "call:${it.id}" !in model.gone }
 
     Scaffold(modifier = modifier, topBar = {
         if (selected.isNotEmpty()) TopAppBar(

@@ -13,8 +13,8 @@ android {
         applicationId = "org.ownpbx.myphone"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.3.2"
+        versionCode = 6
+        versionName = "0.3.3"
         val defaultServer = (project.findProperty("myphone.defaultServer") as String?).orEmpty()
             .replace("\\", "").replace("\"", "")
         buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
