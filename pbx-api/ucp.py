@@ -396,6 +396,7 @@ def purge_extension_data(exts, moving_login_id=None):
 
             r = c.execute("DELETE FROM cdr WHERE src=? OR dst=?", (e, e))
             counts["cdr"] += r.rowcount
+            c.execute("DELETE FROM call_hidden WHERE cdr_id NOT IN (SELECT id FROM cdr)")
 
             r = c.execute("DELETE FROM messages WHERE from_ext=? OR to_ext=?", (e, e))
             counts["messages"] += r.rowcount

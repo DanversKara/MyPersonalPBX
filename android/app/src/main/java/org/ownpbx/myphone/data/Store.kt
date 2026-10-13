@@ -12,6 +12,7 @@ import androidx.security.crypto.MasterKey
  * app's files to another phone doesn't copy the sign-in.
  */
 class Store(context: Context) {
+    private val cacheDir = context.applicationContext.cacheDir
     private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
         context, "myphone_secure",
         MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
@@ -71,5 +72,7 @@ class Store(context: Context) {
         val keepServer = server
         prefs.edit().clear().apply()
         server = keepServer
+        // Downloaded voicemail audio belongs to the signed-in user.
+        java.io.File(cacheDir, "voicemail").deleteRecursively()
     }
 }

@@ -11,8 +11,8 @@ Services, no Firebase, no analytics.
 
 ## What works (v0.1)
 
-- Sign in with username + password, or a one-time pairing code from
-  My Phone > App on the web. Stays signed in 60 days after last use.
+- Sign in with a one-time pairing code from My Phone > App on the web (the
+  app never sees your panel password). Stays signed in 60 days after last use.
 - App PIN: 6 or 12 digits (PBKDF2 hash in Keystore-encrypted storage),
   optional fingerprint/face, growing wait after wrong PINs, sign-out after 10.
   Lock immediately / after 1, 5 or 15 minutes away. Screenshots blocked
@@ -20,9 +20,13 @@ Services, no Firebase, no analytics.
 - Messages: inbox with search, unread dots, swipe to delete with Undo,
   long-press to multi-select (select all, delete), start a chat, chat
   bubbles, copy/delete messages, block, auto-refresh.
-- Calls: all / missed, text back, block.
-- Voicemail: new / old, play in the app, swipe or multi-select delete with
-  Undo, move to Old.
+- Calls: all / missed / hidden. Swipe or long-press to hide calls (they
+  stay under Hidden until the PBX's 90-day purge); the missed-call badge
+  clears when you open Calls. Text back, block.
+- Voicemail: new / old, tap to play with a seek bar and 1x/1.5x/2x speed
+  (audio is downloaded over the app's own connection, then played), text
+  back, block, move between New and Old, swipe or multi-select delete with
+  Undo.
 - Settings with switches: DND, forwarding, ring time, record my calls,
   texts in/out, email, blocked numbers, PIN, password, signed-in phones,
   sign out.

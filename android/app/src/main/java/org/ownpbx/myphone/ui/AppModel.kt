@@ -49,6 +49,16 @@ class AppModel(val store: Store) {
         null
     }
 
+    /** Like guard, but other errors stay silent (background housekeeping). */
+    suspend fun <T> guardQuiet(block: suspend (Api) -> T): T? = try {
+        block(api())
+    } catch (e: ApiException) {
+        if (e.status == 401) signedOut("You were signed out. Please sign in again.")
+        null
+    } catch (e: Exception) {
+        null
+    }
+
     /** For change calls: show the server's answer, return whether it worked. */
     suspend fun change(block: suspend (Api) -> org.ownpbx.myphone.data.Result): Boolean {
         val r = guard(block) ?: return false

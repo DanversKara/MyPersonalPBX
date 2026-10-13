@@ -107,6 +107,8 @@ def _migrate(c):
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_logins_exten_change AFTER UPDATE OF exten ON logins
                  WHEN NEW.exten IS NOT OLD.exten
                  BEGIN UPDATE logins SET exten_since = datetime('now') WHERE id = NEW.id; END""")
+    if "calls_seen_id" not in cols("app_devices"):
+        c.execute("ALTER TABLE app_devices ADD COLUMN calls_seen_id INTEGER NOT NULL DEFAULT 0")
     if "answered_login_id" not in cols("cdr"):
         c.execute("ALTER TABLE cdr ADD COLUMN answered_login_id INTEGER DEFAULT NULL")
     # Split user recording into admin allow-flag + user wish-flag, so a
@@ -3556,6 +3558,7 @@ def _purge_cdr():
     try:
         with db() as c:
             c.execute("DELETE FROM cdr WHERE started_at < datetime('now', 'localtime', ?)", (CDR_RETENTION,))
+            c.execute("DELETE FROM call_hidden WHERE cdr_id NOT IN (SELECT id FROM cdr)")
             c.commit()
     except Exception:
         pass

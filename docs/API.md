@@ -137,7 +137,7 @@ curl -s -H "$AUTH" -d ids=12 -d ids=13 -d convs=8801 https://pbx.example/api/v1/
 | Reads (GET) | Changes (POST, form fields like the web forms) |
 |---|---|
 | `/me/overview`, `/me/threads`, `/me/threads/{peer}?before=&limit=`, `/me/messages/since?after=` | `/me/messages/send`, `/me/messages/delete` (`ids`, `convs`, or `mode=all`) |
-| `/me/calls?missed=1`, `/me/voicemail?folder=Old`, `/me/voicemail/{id}/audio` | `/me/voicemail/delete`, `/me/voicemail/{id}/heard`, `/me/voicemail/{id}/move` |
+| `/me/calls?view=all\|missed\|hidden`, `/me/voicemail?folder=Old`, `/me/voicemail/{id}/audio` | `/me/calls/hide` (`ids`; `unhide=1` to show again), `/me/calls/seen`, `/me/voicemail/delete`, `/me/voicemail/{id}/heard`, `/me/voicemail/{id}/move` |
 | `/me/recordings`, `/me/recordings/{id}/audio` | `/me/recordings/delete` |
 | `/me/settings`, `/me/devices` | `/me/settings/calls`, `/me/settings/prefs`, `/me/settings/messaging`, `/me/settings/password`, `/me/dnd`, `/me/block`, `/me/report` |
 
@@ -146,3 +146,11 @@ on a refused change, 423 when the safety lock is on). Also:
 `DELETE /me/devices/{id}`, `PUT /me/push {"endpoint":"https://..."}`
 (UnifiedPush), `POST /api/v1/app/logout`. Tokens expire 60 days after last
 use; a password change signs out every other phone.
+
+Calls can't be deleted by users, only hidden (per user, `call_hidden`): hidden
+calls drop out of `all`/`missed` and are listed under `view=hidden` until the
+90-day call-history purge removes them. `/me/overview` returns `missed_new`,
+the missed calls this phone hasn't seen and the user hasn't hidden; `POST
+/me/calls/seen` (the app calls it when Calls is opened) resets it to 0. The
+Android app signs in with pairing codes only; `/app/login` stays for other
+API clients.
