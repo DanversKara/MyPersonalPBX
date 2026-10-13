@@ -153,4 +153,5 @@ calls drop out of `all`/`missed` and are listed under `view=hidden` until the
 the missed calls this phone hasn't seen and the user hasn't hidden; `POST
 /me/calls/seen` (the app calls it when Calls is opened) resets it to 0. The
 Android app signs in with pairing codes only; `/app/login` stays for other
-API clients.
+API clients. My Phone > App shows each code as a QR code (needs the `segno`
+package; deploy.sh installs it) holding `myphone://pair?s=<server>&c=<code>`.

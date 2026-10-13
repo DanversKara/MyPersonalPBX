@@ -42,6 +42,13 @@ fi
 mkdir -p /var/spool/asterisk/recording
 chown "$PBX_USER" /var/spool/asterisk/recording
 
+# --- Python packages added after install.sh (existing servers get them here) ---
+# segno (pure Python, BSD): QR codes for app pairing. Optional: without it
+# the App page just shows the code as text.
+if ! /opt/pbx/api-venv/bin/python -c "import segno" 2>/dev/null; then
+    /opt/pbx/api-venv/bin/pip install -q segno || echo "NOTE: couldn't install segno; pairing QR codes stay off."
+fi
+
 # --- Code ---
 mkdir -p /opt/pbx/pbx-brain /opt/pbx/pbx-api /opt/pbx/config-gen
 cp "$SRC_DIR/pbx-brain/"*.py /opt/pbx/pbx-brain/
