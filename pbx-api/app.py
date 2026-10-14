@@ -793,7 +793,8 @@ async function loadDevices() {
       (cnt.internal || 0) + ' internal · ' + (cnt.external || 0) + ' external' : '';
     document.getElementById('devices').innerHTML = devices.length ? devices.map(d =>
       '<tr><td>' + esc(d.display_name || d.username) +
-      ' <span class="muted">' + esc(d.username) + '</span></td>' +
+      (d.kind === 'app' ? ' <span class="pill">My Phone app</span>' : '') +
+      ' <span class="muted">' + esc(d.sip_username || d.username) + '</span></td>' +
       '<td>' + esc(d.exten) + '</td>' +
       '<td>' + esc(d.ip) + (d.port ? '<span class="muted">:' + esc(d.port) + '</span>' : '') + '</td>' +
       '<td><span class="pill ' + (d.location === 'external' ? 'warn' : 'ok') + '">' +
@@ -3405,18 +3406,23 @@ def v1_devices(request: Request):
     seen = set()
     devices = []
     for ct in status.get("contacts", []):
-        login = logins.get(ct["aor"])
+        aor = ct["aor"]
+        # The My Phone app signs in on its own line, "<sip_username>-app".
+        is_app = aor.endswith("-app") and aor not in logins
+        login = logins.get(aor[:-4] if is_app else aor)
         if not login:
             continue
         if actor["role"] != "admin" and login["id"] != actor["id"]:
             continue
-        key = (login["username"], ct["ip"], ct["port"])
+        key = (aor, ct["ip"], ct["port"])
         if key in seen:
             continue
         seen.add(key)
         where, via = _device_location(ct["ip"], ct["transport"])
         devices.append({
             "username": login["username"],
+            "sip_username": aor,
+            "kind": "app" if is_app else "phone",
             "exten": login["exten"],
             "display_name": login["display_name"],
             "ip": ct["ip"], "port": ct["port"],
