@@ -394,6 +394,11 @@ def me_settings(request: Request):
     }
 
 
+def app_line(me) -> str:
+    """SIP username of the user's My Phone app line."""
+    return "%s-app" % me["sip_username"]
+
+
 def me_sip(request: Request):
     """What the app's built-in phone needs to place calls as this extension,
     through the edge (TLS + SRTP), exactly like a remote Zoiper. Only the
@@ -406,9 +411,13 @@ def me_sip(request: Request):
               "Your login has no extension." if not me.get("exten") else
               "Remote calling isn't set up on this PBX yet (Admin > Network: domain)." if not rs.get("domain") else
               "Your extension has no phone password yet.")
+    # The app signs in on its own line (<sip_username>-app, see pjsip.conf.j2)
+    # so it never replaces the desk phone / Zoiper registration on the main line.
     return {"enabled": ok, "reason": reason,
             "exten": me.get("exten") or "", "display_name": me.get("display_name") or "",
-            "username": me.get("sip_username") or "", "password": (me.get("sip_secret") or "") if ok else "",
+            "username": app_line(me) if ok else "", "main_username": me.get("sip_username") or "",
+            "register": True,
+            "password": (me.get("sip_secret") or "") if ok else "",
             "domain": rs.get("domain") or "", "port": int(rs.get("port") or 5061),
             "transport": "tls", "srtp": "sdes", "codecs": ["PCMU", "PCMA", "G722"]}
 
@@ -650,19 +659,21 @@ def app_page(request: Request, code: str = "", sip: bool = False):
     can_sip = bool(me.get("exten") and me.get("sip_username") and me.get("sip_secret") and rs.get("domain"))
     if sip and can_sip:
         server = f"{rs['domain']}:{rs.get('port') or 5061}"
-        link = sip_link(server, me["sip_username"], me["sip_secret"])
+        link = sip_link(server, app_line(me), me["sip_secret"])
         qr = qr_svg(link)
         qr_html = (f"<div style='background:#fff;padding:10px;border-radius:8px;display:inline-block;"
                    f"line-height:0'>{qr}</div>" if qr else "")
         sip_box = (f"<div class='flash ok' style='display:flex;gap:20px;align-items:center;flex-wrap:wrap'>"
                    f"{qr_html}<div style='flex:1;min-width:240px'>"
-                   "<b>Phone login for calls.</b> In the app: Settings &gt; Calling &gt; Phone login &gt; Scan QR code"
-                   " (or scan it with the phone's camera).<br><br>"
+                   "<b>Phone login for the My Phone app.</b> In the app: Settings &gt; Calling &gt; Phone login &gt; Scan QR code"
+                   " (or scan it with the phone's camera). This is the app's own line on your extension"
+                   " (<code>-app</code>), so your desk phone and Zoiper stay signed in. For Zoiper use your"
+                   " normal username from Settings.<br><br>"
                    f"<a class='btn' href='{esc(android_link(link))}' style='display:inline-block;text-decoration:none'>"
                    "Open in the My Phone app</a><br><br>"
                    f"Server: <button type='button' data-copy='{esc(server)}' style='{COPY_BTN};font-family:monospace'>{esc(server)}</button>"
                    " <span class='copied muted'></span><br>"
-                   f"Username: <button type='button' data-copy='{esc(me['sip_username'])}' style='{COPY_BTN};font-family:monospace'>{esc(me['sip_username'])}</button>"
+                   f"Username: <button type='button' data-copy='{esc(app_line(me))}' style='{COPY_BTN};font-family:monospace'>{esc(app_line(me))}</button>"
                    " <span class='copied muted'></span><br>"
                    f"Password: <button type='button' data-copy='{esc(me['sip_secret'])}' style='{COPY_BTN};font-family:monospace'>Copy password</button>"
                    " <span class='copied muted'></span><br>"

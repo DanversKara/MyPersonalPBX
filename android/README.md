@@ -47,7 +47,16 @@ Services, no Firebase, no analytics.
   ulaw/alaw/G.722) with the extension's phone login from `/api/v1/me/sip`,
   so other phones on the extension are unaffected. Mute, speaker, keypad
   (DTMF), hang up; an "On a call" notification keeps the call going in the
-  background. Incoming calls are next.
+  background.
+- Calls (incoming): the app signs in (registers) on the extension's own app
+  line, `<sip_username>-app` (generated for every extension in pjsip.conf,
+  same password and caller ID), never on the main line, so the desk phone /
+  Zoiper stay signed in. pbx-brain rings the app line together with the main
+  line when it's online; first answer wins. The stay-connected service keeps
+  the sign-in alive; ringing uses the phone's ringtone, a full-screen
+  notification with Answer / Decline, and the call screen shows over the PIN
+  lock. Settings > Calling > Incoming calls turns it off. A typed-in main-line
+  login is used for outgoing calls only.
 - Phone login: Settings > Calling > Phone login (scan the QR from My Phone >
   App > "Show phone login QR", `myphone://sip?s=&u=&p=`, or type it). A
   camera-opened phone-login link asks before it's used.

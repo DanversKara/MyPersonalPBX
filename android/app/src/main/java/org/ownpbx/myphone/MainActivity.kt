@@ -33,12 +33,29 @@ class MainActivity : FragmentActivity() {
         applySecure()
         Notifier.createChannels(this)
         if (savedInstanceState == null) { handlePairLink(intent); handleOpen(intent) }
+        showOverLockForCalls()
         setContent { MyPhoneTheme { AppRoot(model, this) } }
+    }
+
+    /** An incoming call (or one in progress) shows over the lock screen and
+     *  turns the screen on; otherwise the app behaves normally. */
+    private fun showOverLockForCalls() {
+        val inCall = org.ownpbx.myphone.phone.Phone.ui?.let { !it.ended } == true ||
+            intent?.getBooleanExtra(org.ownpbx.myphone.phone.IncomingNotice.EXTRA_CALL, false) == true
+        if (android.os.Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(inCall); setTurnScreenOn(inCall) }
+        else if (inCall) @Suppress("DEPRECATION") window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        showOverLockForCalls()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        showOverLockForCalls()
         handlePairLink(intent)
         handleOpen(intent)
     }

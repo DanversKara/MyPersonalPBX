@@ -59,6 +59,7 @@ import java.util.concurrent.TimeUnit
 @Serializable data class SipInfo(
     val enabled: Boolean = false, val reason: String = "", val exten: String = "", val display_name: String = "",
     val username: String = "", val password: String = "", val domain: String = "", val port: Int = 5061,
+    val main_username: String = "", val register: Boolean = false,
     val codecs: List<String> = listOf("PCMU", "PCMA", "G722"),
 )
 @Serializable data class WaitResp(val msg: Long = 0, val call: Long = 0, val vm: Long = 0, val changed: Boolean = false)

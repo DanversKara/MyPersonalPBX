@@ -25,6 +25,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.ownpbx.myphone.data.ApiException
 import org.ownpbx.myphone.data.Store
+import org.ownpbx.myphone.phone.Phone
 
 /**
  * Keeps My Phone in touch with the PBX for fast notifications.
@@ -39,6 +40,8 @@ import org.ownpbx.myphone.data.Store
 class LiveService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
+    @Volatile private var refreshCalls = true
+    private var callsCheckedAt = 0L
     @Volatile private var waitMissing = false
     @Volatile private var waitMissingSince = 0L
 
@@ -53,13 +56,37 @@ class LiveService : Service() {
         } catch (e: Exception) {
             stopSelf(); return START_NOT_STICKY       // Android refused (e.g. started from the background)
         }
+        refreshCalls = true          // settings may have changed: re-check the phone sign-in now
         if (job?.isActive != true) job = scope.launch { loop() }
         return START_STICKY
     }
 
     override fun onDestroy() {
         scope.cancel()
+        // No service = nothing keeps the app alive to ring: sign out of calls.
+        if (Phone.ui == null || Phone.ui?.ended == true) Phone.stopListening()
         super.onDestroy()
+    }
+
+    /** Keep the built-in phone signed in on the app line (incoming calls),
+     *  or signed out when they're off. Re-checked every 10 minutes. */
+    private suspend fun ensureCalls(store: Store) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!refreshCalls && now - callsCheckedAt < 10 * 60_000L) return
+        refreshCalls = false
+        callsCheckedAt = now
+        if (!store.incomingCalls) {
+            kotlinx.coroutines.withContext(Dispatchers.Main) { org.ownpbx.myphone.phone.Phone.stopListening() }
+            return
+        }
+        val pbx = try { store.api().sip() } catch (e: ApiException) {
+            if (e.status == 401) throw e
+            null
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+        val sip = org.ownpbx.myphone.ui.applySipOverrides(store, pbx) ?: return
+        if (sip.enabled) kotlinx.coroutines.withContext(Dispatchers.Main) {
+            org.ownpbx.myphone.phone.Phone.startListening(this@LiveService, sip)
+        }
     }
 
     private suspend fun loop() {
@@ -68,8 +95,12 @@ class LiveService : Service() {
             val store = Store(this)
             if (!wanted(store)) { stopSelf(); return }
             try {
+                ensureCalls(store)
                 val every = store.checkEvery
-                if (every == 0 && waitMissing) {
+                if (!notifying(store)) {
+                    // Only here for incoming calls: the 15-minute job does the notifications.
+                    delay(30_000)
+                } else if (every == 0 && waitMissing) {
                     // Older PBX without /me/wait: check every minute until it's updated.
                     Notifier.run(this, seenOnly = false)
                     Notifier.record(store, store.lastCheckInfo.substringBefore(" ·") +
@@ -114,7 +145,10 @@ class LiveService : Service() {
         private const val CH_OLD = "connection"
         private const val ID_ONGOING = 7
 
-        fun wanted(store: Store) = store.token != null && store.notifyOn && store.checkEvery < 900
+        /** Fast notifications (Instant / 30 s - 5 min) need this service. */
+        fun notifying(store: Store) = store.notifyOn && store.checkEvery < 900
+        /** Runs for fast notifications and/or to ring for incoming calls. */
+        fun wanted(store: Store) = store.token != null && (notifying(store) || store.incomingCalls)
 
         /** Start or stop to match the settings. Call from the app (foreground)
          *  or at boot; Android may refuse a start from the background. */
@@ -150,8 +184,12 @@ class LiveService : Service() {
             return NotificationCompat.Builder(ctx, CH_ONGOING)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("My Phone is connected")
-                .setContentText(if (store.checkEvery == 0) "New texts, calls and voicemail notify right away"
-                    else describe(store.checkEvery))
+                .setContentText(when {
+                    store.incomingCalls && notifying(store) -> "Ready for calls · notifications: " + describe(store.checkEvery).lowercase()
+                    store.incomingCalls -> "Ready for incoming calls"
+                    store.checkEvery == 0 -> "New texts, calls and voicemail notify right away"
+                    else -> describe(store.checkEvery)
+                })
                 .setOngoing(true)
                 .setShowWhen(false)
                 .setNumber(0)

@@ -25,6 +25,11 @@ import org.ownpbx.myphone.CrashLog
 @Composable
 fun AppRoot(model: AppModel, activity: FragmentActivity) {
     CrashReportDialog()
+    // A call (ringing or in progress) shows over everything, including the
+    // PIN lock: answering shouldn't need the PIN. Only call controls show.
+    org.ownpbx.myphone.phone.Phone.ui?.let { c ->
+        if (model.stage != Stage.SignIn) { InCallScreen(c); return }
+    }
     when (model.stage) {
         Stage.SignIn -> SignInScreen(model)
         Stage.SetPin -> SetPinScreen(model)

@@ -107,6 +107,7 @@ fun InCallScreen(c: CallUi) {
             Spacer(Modifier.height(32.dp))
             Avatar(c.number)
             Spacer(Modifier.height(16.dp))
+            if (c.name.isNotBlank()) Text(c.name, style = MaterialTheme.typography.titleLarge)
             Text(prettyNumber(c.number), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             Text(if (c.connectedAt > 0 && !c.ended) "%d:%02d".format(elapsed / 60, elapsed % 60) else c.status,
@@ -122,8 +123,33 @@ fun InCallScreen(c: CallUi) {
                 }) { Icon(Icons.Filled.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy details") }
             }
             Spacer(Modifier.weight(1f))
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val askMic = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+                if (ok) org.ownpbx.myphone.phone.CallService.answer(ctx) else Phone.decline()
+            }
             if (c.ended) {
                 Button({ Phone.dismiss() }) { Text("Close") }
+            } else if (c.incoming && c.connectedAt == 0L && c.status == "Incoming call") {
+                Row(horizontalArrangement = Arrangement.spacedBy(64.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        LargeFloatingActionButton({ Phone.decline() }, containerColor = Color(0xFFD93025),
+                            contentColor = Color.White, shape = CircleShape) {
+                            Icon(Icons.Filled.CallEnd, "Decline", Modifier.size(36.dp))
+                        }
+                        Spacer(Modifier.height(6.dp)); Text("Decline")
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        LargeFloatingActionButton({
+                            if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.RECORD_AUDIO)
+                                == android.content.pm.PackageManager.PERMISSION_GRANTED) org.ownpbx.myphone.phone.CallService.answer(ctx)
+                            else try { askMic.launch(android.Manifest.permission.RECORD_AUDIO) } catch (_: Exception) {}
+                        }, containerColor = Color(0xFF188038), contentColor = Color.White, shape = CircleShape) {
+                            Icon(Icons.Filled.Call, "Answer", Modifier.size(36.dp))
+                        }
+                        Spacer(Modifier.height(6.dp)); Text("Answer")
+                    }
+                }
             } else {
                 if (keypad) {
                     Keypad({ Phone.dtmf(it); digits = (digits + it).takeLast(20) })

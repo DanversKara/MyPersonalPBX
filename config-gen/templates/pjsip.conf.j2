@@ -101,4 +101,40 @@ direct_media=no
 rtp_symmetric=yes
 rewrite_contact=no
 force_rport=yes
+
+; ---- {{ e.exten }} My Phone app line ----
+; The Android app signs in here, not on the line above, so the desk phone /
+; Zoiper keep their single registration (max_contacts=1 + remove_existing on
+; the main AOR would otherwise let the app kick them off). Same extension,
+; caller ID, context and password; pbx-brain rings this line together with
+; the main one when it's online.
+[{{ e.sip_username }}-app]
+type=aor
+max_contacts=1
+remove_existing=yes
+qualify_frequency=60
+qualify_timeout=5
+support_path=yes
+
+[auth-{{ e.sip_username }}-app]
+type=auth
+auth_type=userpass
+username={{ e.sip_username }}-app
+password={{ e.sip_secret }}
+
+[{{ e.sip_username }}-app]
+type=endpoint
+identify_by=username,auth_username
+transport=transport-udp
+context=extensions
+message_context=pbx-msg
+callerid={{ e.display_name or e.exten }} <{{ e.exten }}>
+disallow=all
+allow=ulaw,alaw,g722
+auth=auth-{{ e.sip_username }}-app
+aors={{ e.sip_username }}-app
+direct_media=no
+rtp_symmetric=yes
+rewrite_contact=no
+force_rport=yes
 {% endfor %}

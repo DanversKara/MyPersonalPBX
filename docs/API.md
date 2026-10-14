@@ -158,7 +158,10 @@ Instant notifications: it answers as soon as there is a text, unhidden missed
 call or Inbox voicemail newer than the ids given (checked every 2 s), or after
 `timeout` seconds (max 55, under Cloudflare's 100 s limit), with the newest
 ids and `changed`. `GET /me/sip` gives the app's built-in phone what it needs to call as the
-user's own extension through the edge: `enabled` (false with a `reason` when
+user's own extension through the edge, on the extension's **app line**
+(`username` = `<sip_username>-app`, a second pjsip endpoint/AOR with the same
+password and caller ID that pbx-brain rings alongside the main line;
+`main_username` is the desk-phone login, `register` = true): `enabled` (false with a `reason` when
 the extension, its phone password or Admin > Network domain is missing; the
 password is then left out), `username`, `password`, `domain`, `port`,
 `transport` (tls), `srtp` (sdes), `codecs`. My Phone > App shows each code as a QR code (needs the `segno`

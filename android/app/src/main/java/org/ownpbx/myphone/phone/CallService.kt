@@ -23,12 +23,11 @@ class CallService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_HANG_UP) {
-            Phone.hangUp()
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_HANG_UP -> { Phone.hangUp(); stopSelf(); return START_NOT_STICKY }
+            ACTION_DECLINE -> { Phone.decline(); stopSelf(); return START_NOT_STICKY }
         }
-        val number = intent?.getStringExtra(EXTRA_NUMBER).orEmpty()
+        val number = intent?.getStringExtra(EXTRA_NUMBER) ?: Phone.ui?.number.orEmpty()
         try {
             ServiceCompat.startForeground(this, ID, notification(this, number),
                 if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
@@ -36,6 +35,9 @@ class CallService : Service() {
             // Without the foreground service the call still works while the app is open.
             stopSelf()
         }
+        // Answer from the notification: the service is foreground first, so the
+        // microphone keeps working with the screen off.
+        if (intent?.action == ACTION_ANSWER && !Phone.answer()) stopSelf()
         return START_NOT_STICKY
     }
 
@@ -44,6 +46,15 @@ class CallService : Service() {
         private const val ID = 11
         private const val EXTRA_NUMBER = "number"
         private const val ACTION_HANG_UP = "org.ownpbx.myphone.HANG_UP"
+        const val ACTION_ANSWER = "org.ownpbx.myphone.ANSWER"
+        const val ACTION_DECLINE = "org.ownpbx.myphone.DECLINE"
+
+        /** Answer from inside the app (foreground): go foreground, then answer. */
+        fun answer(ctx: Context) {
+            try {
+                ContextCompat.startForegroundService(ctx, Intent(ctx, CallService::class.java).setAction(ACTION_ANSWER))
+            } catch (_: Exception) { Phone.answer() }
+        }
 
         fun start(ctx: Context, number: String) {
             try {

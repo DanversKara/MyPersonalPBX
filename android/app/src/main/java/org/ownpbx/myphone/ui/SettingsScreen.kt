@@ -252,6 +252,12 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         ClickRow(Icons.Filled.Lock, "Lock now") { model.lock() }
 
         Section("Calling")
+        var incoming by remember { mutableStateOf(store.incomingCalls) }
+        SwitchRow(Icons.Filled.PhoneCallback, "Incoming calls",
+            if (incoming) org.ownpbx.myphone.phone.Phone.registration else "Calls ring your other phones only", incoming) {
+            incoming = it; store.incomingCalls = it
+            org.ownpbx.myphone.LiveService.sync(ctx)
+        }
         val customSip = store.sipUserOverride.isNotBlank() || store.sipServerOverride.isNotBlank() || store.sipPassOverride.isNotBlank()
         ClickRow(Icons.Filled.Call, "Phone login",
             if (customSip) "Custom: ${store.sipUserOverride.ifBlank { "(PBX's username)" }} @ ${store.sipServerOverride.ifBlank { "(PBX's server)" }}"
@@ -332,6 +338,7 @@ private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
         .also { model.sipDraft = it }
     var show by remember { mutableStateOf(false) }
     val pbx = model.sip
+    val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext
     fun close() { model.sipDraft = null; onDone() }
     val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { r ->
         val text = r.contents ?: return@rememberLauncherForActivityResult
@@ -393,6 +400,7 @@ private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
             TextButton({
                 st.sipServerOverride = draft.server; st.sipUserOverride = draft.user; st.sipPassOverride = draft.pass
                 model.sip = null; model.notice = "Phone login saved"; close()
+                org.ownpbx.myphone.LiveService.sync(appCtx)         // sign in again with it
             }) { Text("Save") }
         },
         dismissButton = {
@@ -400,6 +408,7 @@ private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
                 TextButton({
                     st.sipServerOverride = ""; st.sipUserOverride = ""; st.sipPassOverride = ""
                     model.sip = null; model.notice = "Using your PBX's phone login"; close()
+                    org.ownpbx.myphone.LiveService.sync(appCtx)
                 }) { Text("Use automatic") }
                 TextButton(::close) { Text("Cancel") }
             }
