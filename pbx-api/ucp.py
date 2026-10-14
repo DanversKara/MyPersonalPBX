@@ -458,7 +458,7 @@ def overview(request: Request):
     elif devs:
         dev_ok = True
         dev_html = "".join(
-            f'<div><span class="pill ok">Online</span> {"<b>My Phone app</b> · " if d.get("app") else ""}{esc(d["ip"])}:{esc(d["port"])}'
+            f'<div><span class="pill ok">Online</span> {"My Phone app · " if d.get("app") else ""}{esc(d["ip"])}:{esc(d["port"])}'
             f'{" · " + esc(d["transport"]) if d.get("transport") else ""}'
             f'{" · " + format(d["rtt_ms"], ".0f") + " ms" if isinstance(d.get("rtt_ms"), (int, float)) else ""}</div>'
             for d in devs)
