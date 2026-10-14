@@ -143,13 +143,21 @@ object Notifier {
         val ov = api.overview()
         if (store.notifMsgId == 0L) {
             store.notifMsgId = ov.latest_message_id.coerceAtLeast(1)
+            store.notifBaseMsgId = store.notifMsgId
         } else if (ov.latest_message_id > store.notifMsgId) {
             val fresh = api.since(store.notifMsgId).messages.filter { !it.mine && it.id > store.notifMsgId }
             store.notifMsgId = maxOf(store.notifMsgId, ov.latest_message_id)
             found += fresh.size
-            if (!quiet) fresh.groupBy { it.peer }.forEach { (peer, msgs) ->
+            if (!quiet) fresh.groupBy { it.peer }.forEach { (peer, newOnes) ->
                 val who = prettyNumber(peer)
                 val showText = store.notifyShowText
+                // Count every text from this person not yet read in the app (same as
+                // the unread dot), not just the ones found in this check; otherwise
+                // 4 texts arriving across separate checks showed as "1".
+                val msgs = try {
+                    val from = maxOf(store.seenFor(peer), store.notifBaseMsgId)
+                    api.thread(peer).messages.filter { !it.mine && it.id > from }
+                } catch (e: Exception) { emptyList() }.ifEmpty { newOnes }
                 val lines = msgs.sortedBy { it.id }.map { if (showText) it.body else "New message" }
                 val b = base(ctx, CH_MESSAGES)
                     .setContentTitle(who)
@@ -180,12 +188,15 @@ object Notifier {
             found += fresh.size
             if (!quiet && fresh.isNotEmpty()) {
                 posted++
-                val who = fresh.map { prettyNumber(it.other.ifEmpty { "Unknown" }) }.distinct()
+                // All missed calls not yet looked at in the app (the PBX's per-phone count).
+                val n = maxOf(ov.missed_new ?: 0, fresh.size)
+                val who = missed.filter { it.kind == "missed" }.take(n)
+                    .map { prettyNumber(it.other.ifEmpty { "Unknown" }) }.distinct()
                 nm.notify(ID_CALLS, base(ctx, CH_CALLS)
-                    .setContentTitle(if (fresh.size == 1) "Missed call" else "${fresh.size} missed calls")
+                    .setContentTitle(if (n == 1) "Missed call" else "$n missed calls")
                     .setContentText(who.joinToString(", "))
                     .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
-                    .setNumber(fresh.size)
+                    .setNumber(n)
                     .setContentIntent(open(ctx, "calls", null, ID_CALLS))
                     .setPublicVersion(base(ctx, CH_CALLS).setContentTitle("My Phone")
                         .setContentText("Missed call").build())
@@ -204,13 +215,15 @@ object Notifier {
             found += fresh.size
             if (!quiet && fresh.isNotEmpty()) {
                 posted++
+                // All unheard voicemail, not just what arrived since the last check.
+                val n = maxOf(vms.count { it.is_read == 0 }, fresh.size)
                 val first = fresh.maxBy { it.id }
                 val from = prettyNumber(first.caller.ifEmpty { "Unknown caller" })
                 nm.notify(ID_VOICEMAIL, base(ctx, CH_VOICEMAIL)
-                    .setContentTitle(if (fresh.size == 1) "New voicemail" else "${fresh.size} new voicemails")
-                    .setContentText(if (fresh.size == 1) "From $from" else "Latest from $from")
+                    .setContentTitle(if (n == 1) "New voicemail" else "$n new voicemails")
+                    .setContentText(if (n == 1) "From $from" else "Latest from $from")
                     .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                    .setNumber(fresh.size)
+                    .setNumber(n)
                     .setContentIntent(open(ctx, "voicemail", null, ID_VOICEMAIL))
                     .setPublicVersion(base(ctx, CH_VOICEMAIL).setContentTitle("My Phone")
                         .setContentText("New voicemail").build())

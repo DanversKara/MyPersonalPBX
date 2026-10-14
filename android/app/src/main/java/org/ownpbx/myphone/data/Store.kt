@@ -86,6 +86,10 @@ class Store(context: Context) {
     var lastCheckInfo: String
         get() = prefs.getString("last_check_info", "") ?: ""
         set(v) = prefs.edit().putString("last_check_info", v).apply()
+    /** Newest text when notifications first started: older ones never count. */
+    var notifBaseMsgId: Long
+        get() = prefs.getLong("notif_base_msg", 0)
+        set(v) = prefs.edit().putLong("notif_base_msg", v).apply()
     var notifMsgId: Long
         get() = prefs.getLong("notif_msg", 0)
         set(v) = prefs.edit().putLong("notif_msg", v).apply()
