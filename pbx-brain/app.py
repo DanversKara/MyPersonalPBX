@@ -613,7 +613,7 @@ def on_legb_answer(b_channel):
         bridge.add_channel(a_id)
         bridge.add_channel(b_channel.id)
         # Start call recordings per admin/user flags (Phase 2b)
-        start_call_recordings(bridge, a_id)
+        start_call_recordings(bridge, a_id, B_LOGIN.get(b_channel.id))
     except Exception:
         log.exception("bridge failed")
         b_channel.hangup()
@@ -635,33 +635,55 @@ def on_legb_answer(b_channel):
 REC_RECORDINGS = {}  # rec_name -> {system, call_id, exten, login_id, ...}
 
 
-def start_call_recordings(bridge, a_id):
-    """Start MixMonitor-equivalent recordings per admin/user flags."""
+def start_call_recordings(bridge, a_id, answered_id=None):
+    """Start MixMonitor-equivalent recordings per admin/user flags.
+
+    Both sides count, whichever way the call goes: the extension that
+    called (outbound/internal) and the one that answered (inbound from
+    outside, from another extension, or via a ring group). Each user who
+    records their calls gets their own copy, filed under them."""
     info = CALLS.get(a_id)
     if not info:
         return
-    # Look up both extensions' recording flags
-    caller = q1("SELECT * FROM logins WHERE exten=?", (info["caller"],))
-    callee = q1("SELECT * FROM logins WHERE exten=?", (info["callee"],))
-    systems = set()
-    login_id = info.get("login_id")
-    exten = info["caller"]
+    # Caller: the extension that placed the call (none for calls from outside).
+    caller = None
+    if info.get("login_id"):
+        caller = q1("SELECT * FROM logins WHERE id=?", (info["login_id"],))
+    if not caller:
+        caller = q1("SELECT * FROM logins WHERE exten=? AND exten != ''", (info["caller"],))
+    # Callee: whoever actually answered (a ring group's winner), else the
+    # extension that was dialled.
+    callee = None
+    for lid in (answered_id, info.get("callee_id")):
+        if lid:
+            callee = q1("SELECT * FROM logins WHERE id=?", (lid,))
+            if callee:
+                break
+    if not callee:
+        callee = q1("SELECT * FROM logins WHERE exten=? AND exten != ''", (info["callee"],))
+    if caller and callee and caller["id"] == callee["id"]:
+        callee = None
+    callee_exten = (callee["exten"] if callee else "") or info["callee"]
+    jobs = []   # (system, owner login id, exten, direction, peer)
     # Admin recording needs the system-wide switch (Recordings page, turned on
     # only after the admin acknowledged recording laws) AND the extension's box.
     admin_on = (q1("SELECT value FROM kv_settings WHERE key='admin_rec_enabled'") or {"value": "0"})["value"] == "1"
-    if admin_on and caller and caller["record_admin"]:
-        systems.add("admin")
-    if admin_on and callee and callee["record_admin"]:
-        systems.add("admin")
+    if admin_on and any(p and p["record_admin"] for p in (caller, callee)):
+        jobs.append(("admin", info.get("login_id"), info["caller"],
+                     info.get("direction", "internal"), callee_exten))
     # "Record my calls" needs the admin allow-flag AND the user's own wish
     # (so a user's opt-out sticks), plus the feature in their plan AND the
     # user's acknowledgement of recording laws (two-party consent states).
-    for party in (caller, callee):
+    for party, other, direction in (
+            (caller, callee_exten, "outbound" if info.get("direction") == "outbound" else "internal"),
+            (callee, info["caller"], "inbound" if info.get("direction") == "inbound" else "internal")):
         if (party and party["user_record"] and _party_wants_record(party)
                 and has_feature(party["id"], "recording")
                 and recording_consented(party["id"])):
-            systems.add("user")
-    if systems and (q1("SELECT value FROM kv_settings WHERE key='rec_announce'") or {"value": "0"})["value"] == "1":
+            jobs.append(("user", party["id"], party["exten"], direction, other))
+    if not jobs:
+        return
+    if (q1("SELECT value FROM kv_settings WHERE key='rec_announce'") or {"value": "0"})["value"] == "1":
         # "This call may be recorded": both parties hear it as the call starts.
         p = (q1("SELECT value FROM kv_settings WHERE key='rec_announce_path'") or {"value": ""})["value"]
         media = _media_for(p) if p and os.path.isfile(p) else "sound:beep"
@@ -669,25 +691,23 @@ def start_call_recordings(bridge, a_id):
             bridge.play(media)
         except Exception:
             log.exception("recording announcement failed")
-    for system in systems:
+    for n, (system, owner, exten, direction, peer) in enumerate(jobs):
         rec_dir = REC_ADMIN_DIR if system == "admin" else REC_USER_DIR
-        import os
         os.makedirs(rec_dir, exist_ok=True)
-        name = "rec-%s-%s-%d" % (system, a_id.replace(".", "-"),
-                                 int(time.time()))
+        name = "rec-%s-%s-%d-%d" % (system, a_id.replace(".", "-"), int(time.time()), n)
         try:
-            rec = bridge.record(name=name, format="wav", max_duration=0)
+            bridge.record(name=name, format="wav", max_duration=0)
             REC_RECORDINGS[name] = {
                 "system": system,
                 "call_id": a_id,
                 "exten": exten,
-                "login_id": login_id,
-                "direction": info.get("direction", "internal"),
-                "peer": info["callee"],
+                "login_id": owner,
+                "direction": direction,
+                "peer": peer,
                 "started": time.time(),
                 "bridge_id": bridge.id,
             }
-            log.info("started %s recording: %s", system, name)
+            log.info("started %s recording for %s: %s", system, exten, name)
         except Exception:
             log.exception("failed to start %s recording", system)
 
