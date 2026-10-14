@@ -70,6 +70,17 @@ class Store(context: Context) {
     var checkEvery: Int
         get() = prefs.getInt("check_every", 0)
         set(v) = prefs.edit().putInt("check_every", v).apply()
+    /** Calling: optional phone login typed in by the user. Blank = use what
+     *  the PBX gives (/me/sip). Server is "host" or "host:port" (TLS). */
+    var sipServerOverride: String
+        get() = prefs.getString("sip_server", "") ?: ""
+        set(v) = prefs.edit().putString("sip_server", v).apply()
+    var sipUserOverride: String
+        get() = prefs.getString("sip_user", "") ?: ""
+        set(v) = prefs.edit().putString("sip_user", v).apply()
+    var sipPassOverride: String
+        get() = prefs.getString("sip_pass", "") ?: ""
+        set(v) = prefs.edit().putString("sip_pass", v).apply()
     var notifyAsked: Boolean
         get() = prefs.getBoolean("notify_asked", false)
         set(v) = prefs.edit().putBoolean("notify_asked", v).apply()

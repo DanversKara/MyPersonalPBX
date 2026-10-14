@@ -73,7 +73,8 @@ object Phone {
             503 -> "The PBX couldn't place the call right now."
             else -> ""
         }
-        val raw = listOfNotNull(ei?.phrase?.takeIf { it.isNotBlank() }, message.takeIf { it.isNotBlank() })
+        val raw = listOfNotNull(ei?.phrase?.takeIf { it.isNotBlank() }, message.takeIf { it.isNotBlank() },
+            call.reason?.name?.takeIf { it != "None" }?.let { "reason $it" })
             .distinct().joinToString(" - ")
         return listOf(words, if (code > 0) "SIP $code" else "", raw).filter { it.isNotBlank() }.joinToString(" · ")
     }
@@ -107,7 +108,7 @@ object Phone {
     /** Create / reconfigure the engine for this extension. Main thread. */
     private fun ensure(ctx: Context, sip: SipInfo): Core {
         appCtx = ctx.applicationContext
-        val key = "${sip.username}@${sip.domain}:${sip.port}"
+        val key = "${sip.username}@${sip.domain}:${sip.port}#${sip.password.hashCode()}"
         val f = Factory.instance()
         val c = core ?: f.createCore(null, null, ctx.applicationContext).also { c ->
             c.addListener(listener)

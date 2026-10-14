@@ -115,6 +115,11 @@ fun InCallScreen(c: CallUi) {
             if (c.problem.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
                 Text(c.problem, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+                TextButton({
+                    clip.setText(androidx.compose.ui.text.AnnotatedString(
+                        "My Phone ${org.ownpbx.myphone.BuildConfig.VERSION_NAME} call to ${c.number}: ${c.status}\n${c.problem}"))
+                }) { Icon(Icons.Filled.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy details") }
             }
             Spacer(Modifier.weight(1f))
             if (c.ended) {

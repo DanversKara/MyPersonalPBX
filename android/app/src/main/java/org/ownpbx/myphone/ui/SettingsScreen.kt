@@ -251,6 +251,12 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         }
         ClickRow(Icons.Filled.Lock, "Lock now") { model.lock() }
 
+        Section("Calling")
+        val customSip = store.sipUserOverride.isNotBlank() || store.sipServerOverride.isNotBlank() || store.sipPassOverride.isNotBlank()
+        ClickRow(Icons.Filled.Call, "Phone login",
+            if (customSip) "Custom: ${store.sipUserOverride.ifBlank { "(PBX's username)" }} @ ${store.sipServerOverride.ifBlank { "(PBX's server)" }}"
+            else "Automatic (your extension's login from the PBX)") { edit = "sip" }
+
         Section("Account")
         ClickRow(Icons.Filled.Dns, "Server", store.server) {}
         ClickRow(Icons.Filled.Password, "Change panel password", "Signs out your other phones and browsers") { edit = "pw" }
@@ -284,6 +290,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
             edit = null; savePrefs(it.copy(vm_email = v)) } }
         "block" -> EditDialog("Block a number", "", "Extension or phone number", onDismiss = { edit = null }) { v ->
             edit = null; scope.launch { model.change { it.block(v) }; load() } }
+        "sip" -> SipLoginDialog(model) { edit = null }
         "pw" -> PasswordDialog({ edit = null }) { cur, new ->
             edit = null; scope.launch { if (model.change { it.changePassword(cur, new) }) { model.notice = "Password changed"; load() } } }
     }
@@ -312,4 +319,52 @@ private fun PasswordDialog(onDismiss: () -> Unit, onSave: (String, String) -> Un
         },
         confirmButton = { TextButton({ onSave(cur, new) }, enabled = new.length >= 8 && cur.isNotEmpty()) { Text("Change") } },
         dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
+}
+
+/** Settings > Calling > Phone login: type the server / username / password
+ *  yourself (like Zoiper), or leave blank to use what the PBX provides. */
+@Composable
+private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
+    val st = model.store
+    var server by remember { mutableStateOf(st.sipServerOverride) }
+    var user by remember { mutableStateOf(st.sipUserOverride) }
+    var pass by remember { mutableStateOf(st.sipPassOverride) }
+    var show by remember { mutableStateOf(false) }
+    val pbx = model.sip
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Phone login") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Leave blank to use your extension's login from the PBX. Fill in to use your own, " +
+                    "the same as in Zoiper (TLS + SRTP).", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(server, { server = it.trim() }, singleLine = true,
+                    label = { Text("Server (host or host:port)") },
+                    placeholder = { Text(pbx?.domain?.takeIf { it.isNotBlank() }?.let { "$it:${pbx.port}" } ?: "phone.example.com:5061") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                OutlinedTextField(user, { user = it.trim() }, singleLine = true, label = { Text("Username") },
+                    placeholder = { Text(pbx?.username?.ifBlank { null } ?: "") })
+                OutlinedTextField(pass, { pass = it }, singleLine = true, label = { Text("Password") },
+                    visualTransformation = if (show) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton({ show = !show }) { Icon(if (show) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show") }
+                    })
+            }
+        },
+        confirmButton = {
+            TextButton({
+                st.sipServerOverride = server; st.sipUserOverride = user; st.sipPassOverride = pass
+                model.sip = null; model.notice = "Phone login saved"; onDone()
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                TextButton({
+                    st.sipServerOverride = ""; st.sipUserOverride = ""; st.sipPassOverride = ""
+                    model.sip = null; model.notice = "Using your PBX's phone login"; onDone()
+                }) { Text("Use automatic") }
+                TextButton(onDone) { Text("Cancel") }
+            }
+        })
 }

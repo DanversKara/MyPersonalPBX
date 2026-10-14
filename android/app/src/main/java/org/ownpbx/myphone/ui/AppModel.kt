@@ -133,6 +133,9 @@ class AppModel(val store: Store) {
         if (e.status == 401) signedOut("You were signed out. Please sign in again.")
         else notice = e.message
         null
+    } catch (e: kotlinx.serialization.SerializationException) {
+        notice = "The PBX answered with something this app version doesn't understand (${e.message?.take(80)})."
+        null
     } catch (e: Exception) {
         notice = "Can't reach your PBX. Check your connection."
         null
