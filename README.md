@@ -638,6 +638,13 @@ small "My Phone is connected" notification), every 30 s, 1 min or 5 min, or
 every 15 min to save battery. If Android's battery saver pauses the app, use
 **Let it run in the background**.
 
+**Missed calls** notify with who called and when ("Missed call · (555)
+123-4567 · 2:14 PM"), including calls that rolled to voicemail. If the app
+rang and nobody answered, it notifies the moment the ringing stops; a call
+picked up on another phone doesn't count. If the phone was offline and never
+rang, the notification comes as soon as it reaches the PBX again, with the
+time of each call.
+
 **PIN lock:** 6 or 12 digits, optional fingerprint, lock immediately or after
 1 / 5 / 15 minutes away (even if Android closed the app in between), screens
 hidden from screenshots (switchable). Coming back through the PIN keeps your

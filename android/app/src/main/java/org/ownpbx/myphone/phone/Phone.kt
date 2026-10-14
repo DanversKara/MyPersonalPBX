@@ -70,8 +70,14 @@ object Phone {
                 Call.State.Error -> cur.copy(status = "Call failed", ended = true, problem = describe(call, message))
                 Call.State.End, Call.State.Released -> if (cur.ended) cur else when {
                     cur.connectedAt > 0 -> cur.copy(status = "Call ended", ended = true)
-                    // Caller hung up / someone else answered: just a missed call, no error.
-                    cur.incoming -> cur.copy(status = "Missed call", ended = true)
+                    // Another phone on the extension picked up (the PBX says so in the CANCEL).
+                    cur.incoming && elsewhere(call) -> cur.copy(status = "Answered on another phone", ended = true)
+                    // Caller hung up, or it rang out to voicemail: a missed call, no error.
+                    cur.incoming -> {
+                        val at = (call.callLog?.startDate ?: 0L).let { if (it > 0) it * 1000 else System.currentTimeMillis() }
+                        appCtx?.let { org.ownpbx.myphone.Notifier.missedNow(it, cur.number, cur.name, at) }
+                        cur.copy(status = "Missed call", ended = true)
+                    }
                     else -> cur.copy(status = endedBeforeAnswer(call), ended = true, problem = describe(call, message))
                 }
                 else -> cur
@@ -109,6 +115,11 @@ object Phone {
             status = "Incoming call", incoming = true)
         if (ctx != null) IncomingNotice.show(ctx, number, ui?.name.orEmpty())
     }
+
+    private fun elsewhere(call: Call): Boolean = try {
+        val s = call.callLog?.status
+        s == Call.Status.AcceptedElsewhere || s == Call.Status.DeclinedElsewhere
+    } catch (_: Exception) { false }
 
     private fun describe(call: Call, message: String): String {
         val ei = call.errorInfo
