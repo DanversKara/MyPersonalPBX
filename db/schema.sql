@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS logins (
   user_record INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for user recording
   user_wants_record INTEGER NOT NULL DEFAULT 0, -- user's own "record my calls" wish
   vm_email TEXT NOT NULL DEFAULT '',
+  sso_subject TEXT NOT NULL DEFAULT '',     -- single sign-on: "<issuer>|<subject>" linked to this login
   max_messages INTEGER NOT NULL DEFAULT 500,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
