@@ -581,22 +581,27 @@ Linphone, is GPL-3.0) for every user. No ads, no tracking, **no Google Play
 Services or Firebase**. Android 8.0 or newer.
 
 <p>
-<img src="docs/screenshots/android/01-pin-lock.png" width="180" alt="PIN lock">
-<img src="docs/screenshots/android/02-messages.png" width="180" alt="Messages">
-<img src="docs/screenshots/android/03-chat.png" width="180" alt="A conversation">
-<img src="docs/screenshots/android/04-chat-menu.png" width="180" alt="Conversation menu: block, delete">
+<a href="docs/screenshots/android/01-messages.png"><img src="docs/screenshots/android/01-messages.png" width="120" alt="Messages"></a>
+<a href="docs/screenshots/android/02-new-message.png"><img src="docs/screenshots/android/02-new-message.png" width="120" alt="Start a new text"></a>
+<a href="docs/screenshots/android/03-calls.png"><img src="docs/screenshots/android/03-calls.png" width="120" alt="Calls: All, Missed, Hidden"></a>
+<a href="docs/screenshots/android/04-calls-hidden.png"><img src="docs/screenshots/android/04-calls-hidden.png" width="120" alt="Hidden calls, with Undo"></a>
 </p>
+
 <p>
-<img src="docs/screenshots/android/05-calls.png" width="180" alt="Calls: All, Missed, Hidden">
-<img src="docs/screenshots/android/06-call-menu.png" width="180" alt="Call menu: text, hide, block">
-<img src="docs/screenshots/android/07-voicemail.png" width="180" alt="Voicemail">
-<img src="docs/screenshots/android/08-voicemail-player.png" width="180" alt="Voicemail player">
+<a href="docs/screenshots/android/05-voicemail.png"><img src="docs/screenshots/android/05-voicemail.png" width="120" alt="Voicemail"></a>
+<a href="docs/screenshots/android/06-settings.png"><img src="docs/screenshots/android/06-settings.png" width="120" alt="Settings: do not disturb, forwarding, texts"></a>
+<a href="docs/screenshots/android/07-settings-notifications.png"><img src="docs/screenshots/android/07-settings-notifications.png" width="120" alt="Settings: notifications"></a>
+<a href="docs/screenshots/android/08-settings-calling.png"><img src="docs/screenshots/android/08-settings-calling.png" width="120" alt="Settings: incoming calls, phone login, account"></a>
 </p>
+
 <p>
-<img src="docs/screenshots/android/09-settings-calls-texts.png" width="180" alt="Settings: calls and texts">
-<img src="docs/screenshots/android/10-settings-security.png" width="180" alt="Settings: blocked numbers, app security">
-<img src="docs/screenshots/android/11-settings-account.png" width="180" alt="Settings: lock, account">
+<a href="docs/screenshots/android/09-dial-pad.png"><img src="docs/screenshots/android/09-dial-pad.png" width="120" alt="Dial pad"></a>
+<a href="docs/screenshots/android/10-in-call.png"><img src="docs/screenshots/android/10-in-call.png" width="120" alt="On a call: mute, keypad, speaker"></a>
+<a href="docs/screenshots/android/11-incoming-notification.png"><img src="docs/screenshots/android/11-incoming-notification.png" width="120" alt="Incoming call notification"></a>
+<a href="docs/screenshots/android/12-incoming-call.png"><img src="docs/screenshots/android/12-incoming-call.png" width="120" alt="Incoming call screen"></a>
 </p>
+
+<sub>Tap a screenshot to see it full size.</sub>
 
 *Screenshots from app 0.5; newer versions add the dial pad, Call buttons and
 the Notifications and Calling settings.*
