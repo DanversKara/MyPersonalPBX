@@ -376,6 +376,7 @@ def page(title, body, username="", role="", tab=""):
         <a href="/billing" class="{bill}">Billing</a>
         <a href="/email" class="{email}">Email</a>
         <a href="/network" class="{net}">Network</a>
+        <a href="/sso" class="{sso}">Sign-on</a>
         <a href="/e911" class="{e911}">E911</a>
         <a href="/reports" class="{rep}">Reports</a>
         <a href="/api-keys" class="{k}">API Keys</a>
@@ -390,6 +391,7 @@ def page(title, body, username="", role="", tab=""):
             bill="on" if tab == "billing" else "",
             email="on" if tab == "email" else "",
             net="on" if tab == "network" else "",
+            sso="on" if tab == "sso" else "",
             e911="on" if tab == "e911" else "",
             grp="on" if tab == "groups" else "",
             rep="on" if tab == "reports" else "",

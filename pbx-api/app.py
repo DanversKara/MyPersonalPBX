@@ -29,6 +29,7 @@ import billing
 import email_ui
 import mailer
 import network_ui
+import sso_ui
 import security
 import e911_ui
 import ring_groups_ui
@@ -116,6 +117,9 @@ def _migrate(c):
     # Backfill wish=0: every user (re-)opts in via Settings -> "Record my calls".
     if "user_wants_record" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN user_wants_record INTEGER NOT NULL DEFAULT 0")
+    # Single sign-on: "<issuer>|<subject>" of the provider account linked to this login.
+    if "sso_subject" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN sso_subject TEXT NOT NULL DEFAULT ''")
     # One-time: the previous build seeded 3 free IVR menus per user; paid
     # plans replace that (no free menus). Only touches the untouched seed.
     done = c.execute("SELECT value FROM kv_settings WHERE key='mig_ivr_free_0'").fetchone()
@@ -582,15 +586,17 @@ def _check_csrf_v1(request: Request):
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page():
-    return page("Login", login_html())
+def login_page(request: Request):
+    if sso_ui.should_auto_redirect(request):
+        return RedirectResponse("/login/oidc", status_code=302)
+    return HTMLResponse(page("Login", sso_ui.login_box(request)))
 
 
 @app.post("/login")
 def login_post(request: Request, username: str = Form(...), password: str = Form(...)):
     ip = client_ip(request)
     if not _login_allowed(ip, username):
-        return HTMLResponse(page("Login", login_html() + "<p style='color:red'>Too many attempts — try again in 15 minutes.</p>"), status_code=429)
+        return HTMLResponse(page("Login", sso_ui.login_box(request, "Too many attempts — try again in 15 minutes.", True)), status_code=429)
     with db() as c:
         u = c.execute("SELECT * FROM logins WHERE username=?",
                       (username,)).fetchone()
@@ -598,7 +604,7 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
     if not u or not pw_ok or not u["enabled"]:
         _log_signin(request, username, False)
         _login_failed(ip, username)
-        return HTMLResponse(page("Login", login_html() + "<p style='color:red'>Invalid credentials</p>"), status_code=401)
+        return HTMLResponse(page("Login", sso_ui.login_box(request, "Invalid credentials", True)), status_code=401)
     _log_signin(request, username, True)
     tok = _new_session(u)
     dest = "/" if u["role"] == "admin" else "/ucp"
@@ -610,7 +616,8 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
 @app.get("/logout")
 def logout_page(request: Request):
     _sessions.pop(request.cookies.get("pbx_session") or "", None)
-    return RedirectResponse("/login")
+    # ?out=1: don't bounce straight back into single sign-on.
+    return RedirectResponse("/login?out=1")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1045,6 +1052,9 @@ async def login_edit_save(request: Request, lid: str,
                 sets.append("pwhash=?"); vals.append(bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode())
             if sip_secret:
                 sets.append("sip_secret=?"); vals.append(sip_secret)
+            renamed = c.execute("SELECT 1 FROM logins WHERE id=? AND username != ?", (lid, username)).fetchone()
+            if renamed:
+                sets.append("sso_subject=?"); vals.append("")   # a renamed login is a different person
             vals.append(lid)
             c.execute(f"UPDATE logins SET {', '.join(sets)} WHERE id=?", vals)
         c.commit()
@@ -3904,7 +3914,7 @@ _PIN_EXEMPT_EXACT = frozenset({
     "/api/v1/safety/pin/status", "/api/v1/safety/pin/lock",
     "/login", "/logout", "/auth/login", "/auth/logout",
 })
-_PIN_EXEMPT_PREFIX = ("/ucp", "/hooks/", "/invite/", "/stripe/webhook")
+_PIN_EXEMPT_PREFIX = ("/ucp", "/hooks/", "/invite/", "/stripe/webhook", "/login/")
 
 
 def _pin_required_html(s: dict) -> str:
@@ -3979,6 +3989,7 @@ ivr_ui.install(_sys.modules[__name__])
 billing.install(_sys.modules[__name__])
 email_ui.install(_sys.modules[__name__])
 network_ui.install(_sys.modules[__name__])
+sso_ui.install(_sys.modules[__name__])
 security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])

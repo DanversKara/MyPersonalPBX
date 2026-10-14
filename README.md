@@ -517,6 +517,25 @@ lockouts, kill switch / lock / E911 / recording changes, user reports). Every
 Remote-access domain and TLS port, office server address, Cloudflare dynamic
 DNS (status, IP history), and panel access from the internet.
 
+### Sign-on
+Single sign-on for the **web panel** through an OpenID Connect provider you
+already run (Authentik, Keycloak, Authelia…). The login page gets a
+**Sign in with …** button above the password form. Options: go straight to
+the provider, or hide the password form (`/login?password=1` always brings it
+back, so a provider that is down never locks you out).
+
+Accounts aren't created by sign-on: add the login (with its extension) first.
+The first sign-in links it by **username** (the provider's username is the
+PBX login name) or by **email** (the login's notification email, optionally
+only if the provider verified it); after that it stays linked to that
+provider account until you unlink it. Admin pages stay office-network only,
+and admins can be kept to password sign-in. The My Phone app is not affected.
+
+In Authentik: create an OAuth2/OpenID provider (Confidential), set the
+redirect URI shown on the page (`https://<your panel>/login/oidc/callback`),
+create an application for it, then copy the client ID, client secret and
+**OpenID Configuration Issuer** into **Admin → Sign-on**.
+
 ### E911
 ![E911](docs/screenshots/17-e911.png)
 See section 12.
