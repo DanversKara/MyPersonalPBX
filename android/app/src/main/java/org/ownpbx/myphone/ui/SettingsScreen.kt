@@ -344,8 +344,25 @@ private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
         title = { Text("Phone login") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Scan the phone login QR from My Phone > App on the web, or type it like in Zoiper. " +
-                    "Leave blank to use your extension's login from the PBX.", style = MaterialTheme.typography.bodySmall)
+                Text("Get it from your PBX, scan the phone login QR (My Phone > App on the web), or type it like in Zoiper.",
+                    style = MaterialTheme.typography.bodySmall)
+                // One tap: the extension's phone login straight from the PBX (no QR needed).
+                FilledTonalButton({
+                    model.bg.launch {
+                        val sip = model.guard { it.sip() }
+                        when {
+                            sip == null -> {}
+                            !sip.enabled -> model.notice = sip.reason.ifEmpty { "Your PBX has no phone login for you yet." }
+                            else -> {
+                                model.sipDraft = org.ownpbx.myphone.data.SipLogin("${sip.domain}:${sip.port}", sip.username, sip.password)
+                                show = true
+                                model.notice = "Filled in from your PBX. Check it and tap Save."
+                            }
+                        }
+                    }
+                }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.CloudDownload, null); Spacer(Modifier.width(8.dp)); Text("Get from my PBX")
+                }
                 OutlinedButton({
                     try {
                         model.openingOwnScreen()

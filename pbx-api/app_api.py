@@ -557,6 +557,18 @@ def sip_link(server: str, user: str, password: str) -> str:
     return f"{PAIR_SCHEME}://sip?" + urllib.parse.urlencode({"s": server, "u": user, "p": password})
 
 
+APP_PACKAGE = "org.ownpbx.myphone"
+
+
+def android_link(link: str) -> str:
+    """myphone://host?q -> intent://host?q#Intent;scheme=myphone;package=...;end
+
+    Chrome on Android ignores many plain custom-scheme links; an intent: URL
+    is handed straight to the installed app (Firefox understands it too)."""
+    rest = link.split("://", 1)[1]
+    return f"intent://{rest}#Intent;scheme={PAIR_SCHEME};package={APP_PACKAGE};end"
+
+
 def pair_qr_svg(server: str, code: str) -> str:
     """Inline SVG QR code for the pairing link, or "" if segno isn't installed."""
     return qr_svg(pair_link(server, code), "Pairing QR code")
@@ -622,7 +634,7 @@ def app_page(request: Request, code: str = "", sip: bool = False):
                  + ("<b>Scan this with the My Phone app</b> (Scan QR code on the sign-in screen) "
                     "or with your phone's camera.<br><br>" if qr else "")
                  # Same phone as this page? The link opens the app with both filled in.
-                 + f"<a class='btn' href='{esc(pair_link(server, code))}' style='display:inline-block;"
+                 + f"<a class='btn' href='{esc(android_link(pair_link(server, code)))}' style='display:inline-block;"
                  f"text-decoration:none;text-align:center'>Open in the My Phone app</a>"
                  f"<div class='muted' style='font-size:13px;margin-top:4px'>(when this page is open on the phone itself)</div>"
                  f"<br><br>Or type it in (tap to copy):<br>"
@@ -646,7 +658,7 @@ def app_page(request: Request, code: str = "", sip: bool = False):
                    f"{qr_html}<div style='flex:1;min-width:240px'>"
                    "<b>Phone login for calls.</b> In the app: Settings &gt; Calling &gt; Phone login &gt; Scan QR code"
                    " (or scan it with the phone's camera).<br><br>"
-                   f"<a class='btn' href='{esc(link)}' style='display:inline-block;text-decoration:none'>"
+                   f"<a class='btn' href='{esc(android_link(link))}' style='display:inline-block;text-decoration:none'>"
                    "Open in the My Phone app</a><br><br>"
                    f"Server: <button type='button' data-copy='{esc(server)}' style='{COPY_BTN};font-family:monospace'>{esc(server)}</button>"
                    " <span class='copied muted'></span><br>"
