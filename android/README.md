@@ -48,6 +48,12 @@ Services, no Firebase, no analytics.
   so other phones on the extension are unaffected. Mute, speaker, keypad
   (DTMF), hang up; an "On a call" notification keeps the call going in the
   background. Incoming calls are next.
+- Phone login: Settings > Calling > Phone login (scan the QR from My Phone >
+  App > "Show phone login QR", `myphone://sip?s=&u=&p=`, or type it). A
+  camera-opened phone-login link asks before it's used.
+- The open tab, chat, Settings dialog and a half-typed phone login survive
+  the PIN lock (e.g. switching to a password manager); the app's own QR
+  scanner doesn't count as leaving the app.
 - "Lock the app after N minutes" survives Android closing the app in the
   background (the time is stored, not kept in memory); a reboot always locks.
 - Settings with switches: DND, forwarding, ring time, record my calls,

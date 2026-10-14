@@ -46,6 +46,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="myphone" android:host="pair" />
+                <!-- Phone login QR (My Phone > App > Show phone login QR); asks before using it. -->
+                <data android:scheme="myphone" android:host="sip" />
             </intent-filter>
         </activity>
         <service

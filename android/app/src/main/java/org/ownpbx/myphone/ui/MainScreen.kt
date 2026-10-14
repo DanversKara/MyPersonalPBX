@@ -55,8 +55,9 @@ fun applySipOverrides(st: org.ownpbx.myphone.data.Store, pbx: org.ownpbx.myphone
 
 @Composable
 fun MainScreen(model: AppModel) {
-    var tab by rememberSaveable { mutableStateOf(Tab.Messages) }
-    var chatWith by rememberSaveable { mutableStateOf<String?>(null) }
+    // Kept in the model so they survive the PIN lock (switching apps).
+    var tab by model::tab
+    var chatWith by model::chatWith
     var overview by remember { mutableStateOf<Overview?>(null) }
     val snack = remember { SnackbarHostState() }
 
@@ -150,6 +151,23 @@ fun MainScreen(model: AppModel) {
         }
     }
     LaunchedEffect(tab) { if (tab == Tab.Calls) markCallsSeen() }
+
+    // A phone-login link opened from the camera: confirm before using it.
+    model.pendingSip?.let { login ->
+        AlertDialog(
+            onDismissRequest = { model.pendingSip = null },
+            title = { Text("Use this phone login?") },
+            text = { Text("Calls from this app will use\n\nServer: ${login.server}\nUsername: ${login.user}\n\n" +
+                "Only say yes if this QR code came from your own My Phone page.") },
+            confirmButton = {
+                TextButton({
+                    model.store.sipServerOverride = login.server; model.store.sipUserOverride = login.user
+                    model.store.sipPassOverride = login.pass; model.sip = null; model.pendingSip = null
+                    model.notice = "Phone login saved"
+                }) { Text("Use it") }
+            },
+            dismissButton = { TextButton({ model.pendingSip = null }) { Text("Cancel") } })
+    }
 
     // A call in progress covers everything; then the dial pad.
     org.ownpbx.myphone.phone.Phone.ui?.let { c ->

@@ -71,7 +71,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
     val store = model.store
     var s by remember { mutableStateOf<Settings?>(null) }
     var devices by remember { mutableStateOf<List<Device>>(emptyList()) }
-    var edit by remember { mutableStateOf<String?>(null) }
+    var edit by model::settingsDialog   // survives the PIN lock
     var changingPin by remember { mutableStateOf(false) }
     var recordAsk by remember { mutableStateOf(false) }
     var bio by remember { mutableStateOf(store.biometric) }
@@ -321,30 +321,50 @@ private fun PasswordDialog(onDismiss: () -> Unit, onSave: (String, String) -> Un
         dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
 }
 
-/** Settings > Calling > Phone login: type the server / username / password
- *  yourself (like Zoiper), or leave blank to use what the PBX provides. */
+/** Settings > Calling > Phone login: scan the phone-login QR (My Phone >
+ *  App > Show phone login QR), or type server / username / password like in
+ *  Zoiper; blank = use what the PBX provides. What's typed is kept in the
+ *  model, so going to a password manager (and back through the PIN) keeps it. */
 @Composable
 private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
     val st = model.store
-    var server by remember { mutableStateOf(st.sipServerOverride) }
-    var user by remember { mutableStateOf(st.sipUserOverride) }
-    var pass by remember { mutableStateOf(st.sipPassOverride) }
+    val draft = model.sipDraft ?: org.ownpbx.myphone.data.SipLogin(st.sipServerOverride, st.sipUserOverride, st.sipPassOverride)
+        .also { model.sipDraft = it }
     var show by remember { mutableStateOf(false) }
     val pbx = model.sip
+    fun close() { model.sipDraft = null; onDone() }
+    val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { r ->
+        val text = r.contents ?: return@rememberLauncherForActivityResult
+        val login = org.ownpbx.myphone.data.PairLink.parseSip(text)
+        if (login == null) model.notice = "That isn't a phone login QR. Use My Phone > App > Show phone login QR."
+        else { model.sipDraft = login; model.notice = "Scanned. Check it and tap Save." }
+    }
     AlertDialog(
-        onDismissRequest = onDone,
+        onDismissRequest = ::close,
         title = { Text("Phone login") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Leave blank to use your extension's login from the PBX. Fill in to use your own, " +
-                    "the same as in Zoiper (TLS + SRTP).", style = MaterialTheme.typography.bodySmall)
-                OutlinedTextField(server, { server = it.trim() }, singleLine = true,
+                Text("Scan the phone login QR from My Phone > App on the web, or type it like in Zoiper. " +
+                    "Leave blank to use your extension's login from the PBX.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton({
+                    try {
+                        model.openingOwnScreen()
+                        scanner.launch(com.journeyapps.barcodescanner.ScanOptions()
+                            .setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
+                            .setPrompt("Scan the phone login QR from My Phone > App")
+                            .setBeepEnabled(false).setOrientationLocked(false))
+                    } catch (e: Exception) { model.notice = "The scanner couldn't start." }
+                }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.QrCodeScanner, null); Spacer(Modifier.width(8.dp)); Text("Scan QR code")
+                }
+                OutlinedTextField(draft.server, { model.sipDraft = draft.copy(server = it.trim()) }, singleLine = true,
                     label = { Text("Server (host or host:port)") },
                     placeholder = { Text(pbx?.domain?.takeIf { it.isNotBlank() }?.let { "$it:${pbx.port}" } ?: "phone.example.com:5061") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                OutlinedTextField(user, { user = it.trim() }, singleLine = true, label = { Text("Username") },
-                    placeholder = { Text(pbx?.username?.ifBlank { null } ?: "") })
-                OutlinedTextField(pass, { pass = it }, singleLine = true, label = { Text("Password") },
+                OutlinedTextField(draft.user, { model.sipDraft = draft.copy(user = it.trim()) }, singleLine = true,
+                    label = { Text("Username") }, placeholder = { Text(pbx?.username?.ifBlank { null } ?: "") })
+                OutlinedTextField(draft.pass, { model.sipDraft = draft.copy(pass = it) }, singleLine = true,
+                    label = { Text("Password") },
                     visualTransformation = if (show) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     trailingIcon = {
@@ -354,17 +374,17 @@ private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
         },
         confirmButton = {
             TextButton({
-                st.sipServerOverride = server; st.sipUserOverride = user; st.sipPassOverride = pass
-                model.sip = null; model.notice = "Phone login saved"; onDone()
+                st.sipServerOverride = draft.server; st.sipUserOverride = draft.user; st.sipPassOverride = draft.pass
+                model.sip = null; model.notice = "Phone login saved"; close()
             }) { Text("Save") }
         },
         dismissButton = {
             Row {
                 TextButton({
                     st.sipServerOverride = ""; st.sipUserOverride = ""; st.sipPassOverride = ""
-                    model.sip = null; model.notice = "Using your PBX's phone login"; onDone()
+                    model.sip = null; model.notice = "Using your PBX's phone login"; close()
                 }) { Text("Use automatic") }
-                TextButton(onDone) { Text("Cancel") }
+                TextButton(::close) { Text("Cancel") }
             }
         })
 }
