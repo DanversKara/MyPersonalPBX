@@ -56,6 +56,12 @@ import java.util.concurrent.TimeUnit
     val this_device: Boolean = false,
 )
 @Serializable data class Devices(val devices: List<Device> = emptyList())
+@Serializable data class SipInfo(
+    val enabled: Boolean = false, val reason: String = "", val exten: String = "", val display_name: String = "",
+    val username: String = "", val password: String = "", val domain: String = "", val port: Int = 5061,
+    val codecs: List<String> = listOf("PCMU", "PCMA", "G722"),
+)
+@Serializable data class WaitResp(val msg: Long = 0, val call: Long = 0, val vm: Long = 0, val changed: Boolean = false)
 @Serializable data class Result(val ok: Boolean = false, val code: String = "", val message: String = "")
 
 /** HTTP 401 means the token is gone (signed out elsewhere / expired). */
@@ -71,6 +77,8 @@ class Api(base: String, private val token: String?) {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
+        /** For /me/wait, which holds the request open up to ~55 s. */
+        val httpLong: OkHttpClient = http.newBuilder().readTimeout(75, TimeUnit.SECONDS).build()
 
         fun normalizeServer(s: String): String {
             var u = s.trim().trimEnd('/')
@@ -129,6 +137,19 @@ class Api(base: String, private val token: String?) {
     suspend fun logout() { exec(Request.Builder().url(url("/app/logout")).post(ByteArray(0).toRequestBody())) }
 
     // ---- reads
+    /** Long poll: returns when something newer than these ids exists, or after [timeout] s. */
+    suspend fun wait(msg: Long, call: Long, vm: Long, timeout: Int = 50): WaitResp = withContext(Dispatchers.IO) {
+        val u = url("/me/wait").toHttpUrl().newBuilder()
+            .addQueryParameter("msg", msg.toString()).addQueryParameter("call", call.toString())
+            .addQueryParameter("vm", vm.toString()).addQueryParameter("timeout", timeout.toString()).build()
+        val b = Request.Builder().url(u)
+        authHeaders().forEach { (k, v) -> b.header(k, v) }
+        httpLong.newCall(b.build()).execute().use { r ->
+            val text = r.body?.string() ?: ""
+            if (!r.isSuccessful) throw ApiException(r.code, errorText(text, r.code))
+            json.decodeFromString<WaitResp>(text)
+        }
+    }
     suspend fun overview(): Overview = get("/me/overview")
     suspend fun threads(): Threads = get("/me/threads")
     suspend fun thread(peer: String): ThreadResp = get("/me/threads/${java.net.URLEncoder.encode(peer, "UTF-8")}", mapOf("limit" to 300))
@@ -137,6 +158,8 @@ class Api(base: String, private val token: String?) {
     suspend fun calls(view: String): Calls = get("/me/calls", mapOf("view" to view, "missed" to if (view == "missed") 1 else 0))
     suspend fun voicemail(folder: String): Vms = get("/me/voicemail", mapOf("folder" to folder))
     suspend fun settings(): Settings = get("/me/settings")
+    /** Phone settings for the built-in phone (edge TLS + SRTP). */
+    suspend fun sip(): SipInfo = get("/me/sip")
     suspend fun devices(): Devices = get("/me/devices")
     fun voicemailAudioUrl(id: Long) = url("/me/voicemail/$id/audio")
 

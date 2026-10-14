@@ -3,9 +3,17 @@
 
 package org.ownpbx.myphone.ui
 
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.ownpbx.myphone.data.Api
 import org.ownpbx.myphone.data.ApiException
 import org.ownpbx.myphone.data.Store
@@ -20,21 +28,99 @@ class AppModel(val store: Store) {
     /** Server + code from a pairing link the phone's camera opened; the
      *  sign-in screen fills them in (the user still taps Connect). */
     var pendingPair by mutableStateOf<org.ownpbx.myphone.data.PairInfo?>(null)
+    /** Where a tapped notification wants to go: "messages" | "calls" | "voicemail", plus a chat peer. */
+    var openTarget by mutableStateOf<Pair<String, String?>?>(null)
+    /** A screen asked to call this number (MainScreen handles mic permission + the call). */
+    var callRequest by mutableStateOf<String?>(null)
+    /** Dial pad open (with this number pre-filled); null = closed. */
+    var dialPad by mutableStateOf<String?>(null)
+    /** Phone settings from the PBX, fetched on the first call. */
+    var sip: org.ownpbx.myphone.data.SipInfo? = null
+
+    /** Set by the activity: stop background checks and clear notifications. */
+    var onSignedOut: () -> Unit = {}
     var onSecureChanged: () -> Unit = {}
+
+    /** Outlives every screen: deletes/hides started here finish even if the
+     *  user switches tabs or leaves the app while the Undo bar is up. (Screen
+     *  scopes are cancelled when the screen goes away, which used to drop the
+     *  change, so deleted voicemail / hidden calls came back.) */
+    val bg = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Items removed on screen while their change is pending ("vm:12",
+     *  "call:5", "conv:8801"). Screens filter these out, so a freshly opened
+     *  screen doesn't flash them back before the server catches up. */
+    var gone by mutableStateOf(setOf<String>())
+
+    /** Show "<text> · Undo"; unless Undo is tapped, run [commit] on the PBX.
+     *  The bar times out on its own so a queued one can't hold a change back. */
+    fun undoable(snack: SnackbarHostState, text: String, keys: Set<String>,
+                 commit: suspend (Api) -> org.ownpbx.myphone.data.Result, after: suspend () -> Unit = {}) {
+        gone = gone + keys
+        bg.launch {
+            val r = withTimeoutOrNull(8_000) {
+                snack.showSnackbar(text, actionLabel = "Undo", duration = SnackbarDuration.Short)
+            }
+            if (r != SnackbarResult.ActionPerformed) {
+                change(commit)
+                after()
+            }
+            gone = gone - keys
+        }
+    }
+
+    /** Run [commit] now (reversible changes like hiding a call), then offer
+     *  Undo, which runs [revert]. */
+    fun doThenUndo(snack: SnackbarHostState, text: String, keys: Set<String>,
+                   commit: suspend (Api) -> org.ownpbx.myphone.data.Result,
+                   revert: suspend (Api) -> org.ownpbx.myphone.data.Result, after: suspend () -> Unit = {}) {
+        gone = gone + keys
+        bg.launch {
+            val ok = change(commit)
+            after()
+            gone = gone - keys
+            if (!ok) return@launch
+            val r = withTimeoutOrNull(8_000) {
+                snack.showSnackbar(text, actionLabel = "Undo", duration = SnackbarDuration.Short)
+            }
+            if (r == SnackbarResult.ActionPerformed) { change(revert); after() }
+        }
+    }
 
     private fun initialStage() = when {
         store.token == null -> Stage.SignIn
         store.pinHash == null -> Stage.SetPin
+        leftRecently() -> Stage.Ready
         else -> Stage.Locked
+    }
+
+    /** True if the user left the app unlocked less than "lock after" ago. */
+    fun leftRecently(): Boolean {
+        val at = store.leftUnlockedAt
+        val now = android.os.SystemClock.elapsedRealtime()
+        return at > 0 && now >= at && now - at < store.lockAfterSec * 1000L
+    }
+
+    /** Called when the app goes to the background. */
+    fun leaving() {
+        store.leftUnlockedAt = if (stage == Stage.Ready) android.os.SystemClock.elapsedRealtime() else 0
+    }
+
+    /** Called when the app comes back: lock if away too long. */
+    fun returning() {
+        if (stage == Stage.Ready && store.leftUnlockedAt > 0 && !leftRecently()) lock()
+        store.leftUnlockedAt = 0
     }
 
     fun api(): Api = store.api()
 
     fun lock() {
         if (stage == Stage.Ready && store.pinHash != null) stage = Stage.Locked
+        store.leftUnlockedAt = 0
     }
 
     fun signedOut(message: String? = null) {
+        onSignedOut()
         store.wipe()
         stage = Stage.SignIn
         notice = message

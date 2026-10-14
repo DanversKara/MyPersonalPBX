@@ -13,6 +13,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import org.ownpbx.myphone.Notifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -75,6 +77,19 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
     var bio by remember { mutableStateOf(store.biometric) }
     var secure by remember { mutableStateOf(store.secureScreen) }
     var lockAfter by remember { mutableIntStateOf(store.lockAfterSec) }
+    var notifyOn by remember { mutableStateOf(store.notifyOn) }
+    var notifyText by remember { mutableStateOf(store.notifyShowText) }
+    val ctx = LocalContext.current
+    var lastCheck by remember { mutableStateOf(store.lastCheckAt to store.lastCheckInfo) }
+    var checking by remember { mutableStateOf(false) }
+    var checkEvery by remember { mutableIntStateOf(store.checkEvery) }
+    val power = ctx.getSystemService(android.os.PowerManager::class.java)
+    var unrestricted by remember { mutableStateOf(power?.isIgnoringBatteryOptimizations(ctx.packageName) == true) }
+    // Re-read after coming back from Android's battery screen.
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        unrestricted = power?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+        onPauseOrDispose {}
+    }
     val scope = rememberCoroutineScope()
 
     suspend fun load() {
@@ -153,6 +168,69 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
             ClickRow(Icons.Filled.PersonAddDisabled, "Block a number") { edit = "block" }
         }
 
+        Section("Notifications")
+        SwitchRow(Icons.Filled.Notifications, "Notifications", "New texts, missed calls and voicemail", notifyOn) {
+            notifyOn = it; store.notifyOn = it
+            if (it) { Notifier.schedule(ctx); org.ownpbx.myphone.LiveService.sync(ctx) } else Notifier.stop(ctx)
+        }
+        var everyMenu by remember { mutableStateOf(false) }
+        Box {
+            ClickRow(Icons.Filled.Speed, "Check for new things",
+                org.ownpbx.myphone.LiveService.describe(checkEvery) +
+                    if (checkEvery < 900) " · shows a small \"Connected\" notification" else "") { if (notifyOn) everyMenu = true }
+            DropdownMenu(everyMenu, { everyMenu = false }) {
+                listOf(0 to "Instant (stays connected)", 30 to "Every 30 seconds", 60 to "Every 1 minute",
+                    300 to "Every 5 minutes", 900 to "Every 15 minutes (saves battery)").forEach { (v, label) ->
+                    DropdownMenuItem({ Text(label) }, {
+                        everyMenu = false; checkEvery = v; store.checkEvery = v
+                        // Restart so the new pace applies now.
+                        ctx.stopService(android.content.Intent(ctx, org.ownpbx.myphone.LiveService::class.java))
+                        org.ownpbx.myphone.LiveService.sync(ctx)
+                    })
+                }
+            }
+        }
+        if (notifyOn && checkEvery < 900 && !unrestricted) {
+            ClickRow(Icons.Filled.BatteryAlert, "Let it run in the background",
+                "Android's battery saver can pause the connection. Tap and choose Allow.") {
+                try {
+                    ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:" + ctx.packageName)))
+                } catch (_: Exception) {
+                    try { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                    catch (_: Exception) {}
+                }
+            }
+        }
+        SwitchRow(Icons.Filled.Sms, "Show text in notifications",
+            "Off: just \"New message\" and who it's from", notifyText, enabled = notifyOn) {
+            notifyText = it; store.notifyShowText = it
+        }
+        ClickRow(Icons.Filled.NotificationsActive, "Send a test notification", "Shows one now, to check sound and pop-ups") {
+            if (!Notifier.test(ctx)) model.notice = "Android is blocking notifications for this app. Turn them on under Sounds and pop-ups."
+        }
+        ClickRow(Icons.Filled.Sync, if (checking) "Checking..." else "Check now",
+            lastCheck.let { (at, info) ->
+                if (at == 0L) "No background check has run yet"
+                else "Last check ${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(at))}: $info"
+            }) {
+            if (!checking) {
+                checking = true
+                model.bg.launch {
+                    try { Notifier.run(ctx.applicationContext, seenOnly = false, force = true) }
+                    catch (e: Exception) { Notifier.record(store, "Couldn't reach the PBX (${e.javaClass.simpleName})") }
+                    lastCheck = store.lastCheckAt to store.lastCheckInfo
+                    checking = false
+                }
+            }
+        }
+        ClickRow(Icons.Filled.Tune, "Sounds and pop-ups", "Android's notification settings for this app") {
+            try {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+            } catch (_: Exception) {}
+        }
+
         Section("App security")
         ClickRow(Icons.Filled.Pin, "Change PIN", "${store.pinLength} digits") { changingPin = true }
         SwitchRow(Icons.Filled.Fingerprint, "Unlock with fingerprint or face", "Your PIN always works too", bio) {
@@ -191,7 +269,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         }
 
         Section("About")
-        ListItem(headlineContent = { Text("My Phone 0.1.0") },
+        ListItem(headlineContent = { Text("My Phone ${org.ownpbx.myphone.BuildConfig.VERSION_NAME}") },
             supportingContent = { Text("Free software (GPL-2.0-or-later). No ads, no tracking, no Google services.") })
         Spacer(Modifier.height(32.dp))
     }

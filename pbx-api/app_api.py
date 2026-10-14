@@ -257,6 +257,42 @@ def me_calls(request: Request, missed: int = 0, view: str = "", before: int = 0,
                       for r in _paged(rows, before, limit)]}
 
 
+def _latest(me) -> dict:
+    """Newest ids the phone cares about: any visible text, a missed call
+    the user hasn't hidden, an Inbox voicemail."""
+    U = M.ucp
+    msgs = U._my_messages(me, limit=1)
+    hidden = _hidden_calls(me["id"])
+    missed = [c["id"] for c in U._my_calls(me, limit=50, missed_only=True) if c["id"] not in hidden]
+    box = U._mailbox(me["id"])
+    vm = 0
+    if box:
+        with M.db() as c:
+            vm = c.execute("SELECT COALESCE(MAX(id), 0) FROM voicemail_messages WHERE mailbox=? AND folder='INBOX'",
+                           (box,)).fetchone()[0]
+    return {"msg": msgs[0]["id"] if msgs else 0, "call": max(missed, default=0), "vm": vm}
+
+
+WAIT_MAX = 55          # under Cloudflare's 100 s idle limit
+WAIT_STEP = 2.0        # seconds between DB looks while waiting
+
+
+async def me_wait(request: Request, msg: int = 0, call: int = 0, vm: int = 0, timeout: int = 50):
+    """Long poll for the app's "Instant" mode: answers as soon as there is a
+    text, missed call or Inbox voicemail newer than the ids given, or after
+    `timeout` seconds. Cheap: a few indexed queries every 2 s per waiting phone."""
+    import asyncio
+    me = _need(request)
+    timeout = max(0, min(int(timeout or 0), WAIT_MAX))
+    deadline = time.monotonic() + timeout
+    while True:
+        cur = await asyncio.to_thread(_latest, me)
+        changed = cur["msg"] > msg or cur["call"] > call or cur["vm"] > vm
+        if changed or time.monotonic() >= deadline or await request.is_disconnected():
+            return cur | {"changed": changed}
+        await asyncio.sleep(WAIT_STEP)
+
+
 def _own_call_ids(me, ids) -> list:
     """Only calls that are in this user's own history."""
     mine = {r["id"] for r in M.ucp._my_calls(me, limit=5000)}
@@ -356,6 +392,25 @@ def me_settings(request: Request):
         "msg_in": bool(mp["msg_in"]), "msg_out": bool(mp["msg_out"]),
         "blocked": M.safety_ui.block_rules(me["id"]),
     }
+
+
+def me_sip(request: Request):
+    """What the app's built-in phone needs to place calls as this extension,
+    through the edge (TLS + SRTP), exactly like a remote Zoiper. Only the
+    signed-in user's own extension; a device token already has full access
+    to that user's My Phone, and the phone secret is theirs."""
+    me = _need(request)
+    rs = M.network_ui.remote_settings()
+    ok = bool(me.get("exten") and me.get("sip_username") and me.get("sip_secret") and rs.get("domain"))
+    reason = ("" if ok else
+              "Your login has no extension." if not me.get("exten") else
+              "Remote calling isn't set up on this PBX yet (Admin > Network: domain)." if not rs.get("domain") else
+              "Your extension has no phone password yet.")
+    return {"enabled": ok, "reason": reason,
+            "exten": me.get("exten") or "", "display_name": me.get("display_name") or "",
+            "username": me.get("sip_username") or "", "password": (me.get("sip_secret") or "") if ok else "",
+            "domain": rs.get("domain") or "", "port": int(rs.get("port") or 5061),
+            "transport": "tls", "srtp": "sdes", "codecs": ["PCMU", "PCMA", "G722"]}
 
 
 def me_devices(request: Request):
@@ -531,13 +586,39 @@ def app_page(request: Request, code: str = ""):
         qr = pair_qr_svg(server, code)
         qr_html = (f"<div style='background:#fff;padding:10px;border-radius:8px;display:inline-block;"
                    f"line-height:0'>{qr}</div>" if qr else "")
+        copy_btn = ("background:none;border:1px dashed currentColor;border-radius:6px;color:inherit;"
+                    "cursor:pointer;padding:2px 8px;font:inherit")
         shown = (f"<div class='flash ok' style='display:flex;gap:20px;align-items:center;flex-wrap:wrap'>"
-                 f"{qr_html}<div>"
+                 f"{qr_html}<div style='flex:1;min-width:240px'>"
                  + ("<b>Scan this with the My Phone app</b> (Scan QR code on the sign-in screen) "
-                    "or with your phone's camera.<br><br>Or type it in:<br>" if qr else "")
-                 + f"Pairing code: <b style='font-size:22px;letter-spacing:3px'>{esc(code)}</b><br>"
-                 f"Server: <code>{esc(server)}</code><br>"
-                 f"Works once, within 5 minutes.</div></div>")
+                    "or with your phone's camera.<br><br>" if qr else "")
+                 # Same phone as this page? The link opens the app with both filled in.
+                 + f"<a class='btn' href='{esc(pair_link(server, code))}' style='display:inline-block;"
+                 f"text-decoration:none;text-align:center'>Open in the My Phone app</a>"
+                 f"<div class='muted' style='font-size:13px;margin-top:4px'>(when this page is open on the phone itself)</div>"
+                 f"<br><br>Or type it in (tap to copy):<br>"
+                 f"Pairing code: <button type='button' data-copy='{esc(code)}' title='Copy'"
+                 f" style='{copy_btn};font-size:22px;font-weight:700;letter-spacing:3px'>{esc(code)}</button>"
+                 f" <span class='copied muted' aria-live='polite'></span><br>"
+                 f"Server: <button type='button' data-copy='{esc(server)}' title='Copy'"
+                 f" style='{copy_btn};font-family:monospace'>{esc(server)}</button>"
+                 f" <span class='copied muted' aria-live='polite'></span><br>"
+                 f"Works once, within 5 minutes.</div></div>"
+                 """<script>
+document.querySelectorAll('[data-copy]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = b.getAttribute('data-copy'), note = b.nextElementSibling;
+    function say(ok) { if (note) { note.textContent = ok ? 'Copied' : 'Select and copy it'; setTimeout(function () { note.textContent = ''; }, 2000); } }
+    function fallback() {
+      var a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', '');
+      a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} a.remove(); say(ok);
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(function () { say(true); }, fallback);
+    else fallback();
+  });
+});
+</script>""")
     body = f"""{shown}
 <p>The My Phone app for Android keeps you signed in for {DEVICE_TTL_DAYS} days after you last used it.
 Changing your password signs out every phone.</p>
@@ -589,6 +670,8 @@ def install(app_module):
     app.get("/api/v1/me/calls")(me_calls)
     app.post("/api/v1/me/calls/hide")(me_calls_hide)
     app.post("/api/v1/me/calls/seen")(me_calls_seen)
+    app.get("/api/v1/me/wait")(me_wait)
+    app.get("/api/v1/me/sip")(me_sip)
     app.get("/api/v1/me/voicemail")(me_voicemail)
     app.get("/api/v1/me/voicemail/{msg_id}/audio")(me_vm_audio)
     app.get("/api/v1/me/recordings")(me_recordings)

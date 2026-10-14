@@ -13,11 +13,13 @@ android {
         applicationId = "org.ownpbx.myphone"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.3.1"
+        versionCode = 13
+        versionName = "0.6.0"
         val defaultServer = (project.findProperty("myphone.defaultServer") as String?).orEmpty()
             .replace("\\", "").replace("\"", "")
         buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
+        // Phones only (keeps the APK smaller; Linphone ships native code per ABI).
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {
@@ -49,6 +51,16 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.5")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.biometric:biometric:1.1.0")
+    // biometric 1.1.0 pulls in fragment 1.2.5, whose FragmentActivity rejects the
+    // Activity Result API's request codes ("Can only use lower 16 bits"), which
+    // crashed Scan QR code with IllegalArgumentException. Use a current one.
+    implementation("androidx.fragment:fragment-ktx:1.8.3")
+    // Background checks for notifications (AndroidX, no Play Services).
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Built-in phone: Linphone SDK, voice-only build (GPL-3.0; the app as a
+    // whole is GPL-2.0-or-later, which allows combining with GPL-3.0).
+    implementation("org.linphone.no-video:linphone-sdk-android:5.4.128")
+    implementation("androidx.media:media:1.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // QR scanning for pairing: ZXing (Apache-2.0), no Google Play Services.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

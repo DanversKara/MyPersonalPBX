@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.ownpbx.myphone.Notifier
 import org.ownpbx.myphone.data.ApiException
 import org.ownpbx.myphone.data.Vm
 import java.io.File
@@ -38,7 +39,6 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
     var folder by rememberSaveable { mutableStateOf("INBOX") }
     var items by remember { mutableStateOf<List<Vm>?>(null) }
     var selected by remember { mutableStateOf(setOf<Long>()) }
-    var hidden by remember { mutableStateOf(setOf<Long>()) }
     var openId by remember { mutableStateOf<Long?>(null) }
     var state by remember { mutableStateOf(PlayState.Idle) }
     var errorText by remember { mutableStateOf("") }
@@ -51,7 +51,12 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
     val scope = rememberCoroutineScope()
     val cacheDir = remember { File(ctx.cacheDir, "voicemail").apply { mkdirs() } }
 
-    suspend fun refresh() { model.guard { it.voicemail(folder) }?.let { items = it.voicemail } }
+    suspend fun refresh() {
+        model.guard { it.voicemail(folder) }?.let { r ->
+            items = r.voicemail
+            if (folder == "INBOX") Notifier.seen(model.store, vmId = r.voicemail.maxOfOrNull { it.id } ?: 0)
+        }
+    }
     LaunchedEffect(folder) { items = null; selected = emptySet(); refresh() }
 
     fun release() {
@@ -131,29 +136,27 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
 
     fun delete(ids: Set<Long>) {
         if (openId in ids) close()
-        hidden = hidden + ids; selected = emptySet()
-        scope.launch {
-            val r = snack.showSnackbar(if (ids.size == 1) "Voicemail deleted" else "${ids.size} voicemails deleted",
-                actionLabel = "Undo", duration = SnackbarDuration.Short)
-            if (r != SnackbarResult.ActionPerformed) {
-                if (model.change { it.deleteVoicemail(ids.toList(), folder) }) ids.forEach { File(cacheDir, "$it.wav").delete() }
-                refresh()
-            }
-            hidden = hidden - ids
-        }
+        selected = emptySet()
+        val inFolder = folder
+        model.undoable(snack, if (ids.size == 1) "Voicemail deleted" else "${ids.size} voicemails deleted",
+            ids.map { "vm:$it" }.toSet(),
+            commit = { api ->
+                api.deleteVoicemail(ids.toList(), inFolder).also { r ->
+                    if (r.ok) ids.forEach { File(cacheDir, "$it.wav").delete() }
+                }
+            },
+            after = { refresh() })
     }
 
     fun moveTo(v: Vm, to: String) {
         if (openId == v.id) close()
-        hidden = hidden + v.id
-        scope.launch {
-            model.change { it.moveVoicemail(v.id, to) }
-            snack.showSnackbar(if (to == "Old") "Moved to Old" else "Moved to New")
-            refresh(); hidden = hidden - v.id
-        }
+        model.doThenUndo(snack, if (to == "Old") "Moved to Old" else "Moved to New", setOf("vm:${v.id}"),
+            commit = { it.moveVoicemail(v.id, to) },
+            revert = { it.moveVoicemail(v.id, if (to == "Old") "INBOX" else "Old") },
+            after = { refresh() })
     }
 
-    val shown = items?.filter { it.id !in hidden }
+    val shown = items?.filter { "vm:${it.id}" !in model.gone }
 
     Scaffold(modifier = modifier, topBar = {
         if (selected.isNotEmpty()) TopAppBar(
@@ -247,6 +250,7 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
                                     },
                                     onRetry = { File(cacheDir, "${v.id}.wav").delete(); open(v) },
                                     onText = { close(); text(v.caller) },
+                                    onCall = { close(); model.callRequest = v.caller },
                                     textable = v.caller.any { it.isDigit() },
                                     folder = folder,
                                     onMove = { moveTo(v, if (folder == "INBOX") "Old" else "INBOX") },
@@ -266,7 +270,7 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
 private fun Player(
     state: PlayState, errorText: String, posMs: Int, lenMs: Int, speed: Float,
     onSeek: (Float) -> Unit, onSeekDone: () -> Unit, onSpeed: () -> Unit, onRetry: () -> Unit,
-    onText: () -> Unit, textable: Boolean, folder: String,
+    onText: () -> Unit, textable: Boolean, folder: String, onCall: () -> Unit,
     onMove: () -> Unit, onBlock: () -> Unit, onDelete: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -295,6 +299,7 @@ private fun Player(
         }
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            if (textable) VmAction(Icons.Filled.Call, "Call", onCall)
             if (textable) VmAction(Icons.Filled.Chat, "Text", onText)
             VmAction(if (folder == "INBOX") Icons.Filled.Archive else Icons.Filled.Unarchive,
                 if (folder == "INBOX") "Move to Old" else "Move to New", onMove)

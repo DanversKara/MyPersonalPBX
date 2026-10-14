@@ -45,7 +45,7 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
             it.messages.firstOrNull()?.let { m -> model.store.markSeen(peer, m.id) }
         }
     }
-    LaunchedEffect(peer) { while (true) { refresh(); delay(5_000) } }
+    LaunchedEffect(peer) { while (true) { if (org.ownpbx.myphone.Notifier.appVisible) refresh(); delay(5_000) } }
 
     fun send() {
         val body = text.trim()
@@ -70,7 +70,7 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
                     }) { Icon(Icons.Filled.ContentCopy, "Copy") }
                     IconButton({
                         val ids = selected.toList(); selected = emptySet()
-                        scope.launch { model.change { it.deleteMessages(ids = ids) }; refresh() }
+                        model.bg.launch { model.change { it.deleteMessages(ids = ids) }; refresh() }
                     }) { Icon(Icons.Filled.Delete, "Delete") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
@@ -82,13 +82,14 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
                     }
                 },
                 actions = {
+                    if (peer.any { it.isDigit() }) IconButton({ model.callRequest = peer }) { Icon(Icons.Filled.Call, "Call") }
                     IconButton({ menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
                     DropdownMenu(menu, { menu = false }) {
                         DropdownMenuItem({ Text("Block") }, leadingIcon = { Icon(Icons.Filled.Block, null) }, onClick = {
                             menu = false; scope.launch { model.change { it.block(peer) }.also { if (it) model.notice = "Blocked" } }
                         })
                         DropdownMenuItem({ Text("Delete conversation") }, leadingIcon = { Icon(Icons.Filled.Delete, null) }, onClick = {
-                            menu = false; scope.launch { if (model.change { it.deleteMessages(peers = listOf(peer)) }) back() }
+                            menu = false; model.bg.launch { if (model.change { it.deleteMessages(peers = listOf(peer)) }) back() }
                         })
                     }
                 },

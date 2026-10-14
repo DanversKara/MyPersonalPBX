@@ -55,6 +55,50 @@ class Store(context: Context) {
     var secureScreen: Boolean
         get() = prefs.getBoolean("secure_screen", true)
         set(v) = prefs.edit().putBoolean("secure_screen", v).apply()
+    // Notifications: on/off, whether texts show their words, and the newest
+    // item already notified (or seen in the app) for each kind. 0 = not set
+    // yet; the first check only records where things stand.
+    var notifyOn: Boolean
+        get() = prefs.getBoolean("notify_on", true)
+        set(v) = prefs.edit().putBoolean("notify_on", v).apply()
+    var notifyShowText: Boolean
+        get() = prefs.getBoolean("notify_text", true)
+        set(v) = prefs.edit().putBoolean("notify_text", v).apply()
+    /** How often to look for new texts/calls/voicemail: 0 = instant (stay
+     *  connected), else seconds. 900+ uses only the battery-friendly
+     *  background job (no "Connected" notification). */
+    var checkEvery: Int
+        get() = prefs.getInt("check_every", 0)
+        set(v) = prefs.edit().putInt("check_every", v).apply()
+    var notifyAsked: Boolean
+        get() = prefs.getBoolean("notify_asked", false)
+        set(v) = prefs.edit().putBoolean("notify_asked", v).apply()
+    /** SystemClock.elapsedRealtime() when the user left the app unlocked
+     *  (0 = locked / not set). Kept here, not in memory, so "lock after
+     *  15 minutes" still holds when Android closes the app in between.
+     *  elapsedRealtime restarts at boot, so a reboot always locks. */
+    var leftUnlockedAt: Long
+        get() = prefs.getLong("left_unlocked_at", 0)
+        set(v) = prefs.edit().putLong("left_unlocked_at", v).apply()
+    var lastCheckAt: Long
+        get() = prefs.getLong("last_check_at", 0)
+        set(v) = prefs.edit().putLong("last_check_at", v).apply()
+    var lastCheckInfo: String
+        get() = prefs.getString("last_check_info", "") ?: ""
+        set(v) = prefs.edit().putString("last_check_info", v).apply()
+    /** Newest text when notifications first started: older ones never count. */
+    var notifBaseMsgId: Long
+        get() = prefs.getLong("notif_base_msg", 0)
+        set(v) = prefs.edit().putLong("notif_base_msg", v).apply()
+    var notifMsgId: Long
+        get() = prefs.getLong("notif_msg", 0)
+        set(v) = prefs.edit().putLong("notif_msg", v).apply()
+    var notifCallId: Long
+        get() = prefs.getLong("notif_call", 0)
+        set(v) = prefs.edit().putLong("notif_call", v).apply()
+    var notifVmId: Long
+        get() = prefs.getLong("notif_vm", 0)
+        set(v) = prefs.edit().putLong("notif_vm", v).apply()
     var lastSeenMessageId: Long
         get() = prefs.getLong("last_seen_msg", 0)
         set(v) = prefs.edit().putLong("last_seen_msg", v).apply()

@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import org.ownpbx.myphone.Notifier
 import org.ownpbx.myphone.data.Call
 
 /** Call history. Users can't delete calls (the PBX keeps them 90 days, then
@@ -31,32 +32,32 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
     var view by rememberSaveable { mutableStateOf("all") }
     var calls by remember { mutableStateOf<List<Call>?>(null) }
     var selected by remember { mutableStateOf(setOf<Long>()) }
-    var gone by remember { mutableStateOf(setOf<Long>()) }
     var menuFor by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
     val hiddenView = view == "hidden"
 
-    suspend fun refresh() { model.guard { it.calls(view) }?.let { calls = it.calls } }
-    LaunchedEffect(view) { calls = null; selected = emptySet(); refresh() }
-
-    /** Hide (or, in the Hidden view, show again) with Undo. */
-    fun move(ids: Set<Long>) {
-        if (ids.isEmpty()) return
-        gone = gone + ids; selected = emptySet()
-        scope.launch {
-            val n = ids.size
-            val what = if (n == 1) "Call" else "$n calls"
-            val r = snack.showSnackbar(if (hiddenView) "$what moved back" else "$what hidden",
-                actionLabel = "Undo", duration = SnackbarDuration.Short)
-            if (r != SnackbarResult.ActionPerformed) {
-                model.change { it.hideCalls(ids, unhide = hiddenView) }
-                refresh()
-            }
-            gone = gone - ids
+    suspend fun refresh() {
+        model.guard { it.calls(view) }?.let { r ->
+            calls = r.calls
+            if (view != "hidden") Notifier.seen(model.store,
+                missedCallId = r.calls.filter { it.kind == "missed" }.maxOfOrNull { it.id } ?: 0)
         }
     }
+    LaunchedEffect(view) { calls = null; selected = emptySet(); refresh() }
 
-    val shown = calls?.filter { it.id !in gone }
+    /** Hide (or, in the Hidden view, show again) right away; Undo reverses it. */
+    fun move(ids: Set<Long>) {
+        if (ids.isEmpty()) return
+        selected = emptySet()
+        val unhide = hiddenView
+        val what = if (ids.size == 1) "Call" else "${ids.size} calls"
+        model.doThenUndo(snack, if (unhide) "$what moved back" else "$what hidden", ids.map { "call:$it" }.toSet(),
+            commit = { it.hideCalls(ids, unhide = unhide) },
+            revert = { it.hideCalls(ids, unhide = !unhide) },
+            after = { refresh() })
+    }
+
+    val shown = calls?.filter { "call:${it.id}" !in model.gone }
 
     Scaffold(modifier = modifier, topBar = {
         if (selected.isNotEmpty()) TopAppBar(
@@ -78,6 +79,8 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
                     leadingIcon = { Icon(Icons.Filled.VisibilityOff, null, Modifier.size(16.dp)) })
             }
         }
+    }, floatingActionButton = {
+        if (selected.isEmpty()) FloatingActionButton({ model.dialPad = "" }) { Icon(Icons.Filled.Dialpad, "Dial pad") }
     }) { pad ->
         PullToRefreshBox(false, { scope.launch { refresh() } }, Modifier.padding(pad).fillMaxSize()) {
             val list = shown
@@ -114,6 +117,8 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
                                 },
                                 onLongClick = { selected = selected + c.id }) {
                                 DropdownMenu(menuFor == c.id, { menuFor = null }) {
+                                    DropdownMenuItem({ Text("Call") }, { menuFor = null; model.callRequest = c.other },
+                                        leadingIcon = { Icon(Icons.Filled.Call, null) })
                                     DropdownMenuItem({ Text("Send a text") }, { menuFor = null; text(c.other) },
                                         leadingIcon = { Icon(Icons.Filled.Chat, null) })
                                     DropdownMenuItem({ Text(if (hiddenView) "Show in history" else "Hide") },

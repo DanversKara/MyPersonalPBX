@@ -22,7 +22,6 @@ object Holder {
 
 class MainActivity : FragmentActivity() {
     private lateinit var model: AppModel
-    private var stoppedAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,8 +29,10 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         model = Holder.model ?: AppModel(Store(applicationContext)).also { Holder.model = it }
         model.onSecureChanged = { applySecure() }
+        model.onSignedOut = { Notifier.stop(applicationContext) }
         applySecure()
-        if (savedInstanceState == null) handlePairLink(intent)
+        Notifier.createChannels(this)
+        if (savedInstanceState == null) { handlePairLink(intent); handleOpen(intent) }
         setContent { MyPhoneTheme { AppRoot(model, this) } }
     }
 
@@ -39,6 +40,13 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handlePairLink(intent)
+        handleOpen(intent)
+    }
+
+    /** A tapped notification: open that tab (after the PIN, if locked). */
+    private fun handleOpen(intent: Intent?) {
+        val what = intent?.getStringExtra(Notifier.EXTRA_OPEN) ?: return
+        model.openTarget = what to intent.getStringExtra(Notifier.EXTRA_PEER)
     }
 
     /** myphone://pair?s=..&c=.. opened from the camera app or a browser. */
@@ -57,14 +65,17 @@ class MainActivity : FragmentActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (!isChangingConfigurations) stoppedAt = SystemClock.elapsedRealtime()
+        if (!isChangingConfigurations) {
+            model.leaving()
+            Notifier.appVisible = false
+        }
     }
 
     override fun onStart() {
         super.onStart()
-        if (stoppedAt > 0 && SystemClock.elapsedRealtime() - stoppedAt >= model.store.lockAfterSec * 1000L) {
-            model.lock()
-        }
-        stoppedAt = 0
+        Notifier.appVisible = true
+        Notifier.schedule(applicationContext)
+        LiveService.sync(applicationContext)
+        model.returning()
     }
 }
