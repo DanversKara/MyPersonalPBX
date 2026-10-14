@@ -394,6 +394,25 @@ def me_settings(request: Request):
     }
 
 
+def me_sip(request: Request):
+    """What the app's built-in phone needs to place calls as this extension,
+    through the edge (TLS + SRTP), exactly like a remote Zoiper. Only the
+    signed-in user's own extension; a device token already has full access
+    to that user's My Phone, and the phone secret is theirs."""
+    me = _need(request)
+    rs = M.network_ui.remote_settings()
+    ok = bool(me.get("exten") and me.get("sip_username") and me.get("sip_secret") and rs.get("domain"))
+    reason = ("" if ok else
+              "Your login has no extension." if not me.get("exten") else
+              "Remote calling isn't set up on this PBX yet (Admin > Network: domain)." if not rs.get("domain") else
+              "Your extension has no phone password yet.")
+    return {"enabled": ok, "reason": reason,
+            "exten": me.get("exten") or "", "display_name": me.get("display_name") or "",
+            "username": me.get("sip_username") or "", "password": (me.get("sip_secret") or "") if ok else "",
+            "domain": rs.get("domain") or "", "port": int(rs.get("port") or 5061),
+            "transport": "tls", "srtp": "sdes", "codecs": ["PCMU", "PCMA", "G722"]}
+
+
 def me_devices(request: Request):
     me = _need(request)
     with M.db() as c:
@@ -652,6 +671,7 @@ def install(app_module):
     app.post("/api/v1/me/calls/hide")(me_calls_hide)
     app.post("/api/v1/me/calls/seen")(me_calls_seen)
     app.get("/api/v1/me/wait")(me_wait)
+    app.get("/api/v1/me/sip")(me_sip)
     app.get("/api/v1/me/voicemail")(me_voicemail)
     app.get("/api/v1/me/voicemail/{msg_id}/audio")(me_vm_audio)
     app.get("/api/v1/me/recordings")(me_recordings)

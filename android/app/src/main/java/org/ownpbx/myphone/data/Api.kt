@@ -56,6 +56,11 @@ import java.util.concurrent.TimeUnit
     val this_device: Boolean = false,
 )
 @Serializable data class Devices(val devices: List<Device> = emptyList())
+@Serializable data class SipInfo(
+    val enabled: Boolean = false, val reason: String = "", val exten: String = "", val display_name: String = "",
+    val username: String = "", val password: String = "", val domain: String = "", val port: Int = 5061,
+    val codecs: List<String> = listOf("PCMU", "PCMA", "G722"),
+)
 @Serializable data class WaitResp(val msg: Long = 0, val call: Long = 0, val vm: Long = 0, val changed: Boolean = false)
 @Serializable data class Result(val ok: Boolean = false, val code: String = "", val message: String = "")
 
@@ -153,6 +158,8 @@ class Api(base: String, private val token: String?) {
     suspend fun calls(view: String): Calls = get("/me/calls", mapOf("view" to view, "missed" to if (view == "missed") 1 else 0))
     suspend fun voicemail(folder: String): Vms = get("/me/voicemail", mapOf("folder" to folder))
     suspend fun settings(): Settings = get("/me/settings")
+    /** Phone settings for the built-in phone (edge TLS + SRTP). */
+    suspend fun sip(): SipInfo = get("/me/sip")
     suspend fun devices(): Devices = get("/me/devices")
     fun voicemailAudioUrl(id: Long) = url("/me/voicemail/$id/audio")
 

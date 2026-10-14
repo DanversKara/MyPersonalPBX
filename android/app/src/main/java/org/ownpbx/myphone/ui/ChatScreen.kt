@@ -82,6 +82,7 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
                     }
                 },
                 actions = {
+                    if (peer.any { it.isDigit() }) IconButton({ model.callRequest = peer }) { Icon(Icons.Filled.Call, "Call") }
                     IconButton({ menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
                     DropdownMenu(menu, { menu = false }) {
                         DropdownMenuItem({ Text("Block") }, leadingIcon = { Icon(Icons.Filled.Block, null) }, onClick = {

@@ -55,6 +55,33 @@ fun MainScreen(model: AppModel) {
             try { askNotify.launch(Manifest.permission.POST_NOTIFICATIONS) } catch (_: Exception) {}
         }
     }
+    // ---- calls: mic permission, phone settings, then dial.
+    var pendingCall by remember { mutableStateOf<String?>(null) }
+    suspend fun startCall(number: String) {
+        val sip = model.sip?.takeIf { it.enabled } ?: model.guard { it.sip() }?.also { model.sip = it }
+        when {
+            sip == null -> {}                                   // guard already showed the error
+            !sip.enabled -> model.notice = sip.reason.ifEmpty { "Calling isn't available yet." }
+            else -> org.ownpbx.myphone.phone.Phone.call(ctx, sip, number)?.let { model.notice = it }
+        }
+    }
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        val n = pendingCall
+        pendingCall = null
+        if (ok) model.callRequest = n
+        else model.notice = "Calls need the microphone. Allow it in Android settings."
+    }
+    LaunchedEffect(model.callRequest) {
+        val number = model.callRequest ?: return@LaunchedEffect
+        model.callRequest = null
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startCall(number)
+        } else {
+            pendingCall = number
+            try { askMic.launch(Manifest.permission.RECORD_AUDIO) } catch (_: Exception) {}
+        }
+    }
+
     // A tapped notification: jump to that tab / chat.
     LaunchedEffect(model.openTarget) {
         val (what, who) = model.openTarget ?: return@LaunchedEffect
@@ -99,6 +126,17 @@ fun MainScreen(model: AppModel) {
         }
     }
     LaunchedEffect(tab) { if (tab == Tab.Calls) markCallsSeen() }
+
+    // A call in progress covers everything; then the dial pad.
+    org.ownpbx.myphone.phone.Phone.ui?.let { c ->
+        InCallScreen(c)
+        return
+    }
+    model.dialPad?.let { initial ->
+        BackHandler { model.dialPad = null }
+        DialPadScreen(initial, onCall = { model.dialPad = null; model.callRequest = it }, onClose = { model.dialPad = null })
+        return
+    }
 
     val peer = chatWith
     if (peer != null) {

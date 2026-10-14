@@ -157,5 +157,9 @@ API clients. `GET /me/wait?msg=&call=&vm=&timeout=50` is a long poll for the app
 Instant notifications: it answers as soon as there is a text, unhidden missed
 call or Inbox voicemail newer than the ids given (checked every 2 s), or after
 `timeout` seconds (max 55, under Cloudflare's 100 s limit), with the newest
-ids and `changed`. My Phone > App shows each code as a QR code (needs the `segno`
+ids and `changed`. `GET /me/sip` gives the app's built-in phone what it needs to call as the
+user's own extension through the edge: `enabled` (false with a `reason` when
+the extension, its phone password or Admin > Network domain is missing; the
+password is then left out), `username`, `password`, `domain`, `port`,
+`transport` (tls), `srtp` (sdes), `codecs`. My Phone > App shows each code as a QR code (needs the `segno`
 package; deploy.sh installs it) holding `myphone://pair?s=<server>&c=<code>`.

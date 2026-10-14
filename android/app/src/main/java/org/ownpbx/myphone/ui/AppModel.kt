@@ -30,6 +30,13 @@ class AppModel(val store: Store) {
     var pendingPair by mutableStateOf<org.ownpbx.myphone.data.PairInfo?>(null)
     /** Where a tapped notification wants to go: "messages" | "calls" | "voicemail", plus a chat peer. */
     var openTarget by mutableStateOf<Pair<String, String?>?>(null)
+    /** A screen asked to call this number (MainScreen handles mic permission + the call). */
+    var callRequest by mutableStateOf<String?>(null)
+    /** Dial pad open (with this number pre-filled); null = closed. */
+    var dialPad by mutableStateOf<String?>(null)
+    /** Phone settings from the PBX, fetched on the first call. */
+    var sip: org.ownpbx.myphone.data.SipInfo? = null
+
     /** Set by the activity: stop background checks and clear notifications. */
     var onSignedOut: () -> Unit = {}
     var onSecureChanged: () -> Unit = {}

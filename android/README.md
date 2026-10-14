@@ -40,6 +40,14 @@ Services, no Firebase, no analytics.
   notification opens that tab or chat; things already seen in the app aren't
   notified again. "Let it run in the background" asks Android to exempt the
   app from battery optimisation.
+- Calls (outgoing): dial pad on the Calls tab, Call from call history, Call
+  back from voicemail, call button in a chat. Built-in phone = Linphone SDK
+  (voice-only build, GPL-3.0). The app doesn't register: each call goes to
+  the PBX through the edge like a remote Zoiper (TLS 5061, SRTP SDES,
+  ulaw/alaw/G.722) with the extension's phone login from `/api/v1/me/sip`,
+  so other phones on the extension are unaffected. Mute, speaker, keypad
+  (DTMF), hang up; an "On a call" notification keeps the call going in the
+  background. Incoming calls are next.
 - "Lock the app after N minutes" survives Android closing the app in the
   background (the time is stored, not kept in memory); a reboot always locks.
 - Settings with switches: DND, forwarding, ring time, record my calls,

@@ -250,6 +250,7 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
                                     },
                                     onRetry = { File(cacheDir, "${v.id}.wav").delete(); open(v) },
                                     onText = { close(); text(v.caller) },
+                                    onCall = { close(); model.callRequest = v.caller },
                                     textable = v.caller.any { it.isDigit() },
                                     folder = folder,
                                     onMove = { moveTo(v, if (folder == "INBOX") "Old" else "INBOX") },
@@ -269,7 +270,7 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
 private fun Player(
     state: PlayState, errorText: String, posMs: Int, lenMs: Int, speed: Float,
     onSeek: (Float) -> Unit, onSeekDone: () -> Unit, onSpeed: () -> Unit, onRetry: () -> Unit,
-    onText: () -> Unit, textable: Boolean, folder: String,
+    onText: () -> Unit, textable: Boolean, folder: String, onCall: () -> Unit,
     onMove: () -> Unit, onBlock: () -> Unit, onDelete: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -298,6 +299,7 @@ private fun Player(
         }
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            if (textable) VmAction(Icons.Filled.Call, "Call", onCall)
             if (textable) VmAction(Icons.Filled.Chat, "Text", onText)
             VmAction(if (folder == "INBOX") Icons.Filled.Archive else Icons.Filled.Unarchive,
                 if (folder == "INBOX") "Move to Old" else "Move to New", onMove)

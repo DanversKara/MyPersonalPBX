@@ -79,6 +79,8 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
                     leadingIcon = { Icon(Icons.Filled.VisibilityOff, null, Modifier.size(16.dp)) })
             }
         }
+    }, floatingActionButton = {
+        if (selected.isEmpty()) FloatingActionButton({ model.dialPad = "" }) { Icon(Icons.Filled.Dialpad, "Dial pad") }
     }) { pad ->
         PullToRefreshBox(false, { scope.launch { refresh() } }, Modifier.padding(pad).fillMaxSize()) {
             val list = shown
@@ -115,6 +117,8 @@ fun CallsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier, t
                                 },
                                 onLongClick = { selected = selected + c.id }) {
                                 DropdownMenu(menuFor == c.id, { menuFor = null }) {
+                                    DropdownMenuItem({ Text("Call") }, { menuFor = null; model.callRequest = c.other },
+                                        leadingIcon = { Icon(Icons.Filled.Call, null) })
                                     DropdownMenuItem({ Text("Send a text") }, { menuFor = null; text(c.other) },
                                         leadingIcon = { Icon(Icons.Filled.Chat, null) })
                                     DropdownMenuItem({ Text(if (hiddenView) "Show in history" else "Hide") },
