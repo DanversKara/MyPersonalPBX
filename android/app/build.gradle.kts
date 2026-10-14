@@ -59,7 +59,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Built-in phone: Linphone SDK, voice-only build (GPL-3.0; the app as a
     // whole is GPL-2.0-or-later, which allows combining with GPL-3.0).
-    implementation("org.linphone.no-video:linphone-sdk-android:5.4.+")
+    implementation("org.linphone.no-video:linphone-sdk-android:5.4.128")
     implementation("androidx.media:media:1.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // QR scanning for pairing: ZXing (Apache-2.0), no Google Play Services.
