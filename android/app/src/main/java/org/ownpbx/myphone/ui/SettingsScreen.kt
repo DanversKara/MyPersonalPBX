@@ -71,7 +71,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
     val store = model.store
     var s by remember { mutableStateOf<Settings?>(null) }
     var devices by remember { mutableStateOf<List<Device>>(emptyList()) }
-    var edit by remember { mutableStateOf<String?>(null) }
+    var edit by model::settingsDialog   // survives the PIN lock
     var changingPin by remember { mutableStateOf(false) }
     var recordAsk by remember { mutableStateOf(false) }
     var bio by remember { mutableStateOf(store.biometric) }
@@ -251,6 +251,12 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         }
         ClickRow(Icons.Filled.Lock, "Lock now") { model.lock() }
 
+        Section("Calling")
+        val customSip = store.sipUserOverride.isNotBlank() || store.sipServerOverride.isNotBlank() || store.sipPassOverride.isNotBlank()
+        ClickRow(Icons.Filled.Call, "Phone login",
+            if (customSip) "Custom: ${store.sipUserOverride.ifBlank { "(PBX's username)" }} @ ${store.sipServerOverride.ifBlank { "(PBX's server)" }}"
+            else "Automatic (your extension's login from the PBX)") { edit = "sip" }
+
         Section("Account")
         ClickRow(Icons.Filled.Dns, "Server", store.server) {}
         ClickRow(Icons.Filled.Password, "Change panel password", "Signs out your other phones and browsers") { edit = "pw" }
@@ -284,6 +290,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
             edit = null; savePrefs(it.copy(vm_email = v)) } }
         "block" -> EditDialog("Block a number", "", "Extension or phone number", onDismiss = { edit = null }) { v ->
             edit = null; scope.launch { model.change { it.block(v) }; load() } }
+        "sip" -> SipLoginDialog(model) { edit = null }
         "pw" -> PasswordDialog({ edit = null }) { cur, new ->
             edit = null; scope.launch { if (model.change { it.changePassword(cur, new) }) { model.notice = "Password changed"; load() } } }
     }
@@ -312,4 +319,89 @@ private fun PasswordDialog(onDismiss: () -> Unit, onSave: (String, String) -> Un
         },
         confirmButton = { TextButton({ onSave(cur, new) }, enabled = new.length >= 8 && cur.isNotEmpty()) { Text("Change") } },
         dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
+}
+
+/** Settings > Calling > Phone login: scan the phone-login QR (My Phone >
+ *  App > Show phone login QR), or type server / username / password like in
+ *  Zoiper; blank = use what the PBX provides. What's typed is kept in the
+ *  model, so going to a password manager (and back through the PIN) keeps it. */
+@Composable
+private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
+    val st = model.store
+    val draft = model.sipDraft ?: org.ownpbx.myphone.data.SipLogin(st.sipServerOverride, st.sipUserOverride, st.sipPassOverride)
+        .also { model.sipDraft = it }
+    var show by remember { mutableStateOf(false) }
+    val pbx = model.sip
+    fun close() { model.sipDraft = null; onDone() }
+    val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { r ->
+        val text = r.contents ?: return@rememberLauncherForActivityResult
+        val login = org.ownpbx.myphone.data.PairLink.parseSip(text)
+        if (login == null) model.notice = "That isn't a phone login QR. Use My Phone > App > Show phone login QR."
+        else { model.sipDraft = login; model.notice = "Scanned. Check it and tap Save." }
+    }
+    AlertDialog(
+        onDismissRequest = ::close,
+        title = { Text("Phone login") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Get it from your PBX, scan the phone login QR (My Phone > App on the web), or type it like in Zoiper.",
+                    style = MaterialTheme.typography.bodySmall)
+                // One tap: the extension's phone login straight from the PBX (no QR needed).
+                FilledTonalButton({
+                    model.bg.launch {
+                        val sip = model.guard { it.sip() }
+                        when {
+                            sip == null -> {}
+                            !sip.enabled -> model.notice = sip.reason.ifEmpty { "Your PBX has no phone login for you yet." }
+                            else -> {
+                                model.sipDraft = org.ownpbx.myphone.data.SipLogin("${sip.domain}:${sip.port}", sip.username, sip.password)
+                                show = true
+                                model.notice = "Filled in from your PBX. Check it and tap Save."
+                            }
+                        }
+                    }
+                }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.CloudDownload, null); Spacer(Modifier.width(8.dp)); Text("Get from my PBX")
+                }
+                OutlinedButton({
+                    try {
+                        model.openingOwnScreen()
+                        scanner.launch(com.journeyapps.barcodescanner.ScanOptions()
+                            .setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
+                            .setPrompt("Scan the phone login QR from My Phone > App")
+                            .setBeepEnabled(false).setOrientationLocked(false))
+                    } catch (e: Exception) { model.notice = "The scanner couldn't start." }
+                }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.QrCodeScanner, null); Spacer(Modifier.width(8.dp)); Text("Scan QR code")
+                }
+                OutlinedTextField(draft.server, { model.sipDraft = draft.copy(server = it.trim()) }, singleLine = true,
+                    label = { Text("Server (host or host:port)") },
+                    placeholder = { Text(pbx?.domain?.takeIf { it.isNotBlank() }?.let { "$it:${pbx.port}" } ?: "phone.example.com:5061") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                OutlinedTextField(draft.user, { model.sipDraft = draft.copy(user = it.trim()) }, singleLine = true,
+                    label = { Text("Username") }, placeholder = { Text(pbx?.username?.ifBlank { null } ?: "") })
+                OutlinedTextField(draft.pass, { model.sipDraft = draft.copy(pass = it) }, singleLine = true,
+                    label = { Text("Password") },
+                    visualTransformation = if (show) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton({ show = !show }) { Icon(if (show) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show") }
+                    })
+            }
+        },
+        confirmButton = {
+            TextButton({
+                st.sipServerOverride = draft.server; st.sipUserOverride = draft.user; st.sipPassOverride = draft.pass
+                model.sip = null; model.notice = "Phone login saved"; close()
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                TextButton({
+                    st.sipServerOverride = ""; st.sipUserOverride = ""; st.sipPassOverride = ""
+                    model.sip = null; model.notice = "Using your PBX's phone login"; close()
+                }) { Text("Use automatic") }
+                TextButton(::close) { Text("Cancel") }
+            }
+        })
 }

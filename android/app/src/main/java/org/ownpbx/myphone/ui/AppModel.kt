@@ -30,6 +30,16 @@ class AppModel(val store: Store) {
     var pendingPair by mutableStateOf<org.ownpbx.myphone.data.PairInfo?>(null)
     /** Where a tapped notification wants to go: "messages" | "calls" | "voicemail", plus a chat peer. */
     var openTarget by mutableStateOf<Pair<String, String?>?>(null)
+    /** Where the user was: kept here (not in the screen) so it survives the
+     *  PIN lock, e.g. after switching to a password manager. */
+    var tab by mutableStateOf(Tab.Messages)
+    var chatWith by mutableStateOf<String?>(null)
+    var settingsDialog by mutableStateOf<String?>(null)
+    /** Phone login dialog text being typed (null = not open / not started). */
+    var sipDraft by mutableStateOf<org.ownpbx.myphone.data.SipLogin?>(null)
+    /** A phone-login link opened from the camera, waiting for "Use it?". */
+    var pendingSip by mutableStateOf<org.ownpbx.myphone.data.SipLogin?>(null)
+
     /** A screen asked to call this number (MainScreen handles mic permission + the call). */
     var callRequest by mutableStateOf<String?>(null)
     /** Dial pad open (with this number pre-filled); null = closed. */
@@ -106,8 +116,17 @@ class AppModel(val store: Store) {
         store.leftUnlockedAt = if (stage == Stage.Ready) android.os.SystemClock.elapsedRealtime() else 0
     }
 
+    /** Set just before opening one of the app's own screens (QR scanner):
+     *  coming back from it within 3 minutes doesn't count as leaving. */
+    private var ownScreenAt = 0L
+    fun openingOwnScreen() { ownScreenAt = android.os.SystemClock.elapsedRealtime() }
+
     /** Called when the app comes back: lock if away too long. */
     fun returning() {
+        if (ownScreenAt > 0 && android.os.SystemClock.elapsedRealtime() - ownScreenAt < 180_000) {
+            ownScreenAt = 0; store.leftUnlockedAt = 0; return
+        }
+        ownScreenAt = 0
         if (stage == Stage.Ready && store.leftUnlockedAt > 0 && !leftRecently()) lock()
         store.leftUnlockedAt = 0
     }
@@ -132,6 +151,9 @@ class AppModel(val store: Store) {
     } catch (e: ApiException) {
         if (e.status == 401) signedOut("You were signed out. Please sign in again.")
         else notice = e.message
+        null
+    } catch (e: kotlinx.serialization.SerializationException) {
+        notice = "The PBX answered with something this app version doesn't understand (${e.message?.take(80)})."
         null
     } catch (e: Exception) {
         notice = "Can't reach your PBX. Check your connection."

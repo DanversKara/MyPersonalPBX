@@ -552,21 +552,63 @@ def pair_link(server: str, code: str) -> str:
     return f"{PAIR_SCHEME}://pair?" + urllib.parse.urlencode({"s": server, "c": code})
 
 
+def sip_link(server: str, user: str, password: str) -> str:
+    """Phone-login QR: myphone://sip?s=<host:port>&u=<user>&p=<password>."""
+    return f"{PAIR_SCHEME}://sip?" + urllib.parse.urlencode({"s": server, "u": user, "p": password})
+
+
+APP_PACKAGE = "org.ownpbx.myphone"
+
+
+def android_link(link: str) -> str:
+    """myphone://host?q -> intent://host?q#Intent;scheme=myphone;package=...;end
+
+    Chrome on Android ignores many plain custom-scheme links; an intent: URL
+    is handed straight to the installed app (Firefox understands it too)."""
+    rest = link.split("://", 1)[1]
+    return f"intent://{rest}#Intent;scheme={PAIR_SCHEME};package={APP_PACKAGE};end"
+
+
 def pair_qr_svg(server: str, code: str) -> str:
     """Inline SVG QR code for the pairing link, or "" if segno isn't installed."""
+    return qr_svg(pair_link(server, code), "Pairing QR code")
+
+
+def qr_svg(data: str, title: str = "QR code") -> str:
+    """Inline SVG QR code, or "" if segno isn't installed."""
     try:
         import io
         import segno
     except ImportError:
         return ""
     buf = io.BytesIO()
-    segno.make(pair_link(server, code), error="m").save(
+    segno.make(data, error="m").save(
         buf, kind="svg", scale=6, border=2, xmldecl=False, svgns=True, dark="#000", light="#fff",
-        title="Pairing QR code")
+        title=title)
     return buf.getvalue().decode()
 
 
-def app_page(request: Request, code: str = ""):
+COPY_JS = """<script>
+document.querySelectorAll('[data-copy]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = b.getAttribute('data-copy'), note = b.nextElementSibling;
+    function say(ok) { if (note) { note.textContent = ok ? 'Copied' : 'Select and copy it'; setTimeout(function () { note.textContent = ''; }, 2000); } }
+    function fallback() {
+      var a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', '');
+      a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} a.remove(); say(ok);
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(function () { say(true); }, fallback);
+    else fallback();
+  });
+});
+</script>"""
+
+COPY_BTN = ("background:none;border:1px dashed currentColor;border-radius:6px;color:inherit;"
+            "cursor:pointer;padding:2px 8px;font:inherit")
+
+
+def app_page(request: Request, code: str = "", sip: bool = False):
     s, me = M.ucp._me(request)
     if not s:
         return RedirectResponse("/login")
@@ -586,14 +628,13 @@ def app_page(request: Request, code: str = ""):
         qr = pair_qr_svg(server, code)
         qr_html = (f"<div style='background:#fff;padding:10px;border-radius:8px;display:inline-block;"
                    f"line-height:0'>{qr}</div>" if qr else "")
-        copy_btn = ("background:none;border:1px dashed currentColor;border-radius:6px;color:inherit;"
-                    "cursor:pointer;padding:2px 8px;font:inherit")
+        copy_btn = COPY_BTN
         shown = (f"<div class='flash ok' style='display:flex;gap:20px;align-items:center;flex-wrap:wrap'>"
                  f"{qr_html}<div style='flex:1;min-width:240px'>"
                  + ("<b>Scan this with the My Phone app</b> (Scan QR code on the sign-in screen) "
                     "or with your phone's camera.<br><br>" if qr else "")
                  # Same phone as this page? The link opens the app with both filled in.
-                 + f"<a class='btn' href='{esc(pair_link(server, code))}' style='display:inline-block;"
+                 + f"<a class='btn' href='{esc(android_link(pair_link(server, code)))}' style='display:inline-block;"
                  f"text-decoration:none;text-align:center'>Open in the My Phone app</a>"
                  f"<div class='muted' style='font-size:13px;margin-top:4px'>(when this page is open on the phone itself)</div>"
                  f"<br><br>Or type it in (tap to copy):<br>"
@@ -603,26 +644,37 @@ def app_page(request: Request, code: str = ""):
                  f"Server: <button type='button' data-copy='{esc(server)}' title='Copy'"
                  f" style='{copy_btn};font-family:monospace'>{esc(server)}</button>"
                  f" <span class='copied muted' aria-live='polite'></span><br>"
-                 f"Works once, within 5 minutes.</div></div>"
-                 """<script>
-document.querySelectorAll('[data-copy]').forEach(function (b) {
-  b.addEventListener('click', function () {
-    var t = b.getAttribute('data-copy'), note = b.nextElementSibling;
-    function say(ok) { if (note) { note.textContent = ok ? 'Copied' : 'Select and copy it'; setTimeout(function () { note.textContent = ''; }, 2000); } }
-    function fallback() {
-      var a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', '');
-      a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select();
-      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} a.remove(); say(ok);
-    }
-    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(function () { say(true); }, fallback);
-    else fallback();
-  });
-});
-</script>""")
-    body = f"""{shown}
+                 f"Works once, within 5 minutes.</div></div>")
+    sip_box = ""
+    rs = M.network_ui.remote_settings()
+    can_sip = bool(me.get("exten") and me.get("sip_username") and me.get("sip_secret") and rs.get("domain"))
+    if sip and can_sip:
+        server = f"{rs['domain']}:{rs.get('port') or 5061}"
+        link = sip_link(server, me["sip_username"], me["sip_secret"])
+        qr = qr_svg(link)
+        qr_html = (f"<div style='background:#fff;padding:10px;border-radius:8px;display:inline-block;"
+                   f"line-height:0'>{qr}</div>" if qr else "")
+        sip_box = (f"<div class='flash ok' style='display:flex;gap:20px;align-items:center;flex-wrap:wrap'>"
+                   f"{qr_html}<div style='flex:1;min-width:240px'>"
+                   "<b>Phone login for calls.</b> In the app: Settings &gt; Calling &gt; Phone login &gt; Scan QR code"
+                   " (or scan it with the phone's camera).<br><br>"
+                   f"<a class='btn' href='{esc(android_link(link))}' style='display:inline-block;text-decoration:none'>"
+                   "Open in the My Phone app</a><br><br>"
+                   f"Server: <button type='button' data-copy='{esc(server)}' style='{COPY_BTN};font-family:monospace'>{esc(server)}</button>"
+                   " <span class='copied muted'></span><br>"
+                   f"Username: <button type='button' data-copy='{esc(me['sip_username'])}' style='{COPY_BTN};font-family:monospace'>{esc(me['sip_username'])}</button>"
+                   " <span class='copied muted'></span><br>"
+                   f"Password: <button type='button' data-copy='{esc(me['sip_secret'])}' style='{COPY_BTN};font-family:monospace'>Copy password</button>"
+                   " <span class='copied muted'></span><br>"
+                   "<span class='muted' style='font-size:13px'>This is your extension's phone password: anyone with it can"
+                   " make calls as you. Close this page when you're done.</span></div></div>")
+    sip_btn = (f'<form method="post" action="/ucp/app/sip-qr" style="display:inline">{csrf}'
+               '<button class="btn ghost">Show phone login QR</button></form>' if can_sip and not sip else "")
+    body = f"""{shown}{sip_box}{COPY_JS if (code or sip_box) else ""}
 <p>The My Phone app for Android keeps you signed in for {DEVICE_TTL_DAYS} days after you last used it.
 Changing your password signs out every phone.</p>
-<form method="post" action="/ucp/app/pair-code">{csrf}<button class="btn">Get a pairing code</button></form>
+<form method="post" action="/ucp/app/pair-code" style="display:inline">{csrf}<button class="btn">Get a pairing code</button></form>
+{sip_btn}
 <h3>Signed-in phones</h3>
 <div class="scrollbox"><table><tr><th>Phone</th><th>Signed in</th><th>Last used</th><th></th></tr>{rows}</table></div>"""
     resp = M.ucp._render(request, s, me, "ucp-app", "App", body)
@@ -638,6 +690,17 @@ async def app_pair_code(request: Request):
     code = _new_pair_code(me["id"])
     M.ucp._audit(me, "app.pair_code")
     return app_page(request, code)
+
+
+async def app_sip_qr(request: Request):
+    """My Phone > App > Show phone login QR (only when asked; the password is
+    otherwise never shown on the web, matching Settings)."""
+    s, me = M.ucp._me(request)
+    if not s:
+        raise HTTPException(401)
+    await M._check_csrf(request, s)
+    M.ucp._audit(me, "app.sip_qr")
+    return app_page(request, sip=True)
 
 
 async def app_device_delete_web(request: Request, dev_id: int):
@@ -698,4 +761,5 @@ def install(app_module):
 
     app.get("/ucp/app", response_class=HTMLResponse)(app_page)
     app.post("/ucp/app/pair-code", response_class=HTMLResponse)(app_pair_code)
+    app.post("/ucp/app/sip-qr", response_class=HTMLResponse)(app_sip_qr)
     app.post("/ucp/app/devices/{dev_id}/delete")(app_device_delete_web)

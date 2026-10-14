@@ -33,10 +33,31 @@ enum class Tab(val label: String, val icon: ImageVector) {
     Settings("Settings", Icons.Filled.Settings),
 }
 
+/** Settings > Calling > Phone login: typed-in values win over the PBX's. */
+fun applySipOverrides(st: org.ownpbx.myphone.data.Store, pbx: org.ownpbx.myphone.data.SipInfo?): org.ownpbx.myphone.data.SipInfo? {
+    val server = st.sipServerOverride.trim().removePrefix("sips:").removePrefix("sip:").trimEnd('/')
+    val host = server.substringBefore(':')
+    val port = server.substringAfter(':', "").toIntOrNull()
+    val user = st.sipUserOverride.trim()
+    val pass = st.sipPassOverride
+    if (server.isBlank() && user.isBlank() && pass.isBlank()) return pbx
+    val base = pbx ?: org.ownpbx.myphone.data.SipInfo()
+    val out = base.copy(
+        domain = host.ifBlank { base.domain },
+        port = port ?: if (host.isNotBlank()) 5061 else base.port,
+        username = user.ifBlank { base.username },
+        password = pass.ifBlank { base.password },
+    )
+    val ok = out.domain.isNotBlank() && out.username.isNotBlank() && out.password.isNotBlank()
+    return out.copy(enabled = ok, reason = if (ok) "" else
+        "Fill in server, username and password under Settings > Calling, or clear them to use your PBX's.")
+}
+
 @Composable
 fun MainScreen(model: AppModel) {
-    var tab by rememberSaveable { mutableStateOf(Tab.Messages) }
-    var chatWith by rememberSaveable { mutableStateOf<String?>(null) }
+    // Kept in the model so they survive the PIN lock (switching apps).
+    var tab by model::tab
+    var chatWith by model::chatWith
     var overview by remember { mutableStateOf<Overview?>(null) }
     val snack = remember { SnackbarHostState() }
 
@@ -58,7 +79,11 @@ fun MainScreen(model: AppModel) {
     // ---- calls: mic permission, phone settings, then dial.
     var pendingCall by remember { mutableStateOf<String?>(null) }
     suspend fun startCall(number: String) {
-        val sip = model.sip?.takeIf { it.enabled } ?: model.guard { it.sip() }?.also { model.sip = it }
+        val st = model.store
+        val custom = st.sipUserOverride.isNotBlank() && st.sipPassOverride.isNotBlank()
+        val fromPbx = model.sip?.takeIf { it.enabled }
+            ?: (if (custom) model.guardQuiet { it.sip() } else model.guard { it.sip() })?.also { model.sip = it }
+        val sip = applySipOverrides(st, fromPbx)
         when {
             sip == null -> {}                                   // guard already showed the error
             !sip.enabled -> model.notice = sip.reason.ifEmpty { "Calling isn't available yet." }
@@ -126,6 +151,23 @@ fun MainScreen(model: AppModel) {
         }
     }
     LaunchedEffect(tab) { if (tab == Tab.Calls) markCallsSeen() }
+
+    // A phone-login link opened from the camera: confirm before using it.
+    model.pendingSip?.let { login ->
+        AlertDialog(
+            onDismissRequest = { model.pendingSip = null },
+            title = { Text("Use this phone login?") },
+            text = { Text("Calls from this app will use\n\nServer: ${login.server}\nUsername: ${login.user}\n\n" +
+                "Only say yes if this QR code came from your own My Phone page.") },
+            confirmButton = {
+                TextButton({
+                    model.store.sipServerOverride = login.server; model.store.sipUserOverride = login.user
+                    model.store.sipPassOverride = login.pass; model.sip = null; model.pendingSip = null
+                    model.notice = "Phone login saved"
+                }) { Text("Use it") }
+            },
+            dismissButton = { TextButton({ model.pendingSip = null }) { Text("Cancel") } })
+    }
 
     // A call in progress covers everything; then the dial pad.
     org.ownpbx.myphone.phone.Phone.ui?.let { c ->

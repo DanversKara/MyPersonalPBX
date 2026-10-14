@@ -52,6 +52,11 @@ class MainActivity : FragmentActivity() {
     /** myphone://pair?s=..&c=.. opened from the camera app or a browser. */
     private fun handlePairLink(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
+        PairLink.parseSip(intent.dataString)?.let { login ->
+            if (model.stage == Stage.SignIn) model.notice = "Connect the app first, then scan the phone login."
+            else model.pendingSip = login          // asks "Use this phone login?" in the app
+            return
+        }
         val info = PairLink.parse(intent.dataString) ?: return
         if (model.stage == Stage.SignIn) model.pendingPair = info
         else model.notice = "This phone is already connected. To pair again, sign out in Settings first."
