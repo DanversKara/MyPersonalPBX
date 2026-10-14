@@ -567,13 +567,39 @@ def app_page(request: Request, code: str = ""):
         qr = pair_qr_svg(server, code)
         qr_html = (f"<div style='background:#fff;padding:10px;border-radius:8px;display:inline-block;"
                    f"line-height:0'>{qr}</div>" if qr else "")
+        copy_btn = ("background:none;border:1px dashed currentColor;border-radius:6px;color:inherit;"
+                    "cursor:pointer;padding:2px 8px;font:inherit")
         shown = (f"<div class='flash ok' style='display:flex;gap:20px;align-items:center;flex-wrap:wrap'>"
-                 f"{qr_html}<div>"
+                 f"{qr_html}<div style='flex:1;min-width:240px'>"
                  + ("<b>Scan this with the My Phone app</b> (Scan QR code on the sign-in screen) "
-                    "or with your phone's camera.<br><br>Or type it in:<br>" if qr else "")
-                 + f"Pairing code: <b style='font-size:22px;letter-spacing:3px'>{esc(code)}</b><br>"
-                 f"Server: <code>{esc(server)}</code><br>"
-                 f"Works once, within 5 minutes.</div></div>")
+                    "or with your phone's camera.<br><br>" if qr else "")
+                 # Same phone as this page? The link opens the app with both filled in.
+                 + f"<a class='btn' href='{esc(pair_link(server, code))}' style='display:inline-block;"
+                 f"text-decoration:none;text-align:center'>Open in the My Phone app</a>"
+                 f"<div class='muted' style='font-size:13px;margin-top:4px'>(when this page is open on the phone itself)</div>"
+                 f"<br><br>Or type it in (tap to copy):<br>"
+                 f"Pairing code: <button type='button' data-copy='{esc(code)}' title='Copy'"
+                 f" style='{copy_btn};font-size:22px;font-weight:700;letter-spacing:3px'>{esc(code)}</button>"
+                 f" <span class='copied muted' aria-live='polite'></span><br>"
+                 f"Server: <button type='button' data-copy='{esc(server)}' title='Copy'"
+                 f" style='{copy_btn};font-family:monospace'>{esc(server)}</button>"
+                 f" <span class='copied muted' aria-live='polite'></span><br>"
+                 f"Works once, within 5 minutes.</div></div>"
+                 """<script>
+document.querySelectorAll('[data-copy]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = b.getAttribute('data-copy'), note = b.nextElementSibling;
+    function say(ok) { if (note) { note.textContent = ok ? 'Copied' : 'Select and copy it'; setTimeout(function () { note.textContent = ''; }, 2000); } }
+    function fallback() {
+      var a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', '');
+      a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} a.remove(); say(ok);
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(function () { say(true); }, fallback);
+    else fallback();
+  });
+});
+</script>""")
     body = f"""{shown}
 <p>The My Phone app for Android keeps you signed in for {DEVICE_TTL_DAYS} days after you last used it.
 Changing your password signs out every phone.</p>
