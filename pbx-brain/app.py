@@ -309,6 +309,22 @@ def ring_seconds_for(login_id, default=DEFAULT_RING):
     return v if 5 <= v <= 300 else default
 
 
+def phone_endpoints(callee):
+    """Dial strings that ring this user: their phone line as always, plus
+    the My Phone app's own line (<sip_username>-app) when the app is signed
+    in. Asking Asterisk first keeps an offline app from adding a leg that
+    fails instantly."""
+    eps = ["PJSIP/%s" % callee["sip_username"]]
+    app_ep = "%s-app" % callee["sip_username"]
+    try:
+        st = (CLIENT.get("endpoints/PJSIP/%s" % app_ep) or {}).get("state", "")
+        if st and st != "offline":
+            eps.append("PJSIP/%s" % app_ep)
+    except Exception:
+        pass    # no app line configured (older pjsip.conf) or ARI hiccup
+    return eps
+
+
 def end_unanswered_leg(b_id):
     """Ring time is up (or the phone is gone): hang up the ringing B leg and
     run no-answer handling (forward / voicemail).
@@ -474,27 +490,35 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
                   direction=direction, extra=extra):
         return
     ring_secs = ring_seconds_for(callee["id"])
-    try:
-        leg_b = CLIENT.channels.originate(
-            endpoint="PJSIP/%s" % callee["sip_username"],
-            app=APP,
-            app_args="legb,%s" % channel.id,
-            caller_id=caller_id or "%s <%s>" % (me["display_name"] or me["exten"],
-                                                me["exten"]),
-            timeout=ring_secs + 5)  # our timer fires first -> voicemail
-    except Exception:
-        log.exception("originate to %s failed", callee["username"])
+    # One leg per phone line (desk phone / Zoiper, and the app when online);
+    # the first to answer wins (on_legb_answer hangs up the others).
+    legs = []
+    for ep in phone_endpoints(callee):
+        try:
+            legs.append(CLIENT.channels.originate(
+                endpoint=ep,
+                app=APP,
+                app_args="legb,%s" % channel.id,
+                caller_id=caller_id or "%s <%s>" % (me["display_name"] or me["exten"],
+                                                    me["exten"]),
+                timeout=ring_secs + 5))  # our timer fires first -> voicemail
+        except Exception:
+            log.exception("originate to %s (%s) failed", callee["username"], ep)
+    if not legs:
         channel.hangup()
         return
-    PENDING[leg_b.id] = channel.id
-    B_LOGIN[leg_b.id] = callee["id"]
+    leg_b = legs[0]
+    for leg in legs:
+        PENDING[leg.id] = channel.id
+        B_LOGIN[leg.id] = callee["id"]
     info["b_id"] = leg_b.id
     CALLS[channel.id] = info
-    # Ring timeout: if B doesn't answer in time, end B -> forward/voicemail
-    def _ring_timeout(b_id=leg_b.id):
-        if b_id in PENDING:
-            log.info("ring timeout for b leg %s", b_id)
-            end_unanswered_leg(b_id)
+    # Ring timeout: if nobody answers in time, end every leg -> forward/voicemail
+    def _ring_timeout(b_ids=[l.id for l in legs]):
+        for b_id in b_ids:
+            if b_id in PENDING:
+                log.info("ring timeout for b leg %s", b_id)
+                end_unanswered_leg(b_id)
     t = threading.Timer(float(ring_secs), _ring_timeout)
     t.daemon = True
     t.start()
@@ -504,8 +528,8 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
         channel.ring()  # 180 Ringing to A while B rings
     except Exception:
         log.exception("ring failed")
-    log.info("ringing %s -> %s for %ss (b leg %s)",
-             info["caller"], callee["exten"], ring_secs, leg_b.id)
+    log.info("ringing %s -> %s for %ss (b legs %s)",
+             info["caller"], callee["exten"], ring_secs, ",".join(l.id for l in legs))
 
 
 def try_forward_noanswer(a_id, info):
@@ -2027,18 +2051,19 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
     # Originate to all targets in parallel; first to answer wins
     b_ids = []
     for callee in targets:
-        try:
-            leg_b = CLIENT.channels.originate(
-                endpoint="PJSIP/%s" % callee["sip_username"],
-                app=APP,
-                app_args="legb,%s" % channel.id,
-                caller_id=caller_id,
-                timeout=timeout + 5)  # our timer fires first -> voicemail
-            b_ids.append(leg_b.id)
-            PENDING[leg_b.id] = channel.id
-            B_LOGIN[leg_b.id] = callee["id"]
-        except Exception:
-            log.exception("inbound originate to %s failed", callee["exten"])
+        for ep in phone_endpoints(callee):      # desk phone + app line
+            try:
+                leg_b = CLIENT.channels.originate(
+                    endpoint=ep,
+                    app=APP,
+                    app_args="legb,%s" % channel.id,
+                    caller_id=caller_id,
+                    timeout=timeout + 5)  # our timer fires first -> voicemail
+                b_ids.append(leg_b.id)
+                PENDING[leg_b.id] = channel.id
+                B_LOGIN[leg_b.id] = callee["id"]
+            except Exception:
+                log.exception("inbound originate to %s (%s) failed", callee["exten"], ep)
     if not b_ids:
         # All originates failed: the group's no-answer choice / voicemail
         _group_fallback(channel, group, first_login, vm_login, vm_copies, did, caller_num,

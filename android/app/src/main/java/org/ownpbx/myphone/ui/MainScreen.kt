@@ -87,7 +87,8 @@ fun MainScreen(model: AppModel) {
         when {
             sip == null -> {}                                   // guard already showed the error
             !sip.enabled -> model.notice = sip.reason.ifEmpty { "Calling isn't available yet." }
-            else -> org.ownpbx.myphone.phone.Phone.call(ctx, sip, number)?.let { model.notice = it }
+            else -> org.ownpbx.myphone.phone.Phone.call(ctx, sip, number, keepListening = st.incomingCalls)
+                ?.let { model.notice = it }
         }
     }
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->

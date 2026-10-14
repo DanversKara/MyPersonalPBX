@@ -25,7 +25,7 @@ check("no edge domain: disabled, no password", r["enabled"] is False and r["pass
 
 d.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('sip_domain','sip.example.com')"); d.commit()
 r = c.get("/api/v1/me/sip", headers=H).json()
-check("enabled with own creds", r["enabled"] and r["username"] == "phone8800" and r["password"] == "secret-8800"
+check("enabled with own creds", r["enabled"] and r["username"] == "phone8800-app" and r["main_username"] == "phone8800" and r["register"] is True and r["password"] == "secret-8800"
       and r["domain"] == "sip.example.com" and r["port"] == 5061 and r["exten"] == "8800", r)
 check("other user gets their own", c.get("/api/v1/me/sip", headers=token("phone8801")).json()["password"] == "secret-8801")
 check("needs token", c.get("/api/v1/me/sip").status_code == 401)

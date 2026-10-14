@@ -81,6 +81,10 @@ class Store(context: Context) {
     var sipPassOverride: String
         get() = prefs.getString("sip_pass", "") ?: ""
         set(v) = prefs.edit().putString("sip_pass", v).apply()
+    /** Ring this phone for calls to the extension (the app line). */
+    var incomingCalls: Boolean
+        get() = prefs.getBoolean("incoming_calls", true)
+        set(v) = prefs.edit().putBoolean("incoming_calls", v).apply()
     var notifyAsked: Boolean
         get() = prefs.getBoolean("notify_asked", false)
         set(v) = prefs.edit().putBoolean("notify_asked", v).apply()
