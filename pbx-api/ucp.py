@@ -283,7 +283,14 @@ def _device_status(me):
         st = M._asterisk_status()
     except Exception:
         return None
-    return [ct for ct in st.get("contacts", []) if ct.get("aor") == me["sip_username"]]
+    # Desk phone / Zoiper on the main line, plus the My Phone app on its own
+    # "<sip_username>-app" line (it rings for incoming calls too).
+    app_line = me["sip_username"] + "-app"
+    out = []
+    for ct in st.get("contacts", []):
+        if ct.get("aor") in (me["sip_username"], app_line):
+            out.append({**ct, "app": ct.get("aor") == app_line})
+    return out
 
 
 def _exten_since(me):
@@ -451,7 +458,7 @@ def overview(request: Request):
     elif devs:
         dev_ok = True
         dev_html = "".join(
-            f'<div><span class="pill ok">Online</span> {esc(d["ip"])}:{esc(d["port"])}'
+            f'<div><span class="pill ok">Online</span> {"<b>My Phone app</b> · " if d.get("app") else ""}{esc(d["ip"])}:{esc(d["port"])}'
             f'{" · " + esc(d["transport"]) if d.get("transport") else ""}'
             f'{" · " + format(d["rtt_ms"], ".0f") + " ms" if isinstance(d.get("rtt_ms"), (int, float)) else ""}</div>'
             for d in devs)

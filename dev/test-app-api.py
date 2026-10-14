@@ -6,6 +6,7 @@
     python3 dev/test-app-api.py admin123      # seed password
 Prints status + body for each call; read the output.
 """
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pbx-api"))
 from fastapi.testclient import TestClient
 import app as A
