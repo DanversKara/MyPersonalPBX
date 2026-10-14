@@ -591,7 +591,9 @@ def on_legb_answer(b_channel):
         if PENDING.get(other_b_id) == a_id and other_b_id != b_channel.id:
             del PENDING[other_b_id]
             try:
-                CLIENT.channels.get(other_b_id).hangup()
+                # "Call completed elsewhere": the other phones (and the
+                # My Phone app) don't count it as a missed call.
+                CLIENT.channels.get(other_b_id).hangup(reason="answered_elsewhere")
             except Exception:
                 pass
     try:

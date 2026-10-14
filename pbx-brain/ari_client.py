@@ -20,8 +20,11 @@ class Channel:
         self.id = channel_id
         self.json = {}
 
-    def hangup(self):
-        self._client.delete("channels/%s" % self.id)
+    def hangup(self, reason=None):
+        """reason: an ARI hangup reason, e.g. "answered_elsewhere" (phones
+        then show the call as answered elsewhere, not missed)."""
+        self._client.delete("channels/%s" % self.id,
+                            **({"params": {"reason": reason}} if reason else {}))
 
     def answer(self):
         self._client.post("channels/%s/answer" % self.id)

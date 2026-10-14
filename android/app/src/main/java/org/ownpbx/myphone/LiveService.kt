@@ -44,6 +44,33 @@ class LiveService : Service() {
     private var callsCheckedAt = 0L
     @Volatile private var waitMissing = false
     @Volatile private var waitMissingSince = 0L
+    /** Poked when the phone gets a connection back: check right away. */
+    private val wake = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    private var netCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        // Back online after being offline (no signal, airplane mode, PBX
+        // unreachable): catch up at once, so missed calls and texts notify
+        // as soon as the phone can reach the PBX.
+        try {
+            val cm = getSystemService(android.net.ConnectivityManager::class.java)
+            val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    refreshCalls = true
+                    wake.trySend(Unit)
+                }
+            }
+            cm.registerDefaultNetworkCallback(cb)
+            netCallback = cb
+        } catch (_: Exception) {}
+    }
+
+    /** Wait [ms], or less if the connection comes back. */
+    private suspend fun pause(ms: Long) {
+        wake.tryReceive()                 // forget an old poke
+        kotlinx.coroutines.withTimeoutOrNull(ms) { wake.receive() }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,6 +89,7 @@ class LiveService : Service() {
     }
 
     override fun onDestroy() {
+        try { netCallback?.let { getSystemService(android.net.ConnectivityManager::class.java).unregisterNetworkCallback(it) } } catch (_: Exception) {}
         scope.cancel()
         // No service = nothing keeps the app alive to ring: sign out of calls.
         if (Phone.ui == null || Phone.ui?.ended == true) Phone.stopListening()
@@ -99,7 +127,7 @@ class LiveService : Service() {
                 val every = store.checkEvery
                 if (!notifying(store)) {
                     // Only here for incoming calls: the 15-minute job does the notifications.
-                    delay(30_000)
+                    pause(30_000)
                 } else if (every == 0 && waitMissing) {
                     // Older PBX without /me/wait: check every minute until it's updated.
                     Notifier.run(this, seenOnly = false)
@@ -119,7 +147,7 @@ class LiveService : Service() {
                     }
                 } else {
                     Notifier.run(this, seenOnly = false)
-                    delay(every * 1000L)
+                    pause(every * 1000L)
                 }
                 backoff = 5_000L
             } catch (e: CancellationException) {
@@ -130,10 +158,11 @@ class LiveService : Service() {
                     waitMissing = true; waitMissingSince = System.currentTimeMillis(); continue
                 }
                 Notifier.record(store, "PBX answered with error ${e.status}; retrying")
-                delay(backoff); backoff = (backoff * 2).coerceAtMost(120_000L)
+                pause(backoff); backoff = (backoff * 2).coerceAtMost(120_000L)
             } catch (e: Exception) {
                 Notifier.record(store, "Couldn't reach the PBX (${e.javaClass.simpleName}); retrying")
-                delay(backoff); backoff = (backoff * 2).coerceAtMost(120_000L)
+                if (wake.tryReceive().isSuccess) backoff = 5_000L   // network just came back
+                pause(backoff); backoff = (backoff * 2).coerceAtMost(120_000L)
             }
         }
     }

@@ -177,30 +177,24 @@ object Notifier {
             }
         }
 
-        // ---- missed calls (hidden calls are already left out by the PBX)
-        val missed = api.calls("missed").calls
+        // ---- missed calls (hidden calls are already left out by the PBX).
+        // A call nobody answered usually rolls to voicemail; the PBX lists
+        // those as "vm", and they're missed calls too.
+        val missed = api.calls("missed").calls.filter { it.kind == "missed" || it.kind == "vm" }
         val topCall = missed.maxOfOrNull { it.id } ?: 0
         if (store.notifCallId == 0L) {
             store.notifCallId = topCall.coerceAtLeast(1)
         } else {
-            val fresh = missed.filter { it.id > store.notifCallId && it.kind == "missed" }
+            val fresh = missed.filter { it.id > store.notifCallId }
             store.notifCallId = maxOf(store.notifCallId, topCall)
             found += fresh.size
-            if (!quiet && fresh.isNotEmpty()) {
+            // Calls the app rang for and already notified about itself.
+            val unannounced = fresh.filterNot { alreadyNotified(store, it.other, callTime(it.started_at)) }
+            if (!quiet && unannounced.isNotEmpty()) {
                 posted++
                 // All missed calls not yet looked at in the app (the PBX's per-phone count).
                 val n = maxOf(ov.missed_new ?: 0, fresh.size)
-                val who = missed.filter { it.kind == "missed" }.take(n)
-                    .map { prettyNumber(it.other.ifEmpty { "Unknown" }) }.distinct()
-                nm.notify(ID_CALLS, base(ctx, CH_CALLS)
-                    .setContentTitle(if (n == 1) "Missed call" else "$n missed calls")
-                    .setContentText(who.joinToString(", "))
-                    .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
-                    .setNumber(n)
-                    .setContentIntent(open(ctx, "calls", null, ID_CALLS))
-                    .setPublicVersion(base(ctx, CH_CALLS).setContentTitle("My Phone")
-                        .setContentText("Missed call").build())
-                    .build())
+                postMissed(ctx, missed.take(n).map { it.other to callTime(it.started_at) }, n)
             }
         }
 
@@ -240,6 +234,81 @@ object Notifier {
         }
         record(store, status)
         return status
+    }
+
+    // ------------------------------------------------------------ missed calls
+
+    /** Server call times are the PBX's local time, "yyyy-MM-dd HH:mm:ss". */
+    fun callTime(ts: String): Long = try {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).parse(ts)?.time ?: 0L
+    } catch (e: Exception) { 0L }
+
+    /** "2:14 PM" today, "Mon 2:14 PM" this week, "Oct 3, 2:14 PM" older. */
+    fun whenText(ctx: Context, at: Long): String {
+        if (at <= 0) return ""
+        val d = java.util.Date(at)
+        val time = android.text.format.DateFormat.getTimeFormat(ctx).format(d)
+        val day = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+        val age = System.currentTimeMillis() - at
+        return when {
+            day.format(d) == day.format(java.util.Date()) -> time
+            age < 6 * 86400_000L -> java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(d) + " " + time
+            else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(d) + ", " + time
+        }
+    }
+
+    private fun digits(n: String) = n.filter { it.isDigit() }.takeLast(10)
+
+    private fun alreadyNotified(store: Store, number: String, at: Long): Boolean =
+        store.localMissed.split(";").any { e ->
+            val num = e.substringBefore("@"); val t = e.substringAfter("@", "").toLongOrNull() ?: return@any false
+            num.isNotEmpty() && digits(num) == digits(number) && (at == 0L || kotlin.math.abs(at - t) < 5 * 60_000L)
+        }
+
+    /** The app rang for a call nobody answered: say so right away, without
+     *  waiting for the PBX (which only lists it once the caller hangs up). */
+    fun missedNow(ctx: Context, number: String, name: String, at: Long) {
+        val store = Store(ctx)
+        store.localMissed = (store.localMissed.split(";").filter { it.isNotBlank() }.takeLast(9) +
+            "${number.replace(";", "").replace("@", "")}@$at").joinToString(";")
+        if (store.token == null || !store.notifyOn) return
+        createChannels(ctx)
+        val nm = NotificationManagerCompat.from(ctx)
+        if (!canNotify(ctx) || !nm.areNotificationsEnabled()) return
+        // Add it to any missed calls already showing.
+        val showing = nm.activeNotifications.firstOrNull { it.id == ID_CALLS }?.notification
+        val before = showing?.extras?.getInt("myphone.count", 0) ?: 0
+        val lines = showing?.extras?.getStringArrayList("myphone.lines").orEmpty()
+        postMissed(ctx, listOf((if (name.isNotBlank()) "$name · " else "") + number to at), before + 1, lines)
+    }
+
+    /** One "Missed call" notification: who and when, newest first. */
+    private fun postMissed(ctx: Context, calls: List<Pair<String, Long>>, total: Int, older: List<String> = emptyList()) {
+        if (calls.isEmpty()) return
+        val nm = NotificationManagerCompat.from(ctx)
+        val lines = (calls.map { (who, at) ->
+            val w = if (who.contains(" · ")) who.substringBefore(" · ") + " · " + prettyNumber(who.substringAfter(" · "))
+                    else prettyNumber(who.ifEmpty { "Unknown" })
+            val time = whenText(ctx, at)
+            if (time.isEmpty()) w else "$w · $time"
+        } + older).distinct().take(maxOf(total, calls.size))
+        val n = maxOf(total, lines.size)
+        val newest = calls.first().second
+        val b = base(ctx, CH_CALLS)
+            .setContentTitle(if (n == 1) "Missed call" else "$n missed calls")
+            .setContentText(if (n == 1) lines.first() else "Latest: " + lines.first())
+            .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+            .setNumber(n)
+            .setContentIntent(open(ctx, "calls", null, ID_CALLS))
+            .setPublicVersion(base(ctx, CH_CALLS).setContentTitle("My Phone")
+                .setContentText(if (n == 1) "Missed call" else "$n missed calls").build())
+            .addExtras(android.os.Bundle().apply {
+                putInt("myphone.count", n)
+                putStringArrayList("myphone.lines", ArrayList(lines.take(6)))
+            })
+        if (newest > 0) b.setWhen(newest).setShowWhen(true)
+        if (lines.size > 1) b.setStyle(NotificationCompat.InboxStyle().also { st -> lines.take(6).forEach { st.addLine(it) } })
+        try { nm.notify(ID_CALLS, b.build()) } catch (_: SecurityException) {}
     }
 
     fun record(store: Store, status: String) {

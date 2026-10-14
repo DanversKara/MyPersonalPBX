@@ -111,6 +111,11 @@ class Store(context: Context) {
     var notifCallId: Long
         get() = prefs.getLong("notif_call", 0)
         set(v) = prefs.edit().putLong("notif_call", v).apply()
+    /** Missed calls the app already notified itself ("number@epochMs;..."),
+     *  so the PBX's copy of the same call doesn't ring a second time. */
+    var localMissed: String
+        get() = prefs.getString("local_missed", "") ?: ""
+        set(v) = prefs.edit().putString("local_missed", v).apply()
     var notifVmId: Long
         get() = prefs.getLong("notif_vm", 0)
         set(v) = prefs.edit().putLong("notif_vm", v).apply()
