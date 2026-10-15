@@ -50,6 +50,20 @@ def qall(sql, args=()):
         return c.execute(sql, args).fetchall()
 
 
+def plan_codes(login_id):
+    """Star codes from the user's active plan, else the "no plan" set."""
+    split = lambda s: {x.strip() for x in str(s or "").split(",") if x.strip()}
+    try:
+        r = q1("SELECT p.feature_codes FROM billing_customers b JOIN billing_plans p ON p.id = b.plan_id"
+               " WHERE b.login_id=? AND b.status IN ('active','trialing','past_due')", (login_id,))
+        if r:
+            return split(r["feature_codes"])
+        d = q1("SELECT value FROM kv_settings WHERE key='default_feature_codes'")
+        return split(d["value"] if d else "")
+    except sqlite3.OperationalError:
+        return set()
+
+
 def feature_allowed(code, login):
     """Can this login use a feature code (e.g. '*97', '*555')?
 
@@ -65,10 +79,15 @@ def feature_allowed(code, login):
         if o is not None:
             return bool(o["allowed"])
         da = (f["default_access"] or "all")
+        is_admin = (login.get("role") or "") == "admin"
         if da == "admin":
-            return (login.get("role") or "") == "admin"
+            return is_admin
         if da == "none":
             return False
+        if da == "plan":
+            # Mirrors pbx-api entitlements.code_access(): the active plan's
+            # codes, else the "no plan" set (empty by default).
+            return is_admin or code in plan_codes(login["id"])
         return True
     except Exception:
         # tables missing (migration not run yet): historical behavior

@@ -140,3 +140,61 @@ def set_default_quota(c, feature, value):
     c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?,?)",
               ("default_quota_" + feature, str(int(value))))
     c.commit()
+
+
+# ------------------------------------------------------------------ star codes
+# A feature code whose default access is "plan" is open to a user when their
+# active plan lists it (billing_plans.feature_codes) or, without a plan, when
+# it is in the "no plan" set (kv default_feature_codes, empty by default).
+# Per-user Allow/Deny (login_feature_access) always wins; admins always can.
+# pbx-brain mirrors this in feature_allowed().
+ACTIVE_STATUSES = ("active", "trialing", "past_due")
+
+
+def split_codes(s) -> list:
+    return [x for x in (p.strip() for p in str(s or "").split(",")) if x]
+
+
+def active_plan(c, login_id):
+    """(plan id, plan name, codes) of the user's active plan, or None."""
+    try:
+        r = c.execute("SELECT p.id, p.name, p.feature_codes FROM billing_customers b"
+                      " JOIN billing_plans p ON p.id = b.plan_id"
+                      " WHERE b.login_id=? AND b.status IN ('active','trialing','past_due')",
+                      (login_id,)).fetchone()
+    except Exception:
+        return None
+    return (r[0], r[1], set(split_codes(r[2]))) if r else None
+
+
+def default_codes(c) -> set:
+    r = c.execute("SELECT value FROM kv_settings WHERE key='default_feature_codes'").fetchone()
+    return set(split_codes(r[0] if r else ""))
+
+
+def plan_codes(c, login_id) -> set:
+    p = active_plan(c, login_id)
+    return p[2] if p else default_codes(c)
+
+
+def code_access(c, login, code):
+    """(allowed, why) for one login and one star code, for the admin pages."""
+    f = c.execute("SELECT enabled, default_access FROM feature_codes WHERE code=?", (code,)).fetchone()
+    if not f or not f[0]:
+        return False, "code turned off"
+    o = c.execute("SELECT allowed FROM login_feature_access WHERE login_id=? AND code=?",
+                  (login["id"], code)).fetchone()
+    if o is not None:
+        return bool(o[0]), "Allow override" if o[0] else "Deny override"
+    da = f[1] or "plan"
+    is_adm = (login["role"] or "") == "admin"
+    if da == "all":
+        return True, "all users"
+    if da == "none":
+        return False, "no one"
+    if da == "admin" or is_adm:
+        return is_adm, "admin" if is_adm else "admins only"
+    p = active_plan(c, login["id"])
+    if p:
+        return (code in p[2]), (f"in plan {p[1]}" if code in p[2] else f"not in plan {p[1]}")
+    return (code in default_codes(c)), ("no plan: included" if code in default_codes(c) else "no plan")
