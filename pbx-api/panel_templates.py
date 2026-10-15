@@ -374,6 +374,7 @@ def page(title, body, username="", role="", tab=""):
         <a href="/features" class="{feat}">Features</a>
         <a href="/ivr" class="{ivr}">IVR</a>
         <a href="/billing" class="{bill}">Billing</a>
+        <a href="/storefront" class="{store}">Store</a>
         <a href="/email" class="{email}">Email</a>
         <a href="/network" class="{net}">Network</a>
         <a href="/sso" class="{sso}">Sign-on</a>
@@ -389,6 +390,7 @@ def page(title, body, username="", role="", tab=""):
             sms="on" if tab == "sms" else "",
             feat="on" if tab == "features" else "",
             bill="on" if tab == "billing" else "",
+            store="on" if tab == "store" else "",
             email="on" if tab == "email" else "",
             net="on" if tab == "network" else "",
             sso="on" if tab == "sso" else "",

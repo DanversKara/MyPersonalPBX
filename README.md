@@ -501,6 +501,27 @@ text, with select / delete all.
 ![Recordings](docs/screenshots/12-recordings.png)
 The **Recordings** page also holds the **recording settings** (see section 13).
 
+### Store
+A public sign-up page at `https://<your panel>/store`: new customers pick a
+plan (and, optionally, a phone number from the ones you list for sale), then
+enter their card on **Stripe's own checkout page**. **Nobody is charged and
+nothing is created until you approve** the order on **Admin → Store**:
+
+- **Approve** charges the first month on the saved card (a declined card stops
+  there, nothing is created), creates the login on the next free extension in
+  the Invites range with a generated password and SIP secret, routes the
+  number's calls and texts to it, switches on the plan, and emails the
+  customer their login.
+- **Reject** (with an optional reason, emailed) just closes the order: the
+  card was never charged.
+
+New orders are emailed to you (or the security alert address). The form has
+a bot trap, a time-limited signed token and the same per-address rate limits
+as sign-in; only one order per email can wait at a time. A number is offered
+only while nothing else answers it. The admin page is office-network only;
+the public page works through your tunnel. Needs Stripe keys and published
+plans (Billing) and SMTP (Email) for the customer emails.
+
 ### Billing
 ![Billing](docs/screenshots/14-billing.png)
 Stripe keys, plans and **User access** (defaults for users without a plan,
