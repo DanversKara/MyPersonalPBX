@@ -23,6 +23,17 @@ class Store(context: Context) {
     var server: String
         get() = prefs.getString("server", null)?.takeIf { it.isNotBlank() } ?: org.ownpbx.myphone.BuildConfig.DEFAULT_SERVER
         set(v) = prefs.edit().putString("server", v).apply()
+    /** "Sign in with my browser" in progress: the state sent, the server it
+     *  went to and when. Only a link carrying this state connects by itself. */
+    var browserState: String
+        get() = prefs.getString("browser_state", "") ?: ""
+        set(v) = prefs.edit().putString("browser_state", v).apply()
+    var browserServer: String
+        get() = prefs.getString("browser_server", "") ?: ""
+        set(v) = prefs.edit().putString("browser_server", v).apply()
+    var browserAt: Long
+        get() = prefs.getLong("browser_at", 0)
+        set(v) = prefs.edit().putLong("browser_at", v).apply()
     var token: String?
         get() = prefs.getString("token", null)
         set(v) = prefs.edit().putString("token", v).apply()

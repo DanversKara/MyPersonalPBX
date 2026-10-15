@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.ui.platform.LocalContext
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import org.ownpbx.myphone.data.PairLink
@@ -70,13 +72,45 @@ fun SignInScreen(model: AppModel) {
         }
     }
 
-    // A link the phone's camera opened: fill in, let the user check and tap Connect.
+    val ctx = LocalContext.current
+
+    /** Open My Phone in an in-app browser tab: sign in there (password or
+     *  single sign-on) and the PBX sends this app a pairing code. */
+    fun browserSignIn() {
+        val base = Api.normalizeServer(server)
+        if (base.isEmpty()) { error = "Enter your PBX address first."; return }
+        val bytes = ByteArray(18).also { java.security.SecureRandom().nextBytes(it) }
+        val state = android.util.Base64.encodeToString(bytes,
+            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+        model.store.browserState = state
+        model.store.browserServer = base
+        model.store.browserAt = System.currentTimeMillis()
+        error = null
+        val url = android.net.Uri.parse("$base/ucp/app/connect?st=$state")
+        try {
+            androidx.browser.customtabs.CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(ctx, url)
+        } catch (e: Exception) {
+            try { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, url)) }
+            catch (e2: Exception) { error = "No web browser found on this phone." }
+        }
+    }
+
+    // A pairing link arrived. If it answers our own "Sign in with my browser"
+    // (same state, same server, recent), connect straight away; otherwise
+    // (camera, another app) fill it in and let the person check and tap Connect.
     LaunchedEffect(model.pendingPair) {
         model.pendingPair?.let { p ->
+            val st = model.store
+            val ours = p.state != null && p.state == st.browserState &&
+                System.currentTimeMillis() - st.browserAt < 15 * 60_000L &&
+                (p.server == null || Api.normalizeServer(p.server) == st.browserServer)
             p.server?.let { server = it }
             code = p.code
             error = null
             model.pendingPair = null
+            if (p.state != null) { st.browserState = ""; st.browserAt = 0 }
+            if (ours) go()
+            else if (p.state != null) error = "Check the server address, then tap Connect."
         }
     }
 
@@ -109,8 +143,28 @@ fun SignInScreen(model: AppModel) {
         ) {
             Spacer(Modifier.height(24.dp))
             Text("My Phone", style = MaterialTheme.typography.displaySmall)
-            Text("Connect this phone to your PBX with a pairing code.",
+            Text("Connect this phone to your PBX.",
                 style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), singleLine = true,
+                label = { Text("Server") }, placeholder = { Text("https://pbx.example.com") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
+            if (server.trim().startsWith("http://")) {
+                Text("This address isn't encrypted (http). Only use it on your home network or VPN.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            Button(::browserSignIn, Modifier.fillMaxWidth().height(52.dp), enabled = !busy) {
+                Icon(Icons.Filled.OpenInBrowser, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Sign in with my browser")
+            }
+            Text("Opens My Phone here in the app. Sign in, and this phone connects by itself.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                HorizontalDivider(Modifier.weight(1f))
+                Text("  or with a pairing code  ", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                HorizontalDivider(Modifier.weight(1f))
+            }
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("1. Sign in to My Phone in a browser.", style = MaterialTheme.typography.bodyMedium)
@@ -119,7 +173,7 @@ fun SignInScreen(model: AppModel) {
                         style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            Button(::scan, Modifier.fillMaxWidth().height(52.dp), enabled = !busy) {
+            OutlinedButton(::scan, Modifier.fillMaxWidth().height(52.dp), enabled = !busy) {
                 Icon(Icons.Filled.QrCodeScanner, null)
                 Spacer(Modifier.width(8.dp))
                 Text("Scan QR code")
@@ -129,13 +183,6 @@ fun SignInScreen(model: AppModel) {
                 Text("  or type it  ", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 HorizontalDivider(Modifier.weight(1f))
-            }
-            OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), singleLine = true,
-                label = { Text("Server") }, placeholder = { Text("https://pbx.example.com") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
-            if (server.trim().startsWith("http://")) {
-                Text("This address isn't encrypted (http). Only use it on your home network or VPN.",
-                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             OutlinedTextField(code, { code = it.uppercase().filter { ch -> ch.isLetterOrDigit() || ch == '-' || ch == ' ' }.take(12) },
                 Modifier.fillMaxWidth(), singleLine = true,

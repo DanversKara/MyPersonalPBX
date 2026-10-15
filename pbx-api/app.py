@@ -605,15 +605,17 @@ def _check_csrf_v1(request: Request):
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     if sso_ui.should_auto_redirect(request):
-        return RedirectResponse("/login/oidc", status_code=302)
+        nxt = sso_ui.next_param(request.query_params.get("next"))
+        return RedirectResponse("/login/oidc" + ("?" + urllib.parse.urlencode({"next": nxt}) if nxt else ""),
+                                status_code=302)
     return HTMLResponse(page("Login", sso_ui.login_box(request)))
 
 
 @app.post("/login")
-def login_post(request: Request, username: str = Form(...), password: str = Form(...)):
+def login_post(request: Request, username: str = Form(...), password: str = Form(...), next: str = Form("")):
     ip = client_ip(request)
     if not _login_allowed(ip, username):
-        return HTMLResponse(page("Login", sso_ui.login_box(request, "Too many attempts — try again in 15 minutes.", True)), status_code=429)
+        return HTMLResponse(page("Login", sso_ui.login_box(request, "Too many attempts — try again in 15 minutes.", True, next)), status_code=429)
     with db() as c:
         u = c.execute("SELECT * FROM logins WHERE username=?",
                       (username,)).fetchone()
@@ -621,10 +623,10 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
     if not u or not pw_ok or not u["enabled"]:
         _log_signin(request, username, False)
         _login_failed(ip, username)
-        return HTMLResponse(page("Login", sso_ui.login_box(request, "Invalid credentials", True)), status_code=401)
+        return HTMLResponse(page("Login", sso_ui.login_box(request, "Invalid credentials", True, next)), status_code=401)
     _log_signin(request, username, True)
     tok = _new_session(u)
-    dest = "/" if u["role"] == "admin" else "/ucp"
+    dest = sso_ui.next_param(next) or ("/" if u["role"] == "admin" else "/ucp")
     resp = RedirectResponse(dest, status_code=302)
     _set_session_cookie(request, resp, tok)
     return resp

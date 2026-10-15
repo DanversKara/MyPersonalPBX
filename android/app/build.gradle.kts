@@ -13,8 +13,8 @@ android {
         applicationId = "org.ownpbx.myphone"
         minSdk = 26
         targetSdk = 34
-        versionCode = 18
-        versionName = "0.7.1"
+        versionCode = 19
+        versionName = "0.7.2"
         val defaultServer = (project.findProperty("myphone.defaultServer") as String?).orEmpty()
             .replace("\\", "").replace("\"", "")
         buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
@@ -57,6 +57,7 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.3")
     // Background checks for notifications (AndroidX, no Play Services).
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.browser:browser:1.8.0")
     // Built-in phone: Linphone SDK, voice-only build (GPL-3.0; the app as a
     // whole is GPL-2.0-or-later, which allows combining with GPL-3.0).
     implementation("org.linphone.no-video:linphone-sdk-android:5.4.128")

@@ -6,8 +6,9 @@ import android.net.Uri
 /** Phone login from My Phone > App > Show phone login QR. */
 data class SipLogin(val server: String, val user: String, val pass: String)
 
-/** Server + pairing code from a pairing QR code / link. */
-data class PairInfo(val server: String?, val code: String)
+/** Server + pairing code from a pairing QR code / link. [state] is set when
+ *  the link answers this app's own "Sign in with my browser". */
+data class PairInfo(val server: String?, val code: String, val state: String? = null)
 
 object PairLink {
     /** Accepts myphone://pair?s=<server>&c=<code> (what My Phone > App shows),
@@ -21,7 +22,8 @@ object PairLink {
             val code = cleanCode(u.getQueryParameter("c")) ?: return null
             val server = u.getQueryParameter("s")?.trim()
                 ?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
-            return PairInfo(server, code)
+            val state = u.getQueryParameter("st")?.trim()?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{8,64}")) }
+            return PairInfo(server, code, state)
         }
         return cleanCode(t)?.let { PairInfo(null, it) }
     }
