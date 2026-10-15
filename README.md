@@ -504,7 +504,8 @@ The **Recordings** page also holds the **recording settings** (see section 13).
 ### Billing
 ![Billing](docs/screenshots/14-billing.png)
 Stripe keys, plans and **User access** (defaults for users without a plan,
-plus per-user exceptions). See section 14.
+plus per-user exceptions). A plan also lists the **star codes** it includes
+(see section 11). See section 14.
 
 ### Email
 ![Email](docs/screenshots/15-email.png)
@@ -696,10 +697,22 @@ While monitoring (`*555`), press `*` / `1` for the previous call and `#` / `2`
 for the next call. A beep confirms each hop. Hang up to stop monitoring.
 
 The **Features** page in the admin panel controls every star code: turn each
-one on/off for the whole system, set the default access (**All users**,
-**Admins only**, or **No one**), and override per user with Allow/Deny. For
-example, you can give `*555` (ChanSpy) to a supervisor without making them a
-full admin, or disable `*70` (DISA) entirely.
+one on/off for the whole system, set the default access (**By plan**, **All
+users**, **Admins only**, or **No one**), and override per user with
+Allow/Deny. For example, you can give `*555` (ChanSpy) to a supervisor without
+making them a full admin, or disable `*70` (DISA) entirely. Each user's row
+shows whether they can use the code right now, and why.
+
+**By plan** (the default for every code except `*555`, which is admins only):
+a new account starts with **no** star codes. A user gets a code when their
+active plan includes it (**Billing → plan → Star codes included**); it goes
+off again if the plan lapses or changes. Without a plan they get the
+**Star codes (no plan)** set under **Billing → User access**, empty by
+default; tick `*97`/`*98` there if you don't sell plans and want everyone to
+reach their voicemail. Admins can always use every code, and a per-user
+Allow/Deny always wins. Users who existed before this change kept the codes
+they had (an Allow override each); set them back to Default to hand them to
+their plan.
 
 ---
 

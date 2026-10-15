@@ -30,6 +30,7 @@ import email_ui
 import mailer
 import network_ui
 import sso_ui
+import entitlements
 import security
 import e911_ui
 import ring_groups_ui
@@ -171,6 +172,20 @@ def _migrate(c):
     ):
         c.execute("INSERT OR IGNORE INTO feature_codes (code, name, description, default_access)"
                   " VALUES (?,?,?,?)", (code, name, desc, access))
+    # Star codes by plan: a plan lists the codes it includes; users without
+    # a plan get the "no plan" set (Billing -> User access), empty by default.
+    if "feature_codes" not in cols("billing_plans"):
+        c.execute("ALTER TABLE billing_plans ADD COLUMN feature_codes TEXT NOT NULL DEFAULT ''")
+    c.execute("INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_feature_codes', '')")
+    # One-time: codes open to "All users" become "By plan", so new accounts
+    # start with none. Users who exist now keep exactly what they had (an
+    # Allow override each), so nothing changes for them.
+    if not c.execute("SELECT 1 FROM kv_settings WHERE key='mig_codes_by_plan'").fetchone():
+        for (code,) in c.execute("SELECT code FROM feature_codes WHERE default_access='all'").fetchall():
+            c.execute("INSERT OR IGNORE INTO login_feature_access (login_id, code, allowed)"
+                      " SELECT id, ?, 1 FROM logins WHERE role != 'admin'", (code,))
+            c.execute("UPDATE feature_codes SET default_access='plan' WHERE code=?", (code,))
+        c.execute("INSERT INTO kv_settings (key, value) VALUES ('mig_codes_by_plan', '1')")
     c.execute("""CREATE TABLE IF NOT EXISTS invites (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       token_hash TEXT NOT NULL UNIQUE,
@@ -2446,7 +2461,7 @@ def features_page(request: Request):
         exc = {r["code"]: r["n"] for r in c.execute(
             "SELECT code, COUNT(*) n FROM login_feature_access GROUP BY code")}
     def access_label(a):
-        return {"all": "All users", "admin": "Admins only", "none": "No one"}.get(a, a)
+        return {"all": "All users", "plan": "By plan", "admin": "Admins only", "none": "No one"}.get(a, a)
     tr = "".join(
         f"<tr><td><code>{esc(f['code'])}</code></td><td>{esc(f['name'])}"
         f"<br><span class='muted'>{esc(f['description'])}</span></td>"
@@ -2457,7 +2472,9 @@ def features_page(request: Request):
         for f in feats)
     body = f"""<h2>Feature codes</h2>
 <p class="muted">Star codes users can dial from their phones (e.g. <code>*97</code> for voicemail).
-Turn each code on/off, set who may use it by default, and override per user below.</p>
+Turn each code on/off, set who may use it by default, and override per user.
+<b>By plan</b>: a user gets the code when their plan includes it (Billing → plan → Star codes included), or,
+without a plan, when it's in the "no plan" star codes (Billing → User access). Admins always can.</p>
 <table><tr><th>Code</th><th>Name</th><th>Enabled</th><th>Default access</th><th>User overrides</th><th></th></tr>
 {tr or '<tr><td colspan=6 class=muted>No feature codes.</td></tr>'}</table>
 """
@@ -2475,6 +2492,7 @@ def feature_edit_page(request: Request, code: str):
             return RedirectResponse("/features")
         logins = c.execute("SELECT id, exten, display_name, role FROM logins"
                            " WHERE enabled=1 ORDER BY exten").fetchall()
+        now = {u["id"]: entitlements.code_access(c, u, code) for u in logins}
         overrides = {r["login_id"]: r["allowed"] for r in c.execute(
             "SELECT login_id, allowed FROM login_feature_access WHERE code=?", (code,))}
     def acc_opt(val, label):
@@ -2487,8 +2505,11 @@ def feature_edit_page(request: Request, code: str):
         sel_a = "selected" if ov == 1 else ""
         sel_n = "selected" if ov == 0 else ""
         nm = esc(u["display_name"] or u["exten"])
+        ok, why = now[u["id"]]
         urows.append(
             f"<tr><td>{esc(u['exten'])}</td><td>{nm}</td><td>{esc(u['role'])}</td>"
+            f"<td><span class='pill {'ok' if ok else 'bad'}'>{'Can use' if ok else 'Off'}</span>"
+            f" <span class='muted'>{esc(why)}</span></td>"
             f"<td><select name='u_{u['id']}'>"
             f"<option value='' {sel_d}>Default</option>"
             f"<option value='1' {sel_a}>Allow</option>"
@@ -2500,13 +2521,14 @@ def feature_edit_page(request: Request, code: str):
 {_csrf_field(s)}
 <label><input type="checkbox" name="enabled" value="1" {'checked' if f['enabled'] else ''}> Enabled</label><br><br>
 <label>Default access<br><select name="default_access">
+{acc_opt('plan', 'By plan (users whose plan includes it; admins always)')}
 {acc_opt('all', 'All users')}
 {acc_opt('admin', 'Admins only')}
 {acc_opt('none', 'No one (allow specific users below)')}
 </select></label><br><br>
 <h3>Per-user overrides</h3>
-<p class="muted">Leave on Default to follow the setting above, or force Allow/Deny per user.</p>
-<table><tr><th>Ext</th><th>Name</th><th>Role</th><th>Access</th></tr>
+<p class="muted">Leave on Default to follow the setting above, or force Allow/Deny per user. "Now" is what applies today and why.</p>
+<table><tr><th>Ext</th><th>Name</th><th>Role</th><th>Now</th><th>Access</th></tr>
 {''.join(urows)}
 </table><br>
 <button class="btn" type="submit">Save</button> <a class="btn ghost" href="/features">Cancel</a>
@@ -2525,9 +2547,9 @@ async def feature_edit_save(request: Request, code: str):
     await _check_csrf(request, s)
     f = await request.form()
     enabled = 1 if f.get("enabled") else 0
-    default_access = (f.get("default_access") or "all").strip()
-    if default_access not in ("all", "admin", "none"):
-        default_access = "all"
+    default_access = (f.get("default_access") or "plan").strip()
+    if default_access not in ("all", "plan", "admin", "none"):
+        default_access = "plan"
     with db() as c:
         c.execute("UPDATE feature_codes SET enabled=?, default_access=? WHERE code=?",
                   (enabled, default_access, code))
