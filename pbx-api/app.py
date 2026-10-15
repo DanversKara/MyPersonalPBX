@@ -22,7 +22,7 @@ import bcrypt
 from fastapi import FastAPI, HTTPException, Request, Form, File, UploadFile
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse
 from pydantic import BaseModel
-from panel_templates import page, LOGIN_HTML, HIDE_ADMIN, BRANDING, BRAND_DEFAULTS, login_html, fmt_ts
+from panel_templates import page, LOGIN_HTML, HIDE_ADMIN, BRANDING, BRAND_DEFAULTS, login_html, fmt_ts, get_brand
 import ucp
 import ivr_ui
 import billing
@@ -30,6 +30,7 @@ import email_ui
 import mailer
 import network_ui
 import sso_ui
+import store_ui
 import entitlements
 import security
 import e911_ui
@@ -177,6 +178,7 @@ def _migrate(c):
     if "feature_codes" not in cols("billing_plans"):
         c.execute("ALTER TABLE billing_plans ADD COLUMN feature_codes TEXT NOT NULL DEFAULT ''")
     c.execute("INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_feature_codes', '')")
+    store_ui.ensure_tables(c)
     # One-time: codes open to "All users" become "By plan", so new accounts
     # start with none. Users who exist now keep exactly what they had (an
     # Allow override each), so nothing changes for them.
@@ -361,7 +363,7 @@ REMOTE_ALLOWED_PREFIXES = (
     "/ucp", "/login", "/logout", "/auth/login", "/auth/logout", "/auth/me",
     "/stripe/webhook", "/healthz", "/api/vm-greeting", "/api/voicemail-audio/",
     "/api/recording-audio/", "/api/ivr-greeting/", "/api/v1/me", "/favicon",
-    "/hooks/voipms-sms", "/invite/", "/api/v1/app/",
+    "/hooks/voipms-sms", "/invite/", "/api/v1/app/", "/store",
 )
 
 
@@ -1318,7 +1320,7 @@ async def invite_new(request: Request):
             with db() as c:
                 cfg = mailer.settings(c)
             mailer.send(cfg, email,
-                        f"Your {_get_setting('brand_site_name') or 'PBX'} phone account invite",
+                        f"Your {(get_brand().get('site_name') or 'PBX')} phone account invite",
                         f"Hi,\n\nYou've been invited to set up your phone account.\n\n"
                         f"Open this link within {days} day{'s' if days != 1 else ''} to choose your password "
                         f"and finish setup:\n\n{link}\n\n"
@@ -3936,7 +3938,7 @@ _PIN_EXEMPT_EXACT = frozenset({
     "/api/v1/safety/pin/status", "/api/v1/safety/pin/lock",
     "/login", "/logout", "/auth/login", "/auth/logout",
 })
-_PIN_EXEMPT_PREFIX = ("/ucp", "/hooks/", "/invite/", "/stripe/webhook", "/login/")
+_PIN_EXEMPT_PREFIX = ("/ucp", "/hooks/", "/invite/", "/stripe/webhook", "/login/", "/store/")
 
 
 def _pin_required_html(s: dict) -> str:
@@ -4012,6 +4014,7 @@ billing.install(_sys.modules[__name__])
 email_ui.install(_sys.modules[__name__])
 network_ui.install(_sys.modules[__name__])
 sso_ui.install(_sys.modules[__name__])
+store_ui.install(_sys.modules[__name__], billing)
 security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])

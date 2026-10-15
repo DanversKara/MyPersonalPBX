@@ -316,7 +316,10 @@ async def webhook(request: Request):
             return {"ok": True, "duplicate": True}
     obj = (event.get("data") or {}).get("object") or {}
     try:
-        if etype == "checkout.session.completed":
+        if (obj.get("metadata") or {}).get("pbx_store_order") and etype == "checkout.session.completed":
+            import store_ui            # storefront sign-up: card saved, order awaits approval
+            store_ui.on_webhook(etype, obj)
+        elif etype == "checkout.session.completed":
             login_id = int(obj.get("client_reference_id") or (obj.get("metadata") or {}).get("pbx_login_id") or 0)
             if login_id and obj.get("customer"):
                 with M.db() as c:
