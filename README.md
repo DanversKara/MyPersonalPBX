@@ -657,9 +657,13 @@ the Notifications and Calling settings.*
 **Get it:** GitHub **Actions → Android app** → latest green run →
 **Artifacts → my-phone-debug-apk**, unzip, and open the `.apk` on the phone.
 
-**Connect:** in My Phone (web) open **App → Get a pairing code**, then in the
+**Connect:** the easiest way is **Sign in with my browser** in the app: it
+opens My Phone in an in-app browser tab, you sign in there (password or single
+sign-on), and the phone connects by itself (`/ucp/app/connect` makes the
+pairing code and hands it back; the app only auto-connects for the sign-in it
+started). Or, in My Phone (web) open **App → Get a pairing code**, then in the
 app tap **Scan QR code** (or scan with the phone's camera, tap *Open in the My
-Phone app* on the phone itself, or type the code). The app never asks for the
+Phone app* on the phone itself, or type the code). The app never sees the
 panel password; each phone stays signed in for 60 days after it was last used.
 
 **Calls:** in the app, **Settings → Calling → Phone login → Get from my PBX →

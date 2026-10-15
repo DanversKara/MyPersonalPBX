@@ -178,7 +178,8 @@ def start(request: Request):
         for k in sorted(_pending, key=lambda k: _pending[k]["at"])[:500]:
             _pending.pop(k, None)
     ruri = redirect_uri(request, c)
-    _pending[state] = {"nonce": nonce, "verifier": verifier, "redirect_uri": ruri, "at": now}
+    _pending[state] = {"nonce": nonce, "verifier": verifier, "redirect_uri": ruri, "at": now,
+                       "next": next_param(request.query_params.get("next"))}
     scopes = c["scopes"].split() or ["email", "profile"]
     q = {
         "response_type": "code", "client_id": c["client_id"], "redirect_uri": ruri,
@@ -288,20 +289,32 @@ def callback(request: Request):
         M._audit_log(u["username"], "sso.link", f"linked to {who} at {c['issuer']}")
     M._log_signin(request, f"{u['username']} (single sign-on)", True)
     tok_s = M._new_session(u)
-    resp = RedirectResponse("/" if u["role"] == "admin" else "/ucp", status_code=302)
+    resp = RedirectResponse(pend.get("next") or ("/" if u["role"] == "admin" else "/ucp"), status_code=302)
     M._set_session_cookie(request, resp, tok_s)
     resp.delete_cookie(STATE_COOKIE, path=CALLBACK)
     return resp
 
 
-def login_box(request: Request, err: str = "", force_form: bool = False):
+def next_param(v):
+    """A safe place to return to after signing in (only the app's connect
+    page), else ''."""
+    v = v or ""
+    return v if M.app_api.connect_next_ok(v) else ""
+
+
+def login_box(request: Request, err: str = "", force_form: bool = False, nxt: str | None = None):
     """The login page body: SSO button above the password form."""
     c = cfg()
+    nxt = next_param(request.query_params.get("next") if nxt is None else nxt)
     base = M.login_html()
+    if nxt:   # come back to it after the password form too
+        base = base.replace('<form method="post" action="/login">',
+                            f'<form method="post" action="/login"><input type="hidden" name="next" value="{esc(nxt)}">', 1)
     msg = f"<p style='color:red'>{esc(err)}</p>" if err else ""
     if not ready(c):
         return base + msg
-    btn = (f'<p><a class="btn" href="/login/oidc" style="display:inline-block;min-width:220px;text-align:center;text-decoration:none">'
+    href = "/login/oidc" + ("?" + urllib.parse.urlencode({"next": nxt}) if nxt else "")
+    btn = (f'<p><a class="btn" href="{esc(href)}" style="display:inline-block;min-width:220px;text-align:center;text-decoration:none">'
            f'{esc(button_label(c))}</a></p>')
     show_form = (not c["hide_password"]) or force_form or request.query_params.get("password") == "1"
     if not show_form:

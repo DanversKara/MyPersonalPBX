@@ -17,6 +17,7 @@ reach admin pages (those use the session cookie or api_keys).
 """
 import hashlib
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -726,6 +727,51 @@ async def app_device_delete_web(request: Request, dev_id: int):
     return RedirectResponse("/ucp/app", status_code=303)
 
 
+# ---------------------------------------------------------------- sign in with the browser
+# The app opens /ucp/app/connect?st=<random> in an in-app browser tab. If
+# needed the person signs in first (password or single sign-on; /login
+# brings them back here), then this page makes a pairing code and hands it
+# to the app: myphone://pair?s=..&c=..&st=.. . The app connects by itself only
+# when st matches the sign-in it started, so a link elsewhere can't pair it.
+CONNECT_PATH = "/ucp/app/connect"
+_STATE_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def connect_next_ok(nxt: str) -> bool:
+    """Where /login may send someone back to after signing in (no open redirect)."""
+    if not nxt or not nxt.startswith(CONNECT_PATH):
+        return False
+    rest = nxt[len(CONNECT_PATH):]
+    if not rest:
+        return True
+    if not rest.startswith("?st="):
+        return False
+    return bool(_STATE_RE.match(rest[4:]))
+
+
+def app_connect(request: Request):
+    st = request.query_params.get("st") or ""
+    if st and not _STATE_RE.match(st):
+        st = ""
+    here = CONNECT_PATH + (f"?st={st}" if st else "")
+    s, me = M.ucp._me(request)
+    if not s:
+        return RedirectResponse("/login?" + urllib.parse.urlencode({"next": here}), status_code=302)
+    esc = M.esc
+    code = _new_pair_code(me["id"])
+    M.ucp._audit(me, "app.pair_code", "browser sign-in")
+    server = f"{'https' if M.is_https(request) else 'http'}://{request.headers.get('host', '')}"
+    link = pair_link(server, code) + (f"&st={st}" if st else "")
+    intent = android_link(link)
+    body = f"""<h2>Signed in</h2>
+<p>Taking you back to the My Phone app&hellip;</p>
+<p><a class="btn" id="go" href="{esc(intent)}" style="display:inline-block;font-size:1.1em;padding:12px 20px">Open the My Phone app</a></p>
+<p class="muted">If nothing happens, tap the button. Or type this code in the app: <b style="font-family:monospace">{esc(code)}</b>
+(works once, for 5 minutes).</p>
+<script>setTimeout(function () {{ location.href = document.getElementById('go').href; }}, 300);</script>"""
+    return HTMLResponse(M.page("Connect the app", body, s["username"], s["role"], "ucp-app"))
+
+
 # ---------------------------------------------------------------- install
 
 def install(app_module):
@@ -771,6 +817,7 @@ def install(app_module):
     app.post("/api/v1/me/report")(_wrap(S.report))
 
     app.get("/ucp/app", response_class=HTMLResponse)(app_page)
+    app.get(CONNECT_PATH, response_class=HTMLResponse)(app_connect)
     app.post("/ucp/app/pair-code", response_class=HTMLResponse)(app_pair_code)
     app.post("/ucp/app/sip-qr", response_class=HTMLResponse)(app_sip_qr)
     app.post("/ucp/app/devices/{dev_id}/delete")(app_device_delete_web)
