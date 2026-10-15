@@ -3874,7 +3874,10 @@ def _pin_valid_format(pin: str) -> bool:
 def v1_pin_status(request: Request):
     _v1_admin(request)
     s = _sess(request)
-    return {"pin_set": _pin_is_set(), "unlocked": _pin_unlocked(s)}
+    # The page's CSRF token, for pages with no form on them: the PIN prompt
+    # needs it to unlock (same-origin JSON, like the dashboard's own copy).
+    return {"pin_set": _pin_is_set(), "unlocked": _pin_unlocked(s),
+            "csrf": _csrf_token(s) if s else ""}
 
 
 @app.post("/api/v1/safety/pin/unlock")

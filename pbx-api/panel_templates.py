@@ -286,8 +286,9 @@ _PIN_ADMIN_JS = """<script>
 (function(){
   var _fetch = window.fetch;
   var unlocking = null;
+  var statusCsrf = '';   // from /pin/status: pages without a form have no token of their own
   function csrfToken(){
-    return window.CSRF_TOKEN || ((document.querySelector('input[name="csrf_token"]')||{}).value) || '';
+    return window.CSRF_TOKEN || ((document.querySelector('input[name="csrf_token"]')||{}).value) || statusCsrf || '';
   }
   function pinPromptUnlock(){
     if (!unlocking) {
@@ -295,10 +296,19 @@ _PIN_ADMIN_JS = """<script>
         try {
           var pin = prompt('Enter the edit PIN to make this change:');
           if (!pin) throw new Error('cancelled');
+          if (!csrfToken()) await renderPinbar();
           var r = await _fetch('/api/v1/safety/pin/unlock', {method:'POST', credentials:'same-origin',
             headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},
             body: JSON.stringify({pin:pin})});
-          if (!r.ok) throw new Error(r.status===429 ? 'Too many attempts — try again later.' : 'Wrong PIN.');
+          if (!r.ok) {
+            var detail = '';
+            try { detail = ((await r.clone().json()) || {}).detail || ''; } catch(e){}
+            var msg = r.status===429 ? 'Too many attempts — try again later.' :
+                      (r.status===403 && !/csrf/i.test(detail)) ? 'Wrong PIN.' :
+                      "Couldn't unlock (" + (detail || "error " + r.status) + "). Reload the page and try again.";
+            alert(msg);
+            throw new Error(msg);
+          }
           await renderPinbar();
           return true;
         } finally { unlocking = null; }
@@ -326,6 +336,7 @@ _PIN_ADMIN_JS = """<script>
       var r = await _fetch('/api/v1/safety/pin/status', {credentials:'same-origin'});
       if (r.ok) st = await r.json();
     } catch(e){}
+    if (st && st.csrf) statusCsrf = st.csrf;
     if (!st || !st.pin_set) { pinSet = false; pinLocked = false; if (bar) bar.innerHTML = ''; return; }
     pinSet = true; pinLocked = !st.unlocked;
     if (!bar) return;
