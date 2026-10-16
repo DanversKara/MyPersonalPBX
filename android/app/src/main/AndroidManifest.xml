@@ -51,6 +51,9 @@
                 <data android:scheme="myphone" android:host="pair" />
                 <!-- Phone login QR (My Phone > App > Show phone login QR); asks before using it. -->
                 <data android:scheme="myphone" android:host="sip" />
+                <!-- myphone://open just brings the app up (used by the DOX BOX launcher
+                     page). MainActivity's PairLink parsers ignore any other host. -->
+                <data android:scheme="myphone" android:host="open" />
             </intent-filter>
         </activity>
         <service
