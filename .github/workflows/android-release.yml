@@ -69,7 +69,19 @@ jobs:
           MYPHONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           MYPHONE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           MYPHONE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle -p android assembleRelease --no-daemon
+        run: |
+          set +e
+          gradle -p android assembleRelease --no-daemon --console=plain > "$RUNNER_TEMP/build.log" 2>&1
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            # The job log is awkward to reach; put the useful part in an annotation.
+            msg="$( { grep -n -A25 -m1 'What went wrong' "$RUNNER_TEMP/build.log"; echo ----; grep -E 'Missing class|ERROR:|error:|e: ' "$RUNNER_TEMP/build.log" | head -25; } | head -c 3500 )"
+            msg="${msg//'%'/'%25'}"; msg="${msg//$'\n'/'%0A'}"; msg="${msg//$'\r'/'%0D'}"
+            echo "::error title=Gradle build failed::$msg"
+            tail -n 60 "$RUNNER_TEMP/build.log"
+            exit "$code"
+          fi
 
       - name: Collect the artifacts
         run: |
