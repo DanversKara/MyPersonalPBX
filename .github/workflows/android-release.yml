@@ -1,0 +1,107 @@
+name: Android release
+
+# A release is a tag named android-vX.Y.Z. Normally android-auto-release.yml
+# creates it; to do it by hand:
+#   edit APP_VERSION_NAME in android/app/build.gradle.kts, commit,
+#   git tag android-v0.7.4 && git push origin main android-v0.7.4
+
+on:
+  push:
+    tags: ["android-v*"]
+  workflow_dispatch:   # select a tag as the ref
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      # Refuse a tag that does not match the version the build declares, so the
+      # published file names never lie about what is inside.
+      - name: Check the tag against the version in the build
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF_NAME" in
+            android-v*) ;;
+            *) echo "::error::'$GITHUB_REF_NAME' is not a release tag. Use a tag like android-v0.7.3."; exit 1 ;;
+          esac
+          tagged="${GITHUB_REF_NAME#android-v}"
+          declared="$(sed -n 's/^val APP_VERSION_NAME = "\([^"]*\)"$/\1/p' android/app/build.gradle.kts)"
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match APP_VERSION_NAME ($declared) in android/app/build.gradle.kts."
+            exit 1
+          fi
+          echo "APP_VERSION=$declared" >> "$GITHUB_ENV"
+
+      - name: Decode the signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. A release must be signed."
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          echo "MYPHONE_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+
+      - name: Build the signed release APK
+        env:
+          MYPHONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MYPHONE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MYPHONE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle -p android assembleRelease --no-daemon
+
+      - name: Collect the artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          out="$RUNNER_TEMP/artifacts"
+          mkdir -p "$out"
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            cp "$apk" "$out/my-phone-$APP_VERSION.apk"
+          done
+          # R8 is on for release: keep the mapping so stack traces can be read.
+          for m in android/app/build/outputs/mapping/release/mapping.txt; do
+            cp "$m" "$out/my-phone-$APP_VERSION-mapping.txt"
+          done
+          ls -l "$out"
+
+      # Fails the release if the APK came out unsigned (the signing block in
+      # build.gradle.kts silently does nothing when a value is missing).
+      - name: Verify the APK is signed
+        run: |
+          set -euo pipefail
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
+          for apk in "$RUNNER_TEMP"/artifacts/*.apk; do
+            echo "== $(basename "$apk")"
+            "$apksigner" verify --print-certs "$apk"
+          done
+
+      - name: Publish the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: My Phone ${{ env.APP_VERSION }}
+          files: ${{ runner.temp }}/artifacts/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true

@@ -5,6 +5,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// The one place the version lives. .github/workflows/android-auto-release.yml
+// edits this exact line, so keep it on a single line in this form.
+val APP_VERSION_NAME = "0.7.3"
+
+// versionCode is derived, never hand-maintained: 0.7.3 -> 703, 1.2.3 -> 10203.
+// Rebuilding any tag anywhere gives the same number.
+fun versionCodeOf(name: String): Int {
+    val (major, minor, patch) = name.substringBefore('-').split('.').map { it.toInt() }
+    return major * 10000 + minor * 100 + patch
+}
+
 android {
     namespace = "org.ownpbx.myphone"
     compileSdk = 34
@@ -13,8 +24,8 @@ android {
         applicationId = "org.ownpbx.myphone"
         minSdk = 26
         targetSdk = 34
-        versionCode = 19
-        versionName = "0.7.2"
+        versionCode = versionCodeOf(APP_VERSION_NAME)
+        versionName = APP_VERSION_NAME
         val defaultServer = (project.findProperty("myphone.defaultServer") as String?).orEmpty()
             .replace("\\", "").replace("\"", "")
         buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
@@ -22,8 +33,23 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
+    // Release signing comes from the environment (GitHub secrets in CI). With
+    // nothing set the release build is simply unsigned, as it was before.
+    signingConfigs {
+        create("release") {
+            val ks = System.getenv("MYPHONE_KEYSTORE_FILE")
+            if (!ks.isNullOrBlank()) {
+                storeFile = file(ks)
+                storePassword = System.getenv("MYPHONE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MYPHONE_KEY_ALIAS")
+                keyPassword = System.getenv("MYPHONE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -69,3 +95,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
+
+// Used by the release workflow to check the tag against the build.
+tasks.register("printVersionName") { doLast { println(APP_VERSION_NAME) } }

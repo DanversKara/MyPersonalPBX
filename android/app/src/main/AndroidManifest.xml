@@ -42,18 +42,17 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Pairing QR codes hold myphone://pair?s=<server>&c=<code>, so the
-                 phone's own camera app can open them here too. -->
+            <!-- Everything under the myphone:// scheme opens the app, whatever the
+                 host: myphone://pair (pairing QR), myphone://sip (phone login QR),
+                 myphone://open (the DOX BOX launcher page) and anything added later.
+                 MainActivity's PairLink parsers ignore hosts they don't know, so an
+                 unknown one just brings the app up instead of falling through to
+                 the web page. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="myphone" android:host="pair" />
-                <!-- Phone login QR (My Phone > App > Show phone login QR); asks before using it. -->
-                <data android:scheme="myphone" android:host="sip" />
-                <!-- myphone://open just brings the app up (used by the DOX BOX launcher
-                     page). MainActivity's PairLink parsers ignore any other host. -->
-                <data android:scheme="myphone" android:host="open" />
+                <data android:scheme="myphone" />
             </intent-filter>
         </activity>
         <service
