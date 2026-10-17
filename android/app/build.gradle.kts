@@ -7,7 +7,7 @@ plugins {
 
 // The one place the version lives. .github/workflows/android-auto-release.yml
 // edits this exact line, so keep it on a single line in this form.
-val APP_VERSION_NAME = "0.7.5"
+val APP_VERSION_NAME = "0.7.3"
 
 // versionCode is derived, never hand-maintained: 0.7.3 -> 703, 1.2.3 -> 10203.
 // Rebuilding any tag anywhere gives the same number.
@@ -50,9 +50,11 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // R8 broke Linphone audio in 0.7.3 (no audio either way) and the
+            // keep rules didn't fully fix it. Ship unshrunk until the exact
+            // R8 issue is identified; a larger APK beats a silent phone.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
     compileOptions {
