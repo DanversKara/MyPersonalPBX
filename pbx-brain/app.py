@@ -640,7 +640,7 @@ def try_forward_noanswer_inbound(a_id, info):
 # human presses 1. Silence / anything else -> the leg is hung up and the
 # other legs keep ringing.
 
-SCREEN_PROMPT = "sound:privacy-intro"  # "...press 1 to accept this call..."
+SCREEN_PROMPT = "sound:pbx-screen-intro"  # shipped in pbx-brain/sounds/, installed by deploy.sh
 SCREEN_TIMEOUT = 12                    # seconds to wait for the 1
 
 
@@ -695,7 +695,13 @@ def _start_screening(b_channel):
     try:
         b_channel.play(SCREEN_PROMPT)
     except Exception:
-        log.info("cell leg %s: screen prompt failed, waiting for 1 anyway", b_id)
+        # Never screen in silence: the prompt also opens the RTP path, which
+        # is what lets the "1" back through NAT. Beep always exists.
+        log.info("cell leg %s: screen prompt failed, falling back to beep", b_id)
+        try:
+            b_channel.play("sound:beep")
+        except Exception:
+            pass
 
 
 def screen_dtmf(b_id, digit):

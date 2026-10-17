@@ -60,6 +60,11 @@ cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-brain/
 cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-api/
 cp -r "$SRC_DIR/config-gen/"* /opt/pbx/config-gen/
 cp "$SRC_DIR/db/schema.sql" /opt/pbx/
+# Custom voice prompts (cell-leg "press 1" screening, etc.): Asterisk plays
+# them via sound:<name>, so they live in its sounds dir, world-readable.
+mkdir -p /var/lib/asterisk/sounds
+cp "$SRC_DIR/pbx-brain/sounds/"*.wav /var/lib/asterisk/sounds/
+chmod 644 /var/lib/asterisk/sounds/pbx-*.wav
 mkdir -p /opt/pbx/db
 cp "$SRC_DIR/db/schema.sql" /opt/pbx/db/
 # Code, venvs and helper scripts are root-owned and NOT writable by the pbx
