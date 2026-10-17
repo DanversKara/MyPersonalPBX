@@ -134,7 +134,7 @@ def _migrate(c):
       email TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    """)
+    )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_login_norm ON contacts(login_id, number_norm)")
     c.execute("""CREATE TABLE IF NOT EXISTS contact_notes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,7 +145,7 @@ def _migrate(c):
       item_at TEXT NOT NULL DEFAULT '',
       body TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    """)
+    )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(login_id, contact_id)")
     if "group_id" not in cols("inbound_routes"):
         c.execute("ALTER TABLE inbound_routes ADD COLUMN group_id INTEGER DEFAULT NULL")
