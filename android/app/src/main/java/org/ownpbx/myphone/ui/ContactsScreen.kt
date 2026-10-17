@@ -21,7 +21,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -279,7 +278,7 @@ private fun ContactDetailScreen(model: AppModel, id: Long, onClose: () -> Unit) 
 
 @Composable
 private fun TimelineRow(t: TimelineItem) {
-    val (icon, label): Pair<ImageVector, String> = when (t.type) {
+    val (icon, label) = when (t.type) {
         "message" -> Icons.Filled.Chat to "Text"
         "voicemail" -> Icons.Filled.Voicemail to "Voicemail"
         "recording" -> Icons.Filled.Mic to "Recording"
