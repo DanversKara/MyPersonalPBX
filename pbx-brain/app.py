@@ -21,6 +21,20 @@ from ari_client import ARIClient
 import e911
 import voipms_sms
 
+# One canonical number normalizer, shared with pbx-api (shared/phone.py,
+# deployed flat into this dir by scripts/deploy.sh).
+import sys as _sys_path
+_shared = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
+if _shared not in _sys_path.path:
+    _sys_path.path.insert(0, _shared)
+try:
+    from phone import norm_number as num_norm
+except ImportError:  # pragma: no cover - deploy always ships phone.py
+    def num_norm(v):
+        """Digits only; US/Canada numbers as 10 digits (for block-list matching)."""
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        return d[1:] if len(d) == 11 and d.startswith("1") else d
+
 ARI_URL = os.environ.get("ARI_URL", "http://127.0.0.1:8088/ari")
 ARI_USER = os.environ.get("ARI_USER", "pbxbrain")
 ARI_PASS = os.environ.get("ARI_PASS", "")
@@ -104,6 +118,8 @@ def feature_allowed(code, login):
 
 PENDING = {}   # b_channel_id -> a_channel_id (B ringing, not yet bridged)
 B_LOGIN = {}   # b_channel_id -> login id being rung (who answered -> minutes)
+B_SCREEN = {}  # b_channel_id -> True: cell leg, needs "press 1" before bridging
+SCREENING = {}  # b_channel_id -> {"timer": Timer} (answered cell leg awaiting 1)
 BRIDGED = {}   # channel_id -> bridge_id
 CALLS = {}     # a_channel_id -> {caller, callee, start, b_id, ...}
 
@@ -402,13 +418,34 @@ def forward_to(channel, me, callee, target, hops, **ring_kw):
     return False
 
 
-def num_norm(v):
-    """Digits only; US/Canada numbers as 10 digits (for block-list matching)."""
-    d = "".join(ch for ch in str(v or "") if ch.isdigit())
-    return d[1:] if len(d) == 11 and d.startswith("1") else d
-
-
 BLOCK_ACTIONS = ("disconnected", "voicemail", "forward")
+
+
+def contact_name_for(login_id, number):
+    """This user's private display name for `number`, or "".
+
+    Numbers match on the shared canonical form (digits, 11-digit NANP -> 10),
+    the same form the block list uses. Read-only: the display name never
+    lands in CDR/voicemail columns.
+    """
+    n = num_norm(number)
+    if not login_id or not n:
+        return ""
+    try:
+        r = q1("SELECT name FROM contacts WHERE login_id=? AND number_norm=?",
+               (login_id, n))
+    except Exception:
+        return ""  # old DB without the contacts table yet
+    return (r["name"] or "") if r else ""
+
+
+def contact_caller_id(login_id, number, fallback):
+    """Per-callee ring caller ID: 'Name <digits>' when the callee named them."""
+    name = contact_name_for(login_id, number)
+    if name:
+        digits = num_norm(number) or number
+        return "%s <%s>" % (name, digits)
+    return fallback
 
 
 def block_rule(login_id, number):
@@ -511,6 +548,9 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
     ring_secs = ring_seconds_for(callee["id"])
     # One leg per phone line (desk phone / Zoiper, and the app when online);
     # the first to answer wins (on_legb_answer hangs up the others).
+    # The callee's own contacts name the caller on their phones.
+    leg_cid = (caller_id or "%s <%s>" % (me["display_name"] or me["exten"], me["exten"]))
+    leg_cid = contact_caller_id(callee["id"], caller_label or me["exten"], leg_cid)
     legs = []
     for ep in phone_endpoints(callee):
         try:
@@ -518,8 +558,7 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
                 endpoint=ep,
                 app=APP,
                 app_args="legb,%s" % channel.id,
-                caller_id=caller_id or "%s <%s>" % (me["display_name"] or me["exten"],
-                                                    me["exten"]),
+                caller_id=leg_cid,
                 timeout=ring_secs + 5))  # our timer fires first -> voicemail
         except Exception:
             log.exception("originate to %s (%s) failed", callee["username"], ep)
@@ -594,6 +633,97 @@ def try_forward_noanswer_inbound(a_id, info):
                       extra={"did": info.get("did", "")})
 
 
+# ---------------------------------------------------------------- press-1 screening
+# Ring-group-to-cell legs don't bridge on answer: the far end might be the
+# user's voicemail, which would win the race against the desk phones. Instead
+# the leg is answered, hears "press 1 to accept", and only bridges when a
+# human presses 1. Silence / anything else -> the leg is hung up and the
+# other legs keep ringing.
+
+SCREEN_PROMPT = "sound:privacy-intro"  # "...press 1 to accept this call..."
+SCREEN_TIMEOUT = 12                    # seconds to wait for the 1
+
+
+def trunk_endpoint_for(number):
+    """PJSIP endpoint string to dial an outside `number`, or None.
+
+    Reuses the outbound routes (first match wins, same as handle_outbound),
+    so the cell leg leaves through the trunk the admin configured.
+    """
+    import json
+    digits = num_norm(number)
+    if len(digits) < 7:
+        return None
+    routes = qall("SELECT * FROM outbound_routes WHERE enabled=1"
+                  " ORDER BY priority ASC")
+    for route in routes:
+        try:
+            patterns = json.loads(route["patterns"] or "[]")
+        except Exception:
+            continue
+        if any(match_pattern(pat, digits) for pat in patterns):
+            trunk = q1("SELECT * FROM trunks WHERE id=? AND enabled=1",
+                       (route["trunk_id"],))
+            if trunk:
+                return "PJSIP/%s@ep-trunk-%s" % (digits, trunk["name"])
+    return None
+
+
+def _screen_timeout(b_id):
+    sess = SCREENING.pop(b_id, None)
+    if sess is None:
+        return
+    log.info("cell leg %s: no 1 pressed, hanging up", b_id)
+    B_LOGIN.pop(b_id, None)
+    B_SCREEN.pop(b_id, None)
+    # Stay in PENDING: ChannelDestroyed -> hangup_other_leg then runs the
+    # normal no-answer handling (other legs may still be ringing).
+    try:
+        CLIENT.channels.get(b_id).hangup()
+    except Exception:
+        pass
+
+
+def _start_screening(b_channel):
+    """A cell leg answered: prompt for 1 instead of bridging right away."""
+    b_id = b_channel.id
+    log.info("cell leg %s answered, screening for 1", b_id)
+    t = threading.Timer(SCREEN_TIMEOUT, _screen_timeout, args=(b_id,))
+    t.daemon = True
+    t.start()
+    SCREENING[b_id] = {"timer": t}
+    try:
+        b_channel.play(SCREEN_PROMPT)
+    except Exception:
+        log.info("cell leg %s: screen prompt failed, waiting for 1 anyway", b_id)
+
+
+def screen_dtmf(b_id, digit):
+    """A key press on a screening cell leg."""
+    sess = SCREENING.get(b_id)
+    if not sess:
+        return
+    if digit != "1":
+        return  # ignore anything else; the timeout ends the screening
+    sess["timer"].cancel()
+    SCREENING.pop(b_id, None)
+    B_SCREEN.pop(b_id, None)
+    log.info("cell leg %s: 1 pressed, bridging", b_id)
+    try:
+        on_legb_answer(CLIENT.channels.get(b_id))
+    except Exception:
+        log.exception("screened legb answer failed")
+
+
+def _cancel_cell_timers(a_id):
+    info = CALLS.get(a_id) or {}
+    for t in info.pop("cell_timers", []):
+        try:
+            t.cancel()
+        except Exception:
+            pass
+
+
 def on_legb_answer(b_channel):
     """B answered: hang up other B legs, bridge the winner with A."""
     a_id = PENDING.pop(b_channel.id, None)
@@ -601,6 +731,9 @@ def on_legb_answer(b_channel):
         b_channel.hangup()
         return
     info = CALLS[a_id]
+    # Someone picked up: no more cell legs may start.
+    info["ringing"] = False
+    _cancel_cell_timers(a_id)
     # Cancel the ring timeout timer
     timer = info.pop("ring_timer", None)
     if timer:
@@ -1191,6 +1324,9 @@ def midcall_block(a_id, b_id):
 
 def on_dtmf(channel, event):
     """Handle DTMF for IVR menus, DISA PIN entry and dialing."""
+    if channel.id in SCREENING:
+        screen_dtmf(channel.id, event.get("digit", ""))
+        return
     if channel.id in SPY_MONITORS:
         spy_dtmf(channel.id, event.get("digit", ""))
         return
@@ -1779,6 +1915,10 @@ def hangup_other_leg(ended_id):
             log.info("B leg %s ended, %d still ringing for %s",
                      ended_id, len(remaining), a_id)
             return
+        # Ring timeout: hang up all B legs after timeout to trigger voicemail.
+        # Reads the live b_ids so delayed cell legs are covered too.
+        _cancel_cell_timers(a_id)
+        info["ringing"] = False
         # All B legs done (no answer/timeout)
         if info.get("direction") in ("inbound", "group"):
             # Inbound no-answer: the single rung user's forward-on-no-answer,
@@ -2089,28 +2229,9 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
     # A number that rings one person uses that person's ring time, if set.
     if len(targets) == 1 and not group:
         timeout = ring_seconds_for(targets[0]["id"], default=timeout)
-    # Originate to all targets in parallel; first to answer wins
+    # Track this as an inbound call with multiple B legs. Assigned before any
+    # originate so delayed cell legs (below) can append to the same b_ids.
     b_ids = []
-    for callee in targets:
-        for ep in phone_endpoints(callee):      # desk phone + app line
-            try:
-                leg_b = CLIENT.channels.originate(
-                    endpoint=ep,
-                    app=APP,
-                    app_args="legb,%s" % channel.id,
-                    caller_id=caller_id,
-                    timeout=timeout + 5)  # our timer fires first -> voicemail
-                b_ids.append(leg_b.id)
-                PENDING[leg_b.id] = channel.id
-                B_LOGIN[leg_b.id] = callee["id"]
-            except Exception:
-                log.exception("inbound originate to %s (%s) failed", callee["exten"], ep)
-    if not b_ids:
-        # All originates failed: the group's no-answer choice / voicemail
-        _group_fallback(channel, group, first_login, vm_login, vm_copies, did, caller_num,
-                        caller_id, internal, hops)
-        return
-    # Track this as an inbound call with multiple B legs
     CALLS[channel.id] = {
         "caller": caller_num,
         "callee": ",".join(t["exten"] for t in targets),
@@ -2129,11 +2250,107 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
         "caller_id": caller_id, "internal": internal, "group_hops": hops,
         "ring_ids": [t["id"] for t in targets],
         "hops": 0,
+        "ringing": True,  # cleared on answer or no-answer handling
     }
-    # Ring timeout: hang up all B legs after timeout to trigger voicemail
+    # Originate to all targets in parallel; first to answer wins.
+    # Caller ID is resolved per callee: each user's own contacts name the
+    # caller on their own phones (desk phone + app ring screen).
+    for callee in targets:
+        leg_cid = contact_caller_id(callee["id"], caller_num, caller_id)
+        for ep in phone_endpoints(callee):      # desk phone + app line
+            try:
+                leg_b = CLIENT.channels.originate(
+                    endpoint=ep,
+                    app=APP,
+                    app_args="legb,%s" % channel.id,
+                    caller_id=leg_cid,
+                    timeout=timeout + 5)  # our timer fires first -> voicemail
+                b_ids.append(leg_b.id)
+                PENDING[leg_b.id] = channel.id
+                B_LOGIN[leg_b.id] = callee["id"]
+            except Exception:
+                log.exception("inbound originate to %s (%s) failed", callee["exten"], ep)
+    # --- ring-group-to-cell ----------------------------------------------
+    # Each member's own cell rings too (opt-in per user in /ucp/settings).
+    # The leg leaves over the outbound routes, optionally after a delay so
+    # the desk phone and app ring first, and it never bridges without the
+    # "press 1" screening (else the cell's voicemail wins the race).
+    def _start_cell_leg(callee, ep, leg_cid, a_id=channel.id):
+        info = CALLS.get(a_id)
+        if not info:
+            return
+        info["cell_pending"] = max(0, info.get("cell_pending", 1) - 1)
+        if a_id in BRIDGED or not info.get("ringing"):
+            return  # answered / hung up / already in no-answer handling
+        try:
+            leg_b = CLIENT.channels.originate(
+                endpoint=ep,
+                app=APP,
+                app_args="legb,%s" % a_id,
+                caller_id=leg_cid,
+                timeout=timeout + 5)
+        except Exception:
+            log.exception("inbound cell originate to %s failed", callee["exten"])
+            leg_b = None
+        if leg_b is not None:
+            with LEG_LOCK:
+                info["b_ids"].append(leg_b.id)
+                PENDING[leg_b.id] = a_id
+                B_LOGIN[leg_b.id] = callee["id"]
+                B_SCREEN[leg_b.id] = True
+            log.info("inbound %s: cell leg ringing for %s", did, callee["exten"])
+        elif not info["b_ids"] and info.get("cell_pending", 0) <= 0:
+            # The cell was the only hope and it failed: no-answer handling now.
+            log.warning("inbound %s: cell leg failed, nothing ringing", did)
+            _group_fallback(channel, group, first_login, vm_login, vm_copies,
+                            did, caller_num, caller_id, internal, hops)
+
+    cell_timers = []
+    for callee in targets:
+        prefs = get_prefs(callee["id"])
+        if not prefs.get("ring_cell"):
+            continue
+        digits = num_norm(prefs.get("cell_number") or "")
+        if len(digits) < 7:
+            continue
+        if block_rule(callee["id"], digits):
+            log.info("inbound %s: %s's own cell is on their block list, skipped",
+                     did, callee["exten"])
+            continue
+        if not can_call_outside(callee["id"]):
+            log.info("inbound %s: %s has no outside minutes for the cell leg, skipped",
+                     did, callee["exten"])
+            continue
+        ep = trunk_endpoint_for(digits)
+        if not ep:
+            log.warning("inbound %s: no outbound route for %s's cell, skipped",
+                        did, callee["exten"])
+            continue
+        delay = prefs.get("cell_delay")
+        delay = int(delay) if str(delay).isdigit() else 15
+        delay = max(0, min(delay, timeout))
+        leg_cid = contact_caller_id(callee["id"], caller_num, caller_id)
+        if delay <= 0:
+            _start_cell_leg(callee, ep, leg_cid)
+        else:
+            CALLS[channel.id]["cell_pending"] = \
+                CALLS[channel.id].get("cell_pending", 0) + 1
+            t = threading.Timer(delay, _start_cell_leg, args=(callee, ep, leg_cid))
+            t.daemon = True
+            t.start()
+            cell_timers.append(t)
+    CALLS[channel.id]["cell_timers"] = cell_timers
+    if not b_ids and not cell_timers:
+        # All originates failed: the group's no-answer choice / voicemail
+        _group_fallback(channel, group, first_login, vm_login, vm_copies, did, caller_num,
+                        caller_id, internal, hops)
+        return
+    # Ring timeout: hang up all B legs after timeout to trigger voicemail.
+    # Reads the live b_ids so delayed cell legs are covered too.
     a_id = channel.id
-    def _inbound_timeout(b_ids=list(b_ids), a_id=a_id):
-        for b_id in b_ids:
+    def _inbound_timeout(a_id=a_id):
+        _cancel_cell_timers(a_id)
+        for b_id in list(CALLS.get(a_id, {}).get("b_ids", [])):
             log.info("inbound ring timeout for b leg %s", b_id)
             end_unanswered_leg(b_id)
     t = threading.Timer(float(timeout), _inbound_timeout)
@@ -2646,11 +2863,16 @@ def on_stasis_start(channel, event):
 
 
 def on_channel_state_change(channel, event):
-    # Bridge A+B the moment the B leg answers.
+    # Bridge A+B the moment the B leg answers - unless it's a cell leg,
+    # which must pass the "press 1" screening first (else the cell's
+    # voicemail would win the race against the desk phones).
     if (channel.id in PENDING
             and event.get("channel", {}).get("state") == "Up"):
         try:
-            on_legb_answer(channel)
+            if channel.id in B_SCREEN:
+                _start_screening(channel)
+            else:
+                on_legb_answer(channel)
         except Exception:
             log.exception("legb answer handling failed")
 
@@ -2674,6 +2896,10 @@ def on_stasis_end(channel, event):
         _disa_sess = DISA_SESSIONS.pop(channel.id, None)
         if _disa_sess and _disa_sess.get("timer"):
             _disa_sess["timer"].cancel()
+        _screen = SCREENING.pop(channel.id, None)
+        if _screen:
+            _screen["timer"].cancel()
+        B_SCREEN.pop(channel.id, None)
         MIDCALL_DIGITS.pop(channel.id, None)
         mon = SPY_MONITORS.pop(channel.id, None)
         if mon is not None:

@@ -215,11 +215,13 @@ def _msg(me, m):
 def me_threads(request: Request):
     me = _need(request)
     threads = {}
+    names = M.contacts.names_for(me["id"])
     for m in M.ucp._my_messages(me, limit=5000):
         p = _peer(me, m)
         t = threads.get(p)
         if t is None:
-            threads[p] = {"peer": p, "last": _msg(me, m), "count": 1,
+            threads[p] = {"peer": p, "peer_name": names.get(M.contacts.norm_number(p), ""),
+                          "last": _msg(me, m), "count": 1,
                           "blocked": M.safety_ui.is_blocked(me["id"], p)}
         else:
             t["count"] += 1
@@ -253,9 +255,14 @@ def me_calls(request: Request, missed: int = 0, view: str = "", before: int = 0,
     rows = M.ucp._my_calls(me, limit=1000, missed_only=view == "missed")
     rows = [r for r in rows if (r["id"] in hidden) == (view == "hidden")]
     keep = ("id", "kind", "other", "started_at", "duration_sec", "bill_sec", "disposition", "recording_id")
-    return {"view": view, "seen_id": me.get("calls_seen_id") or 0,
-            "calls": [{k: r.get(k) for k in keep if k in r} | {"hidden": r["id"] in hidden}
-                      for r in _paged(rows, before, limit)]}
+    names = M.contacts.names_for(me["id"])
+    calls = []
+    for r in _paged(rows, before, limit):
+        d = {k: r.get(k) for k in keep if k in r}
+        d["hidden"] = r["id"] in hidden
+        d["peer_name"] = names.get(M.contacts.norm_number(r.get("other") or ""), "")
+        calls.append(d)
+    return {"view": view, "seen_id": me.get("calls_seen_id") or 0, "calls": calls}
 
 
 def _latest(me) -> dict:
@@ -271,7 +278,9 @@ def _latest(me) -> dict:
         with M.db() as c:
             vm = c.execute("SELECT COALESCE(MAX(id), 0) FROM voicemail_messages WHERE mailbox=? AND folder='INBOX'",
                            (box,)).fetchone()[0]
-    return {"msg": msgs[0]["id"] if msgs else 0, "call": max(missed, default=0), "vm": vm}
+    notes = M.contacts.latest_note_id(me["id"])
+    return {"msg": msgs[0]["id"] if msgs else 0, "call": max(missed, default=0), "vm": vm,
+            "notes": notes}
 
 
 WAIT_MAX = 55          # under Cloudflare's 100 s idle limit
@@ -339,13 +348,52 @@ def me_voicemail(request: Request, folder: str = "INBOX"):
             rows = [dict(r) for r in c.execute(
                 "SELECT id, caller, received_at, duration_sec, folder, is_read FROM voicemail_messages"
                 " WHERE mailbox=? AND folder=? ORDER BY id DESC LIMIT 500", (box, folder)).fetchall()]
+    names = M.contacts.names_for(me["id"])
+    for r in rows:
+        r["caller_name"] = names.get(M.contacts.norm_number(r.get("caller") or ""), "")
     return {"folder": folder, "voicemail": rows}
 
 
 def me_recordings(request: Request):
     me = _need(request)
     keep = ("id", "direction", "peer", "started_at", "duration_sec", "bytes")
-    return {"recordings": [{k: r[k] for k in keep} for r in M.ucp._recordings_for(me, limit=500)]}
+    names = M.contacts.names_for(me["id"])
+    recs = []
+    for r in M.ucp._recordings_for(me, limit=500):
+        d = {k: r[k] for k in keep}
+        d["peer_name"] = names.get(M.contacts.norm_number(r.get("peer") or ""), "")
+        recs.append(d)
+    return {"recordings": recs}
+
+
+def me_contacts(request: Request, q: str = ""):
+    """This user's contacts, with note counts."""
+    me = _need(request)
+    rows = M.contacts.contacts_for(me["id"], q=(q or "").strip()[:60])
+    counts = M.contacts.note_counts(me["id"])
+    for r in rows:
+        r["notes_count"] = counts.get(r["id"], 0)
+        r["last_at"] = ""
+    # Most-recently-active first would need a scan; name order is fine and cheap.
+    return {"contacts": rows}
+
+
+def me_contact_detail(request: Request, contact_id: int):
+    me = _need(request)
+    c = M.contacts.contact_get(me["id"], contact_id)
+    if not c:
+        raise HTTPException(404, "no such contact")
+    c["notes_count"] = M.contacts.note_counts(me["id"]).get(c["id"], 0)
+    return {"contact": c,
+            "timeline": M.contacts.timeline_for(me["id"], limit=200, contact_id=contact_id),
+            "notes": M.contacts.notes_for(me["id"], contact_id=contact_id)}
+
+
+def me_timeline(request: Request, limit: int = 200):
+    """Unified newest-first feed: calls, texts, voicemails, recordings."""
+    me = _need(request)
+    limit = max(1, min(int(limit or 200), 500))
+    return {"items": M.contacts.timeline_for(me["id"], limit=limit)}
 
 
 def _audio(path, root):
@@ -392,6 +440,8 @@ def me_settings(request: Request):
         "vm_email": me.get("vm_email") or "", "text_email": bool(p["text_email"]),
         "msg_in": bool(mp["msg_in"]), "msg_out": bool(mp["msg_out"]),
         "blocked": M.safety_ui.block_rules(me["id"]),
+        "cell_number": p.get("cell_number") or "", "ring_cell": bool(p.get("ring_cell")),
+        "cell_delay": p.get("cell_delay") or 15,
     }
 
 
@@ -796,6 +846,9 @@ def install(app_module):
     app.get("/api/v1/me/voicemail/{msg_id}/audio")(me_vm_audio)
     app.get("/api/v1/me/recordings")(me_recordings)
     app.get("/api/v1/me/recordings/{rec_id}/audio")(me_rec_audio)
+    app.get("/api/v1/me/contacts")(me_contacts)
+    app.get("/api/v1/me/contacts/{contact_id}")(me_contact_detail)
+    app.get("/api/v1/me/timeline")(me_timeline)
     app.get("/api/v1/me/settings")(me_settings)
     app.get("/api/v1/me/devices")(me_devices)
     app.delete("/api/v1/me/devices/{dev_id}")(me_device_delete)
@@ -815,6 +868,10 @@ def install(app_module):
     app.post("/api/v1/me/dnd")(_wrap(U.dnd_toggle))
     app.post("/api/v1/me/block")(_wrap(S.block))
     app.post("/api/v1/me/report")(_wrap(S.report))
+    app.post("/api/v1/me/contacts/save")(_wrap(M.contacts.contact_save))
+    app.post("/api/v1/me/contacts/delete")(_wrap(M.contacts.contact_delete))
+    app.post("/api/v1/me/notes/save")(_wrap(M.contacts.note_save))
+    app.post("/api/v1/me/notes/delete")(_wrap(M.contacts.note_delete))
 
     app.get("/ucp/app", response_class=HTMLResponse)(app_page)
     app.get(CONNECT_PATH, response_class=HTMLResponse)(app_connect)

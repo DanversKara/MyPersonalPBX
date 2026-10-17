@@ -214,7 +214,7 @@ fun VoicemailScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifie
                                     Spacer(Modifier.width(12.dp))
                                     Column(Modifier.weight(1f)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(prettyNumber(v.caller.ifEmpty { "Unknown caller" }),
+                                            Text(v.caller_name.ifBlank { prettyNumber(v.caller.ifEmpty { "Unknown caller" }) },
                                                 fontWeight = if (v.is_read == 0) FontWeight.Bold else FontWeight.Normal)
                                             if (v.is_read == 0) {
                                                 Spacer(Modifier.width(8.dp))

@@ -18,6 +18,20 @@ from typing import Literal
 
 log = logging.getLogger("pbx-api")
 
+# shared/phone.py holds the one canonical number normalizer used by every
+# service (contacts, block list, caller-ID matching). In production deploy.sh
+# copies it flat into this dir; from a repo checkout it lives in ../shared.
+import sys as _sys_path
+_shared = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
+if _shared not in _sys_path.path:
+    _sys_path.path.insert(0, _shared)
+try:
+    from phone import norm_number as _norm_number
+except ImportError:  # pragma: no cover - deploy always ships phone.py
+    def _norm_number(v):
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        return d[1:] if len(d) == 11 and d.startswith("1") else d
+
 import bcrypt
 from fastapi import FastAPI, HTTPException, Request, Form, File, UploadFile
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse
@@ -37,6 +51,7 @@ import e911_ui
 import ring_groups_ui
 import safety_ui
 import voipms_sms
+import contacts
 import app_api
 
 
@@ -101,6 +116,37 @@ def _migrate(c):
     for col in ("text_email", "msg_in", "msg_out"):
         if col not in cols("user_prefs"):
             c.execute(f"ALTER TABLE user_prefs ADD COLUMN {col} INTEGER NOT NULL DEFAULT 1")
+    # Ring-group-to-cell: ring the user's own cell phone alongside desk/app.
+    if "cell_number" not in cols("user_prefs"):
+        c.execute("ALTER TABLE user_prefs ADD COLUMN cell_number TEXT NOT NULL DEFAULT ''")
+    if "ring_cell" not in cols("user_prefs"):
+        c.execute("ALTER TABLE user_prefs ADD COLUMN ring_cell INTEGER NOT NULL DEFAULT 0")
+    if "cell_delay" not in cols("user_prefs"):
+        c.execute("ALTER TABLE user_prefs ADD COLUMN cell_delay INTEGER NOT NULL DEFAULT 15")
+    # Contacts + notes (private per login; see pbx-api/contacts.py).
+    c.execute("""CREATE TABLE IF NOT EXISTS contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+      name TEXT NOT NULL DEFAULT '',
+      number TEXT NOT NULL DEFAULT '',
+      number_norm TEXT NOT NULL DEFAULT '',
+      org TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_login_norm ON contacts(login_id, number_norm)")
+    c.execute("""CREATE TABLE IF NOT EXISTS contact_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+      contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+      item_type TEXT NOT NULL DEFAULT '',
+      item_id INTEGER DEFAULT NULL,
+      item_at TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(login_id, contact_id)")
     if "group_id" not in cols("inbound_routes"):
         c.execute("ALTER TABLE inbound_routes ADD COLUMN group_id INTEGER DEFAULT NULL")
     if "exten_since" not in cols("logins"):
@@ -1153,7 +1199,8 @@ async def login_delete(request: Request, lid: str):
                          ("user_prefs", "login_id"), ("ivr_menus", "owner_login_id"),
                          ("user_entitlements", "login_id"), ("billing_customers", "login_id"),
                          ("api_keys", "login_id"), ("e911_users", "login_id"),
-                         ("blocked_numbers", "login_id")]:
+                         ("blocked_numbers", "login_id"),
+                         ("contacts", "login_id"), ("contact_notes", "login_id")]:
             c.execute(f"DELETE FROM {tbl} WHERE {col}=?", (lid_i,))
         c.execute("DELETE FROM logins WHERE id=?", (lid_i,))
         c.commit()
@@ -1654,8 +1701,7 @@ group's own ring time and voicemail setting apply (<a href="/ring-groups">Ring g
 
 def _did_norm(v: str) -> str:
     """Digits only; US/Canada numbers stored as 10 digits (matches +1 / 1 / 10-digit)."""
-    d = "".join(ch for ch in str(v or "") if ch.isdigit())
-    return d[1:] if len(d) == 11 and d.startswith("1") else d
+    return _norm_number(v)
 
 
 @app.post("/routes/prefix")
@@ -4024,4 +4070,5 @@ security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])
 safety_ui.install(_sys.modules[__name__])
+contacts.install(_sys.modules[__name__])
 app_api.install(_sys.modules[__name__])

@@ -200,6 +200,9 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   text_email INTEGER NOT NULL DEFAULT 1,     -- email me when I get a text
   msg_in INTEGER NOT NULL DEFAULT 1,         -- accept text messages
   msg_out INTEGER NOT NULL DEFAULT 1,        -- allow sending text messages
+  cell_number TEXT NOT NULL DEFAULT '',      -- ring my cell too (outside number)
+  ring_cell INTEGER NOT NULL DEFAULT 0,       -- 1 = ring the cell in ring groups
+  cell_delay INTEGER NOT NULL DEFAULT 15,    -- seconds before the cell leg starts
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -387,6 +390,38 @@ CREATE TABLE IF NOT EXISTS blocked_numbers (
   target TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (login_id, number)
 );
+
+-- Private address book: one row per (name, number), keyed by login so two
+-- users can name the same number differently. number_norm is the shared
+-- canonical form (shared/phone.py) used for caller-ID matching.
+CREATE TABLE IF NOT EXISTS contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  number TEXT NOT NULL DEFAULT '',       -- as typed
+  number_norm TEXT NOT NULL DEFAULT '',  -- digits, 11-digit NANP -> 10
+  org TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_login_norm ON contacts(login_id, number_norm);
+
+-- Private notes. Attached to the contact (not the cdr row) so they survive
+-- the 90-day CDR purge; item_type/item_id/item_at snapshot what the note was
+-- written about. Deleted with the contact (cascade), or with the voicemail /
+-- recording they point at (delete hooks in the panel).
+CREATE TABLE IF NOT EXISTS contact_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  item_type TEXT NOT NULL DEFAULT '',    -- call | message | voicemail | recording
+  item_id INTEGER DEFAULT NULL,          -- cdr.id / messages.id / voicemail_messages.id / recordings.id
+  item_at TEXT NOT NULL DEFAULT '',      -- snapshot of the item's date
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(login_id, contact_id);
 
 -- Calls / texts a user reported to the admin (admin Reports page).
 CREATE TABLE IF NOT EXISTS reports (

@@ -152,8 +152,10 @@ private fun CallRow(c: Call, isSel: Boolean, onClick: () -> Unit, onLongClick: (
         colors = if (isSel) ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         else ListItemDefaults.colors(),
         leadingContent = { Avatar(c.other, isSel) },
-        headlineContent = { Text(prettyNumber(c.other)) },
+        headlineContent = { Text(c.peer_name.ifBlank { prettyNumber(c.other) }) },
         supportingContent = {
+            if (c.peer_name.isNotBlank()) Text(prettyNumber(c.other),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, label, Modifier.size(16.dp),
                     tint = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)

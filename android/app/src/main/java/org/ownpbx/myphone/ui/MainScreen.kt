@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Voicemail
 import androidx.compose.material3.*
@@ -29,6 +30,7 @@ import org.ownpbx.myphone.data.Overview
 enum class Tab(val label: String, val icon: ImageVector) {
     Messages("Messages", Icons.Filled.Chat),
     Calls("Calls", Icons.Filled.Call),
+    Contacts("Contacts", Icons.Filled.Contacts),
     Voicemail("Voicemail", Icons.Filled.Voicemail),
     Settings("Settings", Icons.Filled.Settings),
 }
@@ -212,6 +214,7 @@ fun MainScreen(model: AppModel) {
         when (tab) {
             Tab.Messages -> MessagesScreen(model, snack, m) { chatWith = it }
             Tab.Calls -> CallsScreen(model, snack, m) { chatWith = it }
+            Tab.Contacts -> ContactsScreen(model, snack, m)
             Tab.Voicemail -> VoicemailScreen(model, snack, m) { chatWith = it }
             Tab.Settings -> SettingsScreen(model, overview, m)
         }

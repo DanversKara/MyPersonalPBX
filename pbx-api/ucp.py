@@ -80,12 +80,15 @@ FLASH = {
     "recack": ("bad", "To turn on call recording, tick the box to confirm you've read the recording-law notice."),
     "recplan": ("bad", "Call recording isn't included in your plan."),
     "ivrbad": ("bad", "Pick one of your own IVR menus."),
+    "celldelaybad": ("bad", "Pick how long to wait before your cell rings."),
+    "cellnonum": ("bad", "Enter your cell number first, then turn on \"ring my cell\"."),
 }
 
 SUBTABS = [("ucp", "/ucp", "Overview"), ("ucp-calls", "/ucp/calls", "Calls"),
            ("ucp-vm", "/ucp/voicemail", "Voicemail"),
            ("ucp-rec", "/ucp/recordings", "Recordings"),
            ("ucp-msg", "/ucp/messages", "Messages"),
+           ("ucp-contacts", "/ucp/contacts", "Contacts"),
            ("ucp-ivr", "/ucp/ivr", "IVR"),
            ("ucp-bill", "/ucp/billing", "Billing"),
            ("ucp-set", "/ucp/settings", "Settings"),
@@ -98,6 +101,14 @@ DEFAULT_RING = 30
 
 def esc(x):
     return M.esc(x)
+
+
+def _who(name, number):
+    """Name (from the user's contacts) over the raw number, read-time only."""
+    name, number = str(name or ""), str(number or "")
+    if name and name != number:
+        return f'{esc(name)}<br><span class="muted">{esc(number)}</span>'
+    return esc(number or name)
 
 
 def _me(request: Request):
@@ -129,6 +140,10 @@ def _prefs(login_id):
     d["ring_seconds"] = d.get("ring_seconds") or 0
     d.setdefault("answer_ivr_id", None)
     d["text_email"] = 1 if d.get("text_email", 1) is None else int(d.get("text_email", 1))
+    d.setdefault("cell_number", "")
+    d["ring_cell"] = int(d.get("ring_cell") or 0)
+    d["cell_delay"] = d.get("cell_delay")
+    d["cell_delay"] = int(d["cell_delay"]) if str(d["cell_delay"]).isdigit() else 15
     return d
 
 
@@ -315,6 +330,7 @@ def _my_calls(me, limit=200, missed_only=False):
     q += " ORDER BY id DESC LIMIT ?"
     with M.db() as c:
         rows = [dict(r) for r in c.execute(q, args + [limit * 2]).fetchall()]
+    names = M.contacts.names_for(me["id"])
     out = []
     for r in rows:
         # Call history can't be removed by users (kept 90 days, then purged).
@@ -331,6 +347,8 @@ def _my_calls(me, limit=200, missed_only=False):
         if missed_only and kind not in ("missed", "vm"):
             continue
         r["kind"], r["other"] = kind, other
+        # Read-time only: the display name never lands in the CDR columns.
+        r["other_name"] = names.get(M.contacts.norm_number(other), "")
         out.append(r)
         if len(out) >= limit:
             break
@@ -347,10 +365,14 @@ def _recordings_for(me, limit=200):
     if not me["exten"]:
         return []
     with M.db() as c:
-        return [dict(r) for r in c.execute(
+        rows = [dict(r) for r in c.execute(
             "SELECT * FROM recordings WHERE system='user' AND login_id=?"
             " ORDER BY id DESC LIMIT ?",
             (me["id"], limit)).fetchall()]
+    names = M.contacts.names_for(me["id"])
+    for r in rows:
+        r["peer_name"] = names.get(M.contacts.norm_number(r.get("peer") or ""), "")
+    return rows
 
 
 def can_play_voicemail(s, msg_id) -> bool:
@@ -387,6 +409,11 @@ def purge_extension_data(exts, moving_login_id=None):
         all messages (DB + files) and the greeting file
     message_hidden rows cascade from messages. The logins.exten_since
     trigger already stamps the reassignment time. Returns {table: count}.
+
+    Contacts and notes are keyed by login_id, not by extension, so they are
+    deliberately NOT purged here: a reassigned extension's new holder never
+    sees the previous holder's address book (and the previous holder keeps
+    theirs).
     """
     exts = sorted({str(e).strip() for e in (exts or []) if str(e).strip()})
     counts = {"recordings": 0, "cdr": 0, "messages": 0, "voicemail": 0}
@@ -495,7 +522,7 @@ def overview(request: Request):
                f'{"Turn off do not disturb" if p["dnd"] else "Turn on do not disturb"}</button></form>')
     rows = "".join(
         f'<tr><td><span class="pill {KIND_LABEL[r["kind"]][1]}">{KIND_LABEL[r["kind"]][0]}</span></td>'
-        f'<td>{esc(r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"], from_utc=False)}</td></tr>'
+        f'<td>{_who(r.get("other_name"), r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"], from_utc=False)}</td></tr>'
         for r in calls) or '<tr><td colspan="4" class="muted">No calls yet</td></tr>'
     body = f"""
 <div class="tiles">
@@ -549,7 +576,7 @@ def calls_page(request: Request):
                 + " " + M.safety_ui.report_button(csrf, "call", r["id"], "calls"))
     rows = "".join(
         f'<tr><td><span class="pill {KIND_LABEL[r["kind"]][1]}">{KIND_LABEL[r["kind"]][0]}</span></td>'
-        f'<td>{esc(r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"], from_utc=False)}</td>'
+        f'<td>{_who(r.get("other_name"), r["other"])}</td><td>{_dur(r["bill_sec"])}</td><td class="muted">{_ago(r["started_at"], from_utc=False)}</td>'
         f'<td>{rec_cell(r)}</td><td class="actions">{_call_actions(r)}</td></tr>'
         for r in calls) or '<tr><td colspan="6" class="muted">No calls</td></tr>'
     left = _left(me, "call_minutes")
@@ -581,12 +608,15 @@ def voicemail_page(request: Request):
                 (box, folder)).fetchall()]
             for f, n in c.execute("SELECT folder, COUNT(*) FROM voicemail_messages WHERE mailbox=? GROUP BY folder", (box,)):
                 counts[f] = n
+    names = M.contacts.names_for(me["id"])
+    for m in msgs:
+        m["caller_name"] = names.get(M.contacts.norm_number(m.get("caller") or ""), "")
     csrf = M._csrf_field(s)
     move_to = "Old" if folder == "INBOX" else "INBOX"
     rows = "".join(
         f'<tr class="{"" if m["is_read"] else "unread"}" data-id="{int(m["id"])}">'
         f'<td><input type="checkbox" class="sel" name="ids" value="{int(m["id"])}" form="vmdel" aria-label="Select"></td>'
-        f'<td>{"" if m["is_read"] else "<span class=dot></span>"}{esc(m["caller"])}</td>'
+        f'<td>{"" if m["is_read"] else "<span class=dot></span>"}{_who(m.get("caller_name"), m["caller"])}</td>'
         f'<td>{_dur(m["duration_sec"])}</td><td class="muted">{_ago(m["received_at"])}</td>'
         f'<td><audio controls preload="none" src="/api/voicemail-audio/{int(m["id"])}" data-vm="{int(m["id"])}"></audio></td>'
         f'<td class="actions"><a href="/api/voicemail-audio/{int(m["id"])}?download=1">Download</a>'
@@ -700,6 +730,8 @@ async def vm_bulk_delete(request: Request):
             c.commit()
     for r in rows:
         _safe_unlink(r["path"], VM_ROOT)
+        # Notes that pointed at this message go with it.
+        M.contacts.delete_notes_for_item(me["id"], "voicemail", r["id"])
     _audit(me, "ucp.voicemail.delete", f"{len(rows)} rows")
     return RedirectResponse(back + "msg=vmdel", status_code=303)
 
@@ -718,6 +750,7 @@ async def vm_delete(request: Request, msg_id: int):
         c.execute("DELETE FROM voicemail_messages WHERE id=?", (msg_id,))
         c.commit()
     _safe_unlink(m["path"], VM_ROOT)
+    M.contacts.delete_notes_for_item(me["id"], "voicemail", msg_id)
     _audit(me, "ucp.voicemail.delete", f"id={msg_id}")
     return _back("/ucp/voicemail", "vmdel")
 
@@ -782,7 +815,7 @@ def recordings_page(request: Request):
     own = sum(1 for r in recs if r["login_id"] == me["id"])
     rows = "".join(
         f'<tr><td>{("<input type=checkbox class=sel name=ids value=" + str(int(r["id"])) + " form=recdel aria-label=Select>") if r["login_id"] == me["id"] else ""}</td>'
-        f'<td>{esc(r["peer"] if r["exten"] == me["exten"] else r["exten"])}</td>'
+        f'<td>{_who(r.get("peer_name"), r["peer"] if r["exten"] == me["exten"] else r["exten"])}</td>'
         f'<td>{esc("Outgoing" if r["exten"] == me["exten"] else "Incoming")}</td>'
         f'<td>{_dur(r["duration_sec"])}</td><td class="muted">{_ago(r["started_at"])}</td>'
         f'<td><audio controls preload="none" src="/api/recording-audio/{int(r["id"])}"></audio></td>'
@@ -827,6 +860,8 @@ async def rec_bulk_delete(request: Request):
         c.commit()
     for r in rows:
         _safe_unlink(r["path"], REC_ROOT)
+        # Notes that pointed at this recording go with it.
+        M.contacts.delete_notes_for_item(me["id"], "recording", r["id"])
     _audit(me, "ucp.recording.delete", f"{len(rows)} rows")
     return _back(back, "recdel")
 
@@ -836,11 +871,17 @@ def _my_messages(me, limit=500):
     if not ex:
         return []
     with M.db() as c:
-        return [dict(r) for r in c.execute(
+        rows = [dict(r) for r in c.execute(
             "SELECT * FROM messages WHERE (from_ext=? OR to_ext=?)"
             " AND (login_id=? OR ? IS NULL OR sent_at >= ?) AND id NOT IN"
             " (SELECT message_id FROM message_hidden WHERE login_id=?) ORDER BY id DESC LIMIT ?",
             (ex, ex, me["id"], _exten_since(me), _exten_since(me), me["id"], limit)).fetchall()]
+    names = M.contacts.names_for(me["id"])
+    for r in rows:
+        peer = r["to_ext"] if r["from_ext"] == ex else r["from_ext"]
+        r["peer"] = peer
+        r["peer_name"] = names.get(M.contacts.norm_number(peer), "")
+    return rows
 
 
 def messages_page(request: Request):
@@ -860,7 +901,7 @@ def messages_page(request: Request):
     side = "".join(
         f'<div class="conv-row"><input type="checkbox" class="sel" name="convs" value="{esc(o)}" form="msgdel" aria-label="Select conversation">'
         f'<a href="/ucp/messages?with={urllib.parse.quote(o)}" class="conv {"on" if o == sel else ""}">'
-        f'<b>{esc(o)}</b><span class="muted">{esc(ms[0]["body"][:40])} · {len(ms)}</span></a></div>'
+        f'<b>{esc(ms[0].get("peer_name") or o)}</b><span class="muted">{esc(ms[0]["body"][:40])} · {len(ms)}</span></a></div>'
         for o, ms in convs.items()) or '<p class="muted">No messages yet.</p>'
     csrf_m = M._csrf_field(s)
     back_m = "messages:" + sel
@@ -871,7 +912,8 @@ def messages_page(request: Request):
         f'{"" if m["from_ext"] == ex else " · " + M.safety_ui.report_button(csrf_m, "message", m["id"], back_m)}</span></div>'
         for m in reversed(convs.get(sel, [])))
     if sel:
-        thread = (f'<div class="muted" style="margin-bottom:8px">Conversation with <b>{esc(sel)}</b> · '
+        sel_name = (convs.get(sel) or [{}])[0].get("peer_name") or ""
+        thread = (f'<div class="muted" style="margin-bottom:8px">Conversation with <b>{_who(sel_name, sel)}</b> · '
                   f'{M.safety_ui.block_button(csrf_m, sel, back_m, M.safety_ui.is_blocked(me["id"], sel))}</div>') + thread
     mleft = _left(me, "messages")
     can_send = _quota(me, "messages") != 0 and mleft != 0
@@ -1104,6 +1146,11 @@ def _settings_body(request, s, me, extra_top=""):
     ivr_opts = '<option value="">My phone (no menu)</option>' + "".join(
         f'<option value="{m["id"]}" {"selected" if m["id"] == p["answer_ivr_id"] else ""}>IVR menu: {esc(m["name"])}</option>'
         for m in my_menus)
+    cur_delay = p.get("cell_delay")
+    cur_delay = int(cur_delay) if str(cur_delay).isdigit() else 15
+    cell_delay_opts = "".join(
+        f'<option value="{v}" {"selected" if v == cur_delay else ""}>{v} seconds</option>'
+        for v in (0, 5, 10, 15, 20, 30))
     return extra_top + f"""
 <div class="grid2">
 <section class="panel">
@@ -1117,6 +1164,10 @@ def _settings_body(request, s, me, extra_top=""):
 <label>If I don't answer, forward to<br><input name="forward_noanswer" value="{esc(p["forward_noanswer"])}" placeholder="leave empty to go to voicemail" inputmode="tel"></label>
 <label>Answer my calls with<br><select name="answer_ivr_id">{ivr_opts}</select></label>
 <p class="muted">Pick one of your IVR menus to greet callers before your phone rings. Build menus on the IVR tab.</p>
+<label>My cell number<br><input name="cell_number" value="{esc(p.get("cell_number") or "")}" placeholder="e.g. +1 310 555 0100" inputmode="tel"></label>
+<label class="switch"><input type="checkbox" name="ring_cell" value="1" {chk(p.get("ring_cell"))}> <span>Also ring my cell on shared numbers</span></label>
+<p class="muted">When an inbound number rings a group you're in, your cell rings too. Your cell's voicemail can't grab the call: you press 1 to accept. Uses your outside-call minutes.</p>
+<label>Start ringing my cell after<br><select name="cell_delay">{cell_delay_opts}</select></label>
 <p class="muted">Outside numbers use the company's phone lines. Forwarding on a shared inbound number that rings a group applies only to other extensions, not outside numbers.</p>
 <button class="btn">Save call handling</button>
 </form>
@@ -1205,6 +1256,26 @@ async def settings_calls(request: Request):
     if ring not in RING_CHOICES:
         return _back("/ucp/settings", "ringbad")
     ring_store = 0 if ring == DEFAULT_RING else ring
+    # Ring-group-to-cell: the user's own cell rings alongside desk/app legs.
+    # Older app builds don't send these fields: keep what's stored then.
+    if "cell_number" in f or "ring_cell" in f or "cell_delay" in f:
+        cell = (f.get("cell_number") or "").strip().replace(" ", "").replace("-", "")
+        if cell and not FWD_RE.match(cell):
+            return _back("/ucp/settings", "fwdbad")
+        if cell and len("".join(ch for ch in cell if ch.isdigit())) < 7:
+            return _back("/ucp/settings", "fwdbad")
+        ring_cell = 1 if f.get("ring_cell") == "1" else 0
+        try:
+            cell_delay = int(f.get("cell_delay") or 15)
+        except ValueError:
+            cell_delay = -1
+        if cell_delay not in (0, 5, 10, 15, 20, 30):
+            return _back("/ucp/settings", "celldelaybad")
+        if ring_cell and not cell:
+            return _back("/ucp/settings", "cellnonum")
+    else:
+        cur = _prefs(me["id"])
+        cell, ring_cell, cell_delay = cur.get("cell_number") or "", cur.get("ring_cell") or 0, cur.get("cell_delay") or 15
     ivr_raw = (f.get("answer_ivr_id") or "").strip()
     ivr_id = None
     if ivr_raw:
@@ -1217,16 +1288,19 @@ async def settings_calls(request: Request):
         ivr_id = int(ivr_raw)
     with M.db() as c:
         c.execute("INSERT INTO user_prefs (login_id, dnd, forward_always, forward_noanswer,"
-                  " ring_seconds, answer_ivr_id, updated_at)"
-                  " VALUES (?,?,?,?,?,?,datetime('now'))"
+                  " ring_seconds, answer_ivr_id, cell_number, ring_cell, cell_delay, updated_at)"
+                  " VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))"
                   " ON CONFLICT(login_id) DO UPDATE SET dnd=excluded.dnd,"
                   " forward_always=excluded.forward_always,"
                   " forward_noanswer=excluded.forward_noanswer,"
                   " ring_seconds=excluded.ring_seconds, answer_ivr_id=excluded.answer_ivr_id,"
+                  " cell_number=excluded.cell_number, ring_cell=excluded.ring_cell,"
+                  " cell_delay=excluded.cell_delay,"
                   " updated_at=excluded.updated_at",
-                  (me["id"], dnd, fa, fn, ring_store, ivr_id))
+                  (me["id"], dnd, fa, fn, ring_store, ivr_id, cell, ring_cell, cell_delay))
         c.commit()
-    _audit(me, "ucp.calls", f"dnd={dnd} fwd_always={fa} fwd_noanswer={fn} ring={ring} ivr={ivr_id}")
+    _audit(me, "ucp.calls", f"dnd={dnd} fwd_always={fa} fwd_noanswer={fn} ring={ring} ivr={ivr_id}"
+                            f" cell={cell} ring_cell={ring_cell} cell_delay={cell_delay}")
     return _back("/ucp/settings", "saved")
 
 

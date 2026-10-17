@@ -39,9 +39,12 @@ def esc(x):
     return M.esc(x)
 
 
-def num_norm(v):
-    d = "".join(ch for ch in str(v or "") if ch.isdigit())
-    return d[1:] if len(d) == 11 and d.startswith("1") else d
+try:
+    from phone import norm_number as num_norm
+except ImportError:  # app.py puts ../shared on sys.path; standalone tests may not
+    def num_norm(v):
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        return d[1:] if len(d) == 11 and d.startswith("1") else d
 
 
 def blocked_list(login_id):

@@ -114,7 +114,7 @@ fun MessagesScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier
                                     if (isSel) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface),
                                 leadingContent = { Avatar(t.peer, isSel) },
                                 headlineContent = {
-                                    Text(prettyNumber(t.peer), fontWeight = if (unread) FontWeight.Bold else FontWeight.Normal)
+                                    Text(t.peer_name.ifBlank { prettyNumber(t.peer) }, fontWeight = if (unread) FontWeight.Bold else FontWeight.Normal)
                                 },
                                 supportingContent = {
                                     Text((if (t.last.mine) "You: " else "") + t.last.body, maxLines = 1,

@@ -19,7 +19,8 @@ import java.util.concurrent.TimeUnit
 @Serializable data class Who(val username: String, val exten: String = "", val display_name: String = "", val role: String = "user")
 @Serializable data class LoginResp(val token: String, val ttl_days: Int = 60, val me: Who)
 @Serializable data class Msg(val id: Long, val peer: String, val mine: Boolean, val body: String, val sent_at: String = "", val via_did: String = "")
-@Serializable data class ChatThread(val peer: String, val last: Msg, val count: Int = 1, val blocked: Boolean = false)
+@Serializable data class ChatThread(val peer: String, val last: Msg, val count: Int = 1, val blocked: Boolean = false,
+    val peer_name: String = "")
 @Serializable data class Threads(val threads: List<ChatThread> = emptyList())
 @Serializable data class ThreadResp(val peer: String, val messages: List<Msg> = emptyList())
 @Serializable data class Since(val messages: List<Msg> = emptyList())
@@ -33,12 +34,12 @@ import java.util.concurrent.TimeUnit
 @Serializable data class Call(
     val id: Long, val kind: String = "", val other: String = "", val started_at: String = "",
     val duration_sec: Int? = null, val bill_sec: Int? = null, val disposition: String? = null,
-    val recording_id: Long? = null, val hidden: Boolean = false,
+    val recording_id: Long? = null, val hidden: Boolean = false, val peer_name: String = "",
 )
 @Serializable data class Calls(val calls: List<Call> = emptyList())
 @Serializable data class Vm(
     val id: Long, val caller: String = "", val received_at: String = "", val duration_sec: Int = 0,
-    val folder: String = "INBOX", val is_read: Int = 0,
+    val folder: String = "INBOX", val is_read: Int = 0, val caller_name: String = "",
 )
 @Serializable data class Vms(val folder: String = "INBOX", val voicemail: List<Vm> = emptyList())
 @Serializable data class BlockRule(val number: String, val action: String = "", val target: String = "")
@@ -64,6 +65,25 @@ import java.util.concurrent.TimeUnit
 )
 @Serializable data class WaitResp(val msg: Long = 0, val call: Long = 0, val vm: Long = 0, val changed: Boolean = false)
 @Serializable data class Result(val ok: Boolean = false, val code: String = "", val message: String = "")
+@Serializable data class Contact(
+    val id: Long, val name: String = "", val number: String = "", val number_norm: String = "",
+    val org: String = "", val email: String = "", val notes_count: Int = 0, val last_at: String = "",
+)
+@Serializable data class Contacts(val contacts: List<Contact> = emptyList())
+@Serializable data class NoteItem(
+    val id: Long, val contact_id: Long, val body: String = "", val item_type: String = "",
+    val item_id: Long? = null, val item_at: String = "", val created_at: String = "",
+)
+@Serializable data class TimelineItem(
+    val type: String = "", val id: Long = 0, val at: String = "", val name: String = "",
+    val number: String = "", val direction: String = "", val duration_sec: Int = 0,
+    val body: String = "", val note_count: Int = 0,
+)
+@Serializable data class ContactDetail(
+    val contact: Contact, val timeline: List<TimelineItem> = emptyList(),
+    val notes: List<NoteItem> = emptyList(),
+)
+@Serializable data class TimelineResp(val items: List<TimelineItem> = emptyList())
 
 /** HTTP 401 means the token is gone (signed out elsewhere / expired). */
 class ApiException(val status: Int, message: String) : Exception(message)
@@ -181,6 +201,11 @@ class Api(base: String, private val token: String?) {
     fun recordingAudioUrl(id: Long) = url("/me/recordings/$id/audio")
     suspend fun deleteDevice(id: Long) { exec(Request.Builder().url(url("/me/devices/$id")).delete()) }
 
+    // ---- contacts + notes
+    suspend fun contacts(): Contacts = get("/me/contacts")
+    suspend fun contactDetail(id: Long): ContactDetail = get("/me/contacts/$id")
+    suspend fun timeline(limit: Int = 200): TimelineResp = get("/me/timeline", mapOf("limit" to limit))
+
     // ---- changes
     suspend fun send(to: String, body: String) = form("/me/messages/send", listOf("to" to to, "body" to body))
     suspend fun deleteMessages(ids: List<Long> = emptyList(), peers: List<String> = emptyList()) =
@@ -211,4 +236,19 @@ class Api(base: String, private val token: String?) {
     suspend fun unblock(number: String) = form("/me/block", listOf("number" to number, "action" to "remove", "back" to "settings"))
     suspend fun changePassword(cur: String, new: String) =
         form("/me/settings/password", listOf("current" to cur, "new" to new, "confirm" to new))
+    suspend fun saveContact(id: Long?, name: String, number: String, org: String, email: String) =
+        form("/me/contacts/save", buildList {
+            if (id != null) add("id" to id.toString())
+            add("name" to name); add("number" to number); add("org" to org); add("email" to email)
+        })
+    suspend fun deleteContacts(ids: List<Long>) =
+        form("/me/contacts/delete", ids.map { "ids" to it.toString() })
+    suspend fun saveNote(contactId: Long, body: String, itemType: String = "", itemId: Long? = null) =
+        form("/me/notes/save", buildList {
+            add("contact_id" to contactId.toString()); add("body" to body)
+            if (itemType.isNotBlank()) add("item_type" to itemType)
+            if (itemId != null) add("item_id" to itemId.toString())
+        })
+    suspend fun deleteNotes(ids: List<Long>) =
+        form("/me/notes/delete", ids.map { "ids" to it.toString() })
 }
