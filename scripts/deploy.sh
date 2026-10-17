@@ -54,8 +54,10 @@ mkdir -p /opt/pbx/pbx-brain /opt/pbx/pbx-api /opt/pbx/config-gen
 cp "$SRC_DIR/pbx-brain/"*.py /opt/pbx/pbx-brain/
 cp "$SRC_DIR/pbx-api/"*.py /opt/pbx/pbx-api/
 # The one shared normalizer (shared/phone.py) is deployed flat into both
-# service dirs so `import phone` works everywhere without path hacks.
-cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-brain/ /opt/pbx/pbx-api/
+# service dirs so `import phone` works everywhere without path hacks
+# (cp takes a single destination: one line per dir).
+cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-brain/
+cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-api/
 cp -r "$SRC_DIR/config-gen/"* /opt/pbx/config-gen/
 cp "$SRC_DIR/db/schema.sql" /opt/pbx/
 mkdir -p /opt/pbx/db
