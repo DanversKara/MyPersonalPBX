@@ -277,12 +277,11 @@ def _dur(sec):
 
 
 def _render(request, s, me, tab, title, body):
-    sub = ""
-    if s["role"] == "admin":
-        # Admins reach /ucp via the "My Phone" admin tab; show the sub-nav.
-        sub = '<div class="subtabs">' + "".join(
-            f'<a href="{href}" class="{"on" if key == tab else ""}">{esc(label)}</a>'
-            for key, href, label in SUBTABS) + "</div>"
+    # The sub-nav (Overview, Calls, Voicemail, ..., Contacts, Settings) is
+    # shown to every user, not just admins: these are all per-user pages.
+    sub = '<div class="subtabs">' + "".join(
+        f'<a href="{href}" class="{"on" if key == tab else ""}">{esc(label)}</a>'
+        for key, href, label in SUBTABS) + "</div>"
     head = (f'<div class="ucp-head"><div><h2>{esc(title)}</h2>'
             f'<div class="muted">{esc(me["display_name"] or me["username"])}'
             f'{" · ext " + esc(me["exten"]) if me["exten"] else ""}</div></div></div>')
