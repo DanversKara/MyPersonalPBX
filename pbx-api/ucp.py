@@ -500,6 +500,7 @@ def overview(request: Request):
                                (box,)).fetchone()[0]
     calls = _my_calls(me, limit=6)
     missed = sum(1 for x in _my_calls(me, limit=50) if x["kind"] in ("missed", "vm"))
+    n_contacts = M.contacts.count_contacts(me["id"])
     csrf = M._csrf_field(s)
     if p["dnd"]:
         status = '<span class="pill bad">Do not disturb</span> <span class="muted">Calls go straight to voicemail</span>'
@@ -530,6 +531,7 @@ def overview(request: Request):
   <div class="tile"><span class="lbl">Status</span><div>{status}</div><div style="margin-top:10px">{dnd_btn}</div></div>
   <a class="tile link" href="/ucp/voicemail"><span class="lbl">New voicemail</span><b>{new_vm}</b></a>
   <a class="tile link" href="/ucp/calls?missed=1"><span class="lbl">Missed calls (recent)</span><b>{missed}</b></a>
+  <a class="tile link" href="/ucp/contacts"><span class="lbl">Contacts</span><b>{n_contacts}</b></a>
 </div>
 <h3>911</h3>
 {M.e911_ui.user_notice(me["id"])}

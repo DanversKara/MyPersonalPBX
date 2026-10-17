@@ -73,6 +73,12 @@ CONTACT_COLS = ("id", "name", "number", "number_norm", "org", "email",
                 "created_at", "updated_at")
 
 
+def count_contacts(login_id):
+    with M.db() as c:
+        return c.execute("SELECT COUNT(*) FROM contacts WHERE login_id=?",
+                         (login_id,)).fetchone()[0]
+
+
 def contacts_for(login_id, limit=CONTACT_PAGE_LIMIT, q=""):
     with M.db() as c:
         if q:
