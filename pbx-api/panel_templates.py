@@ -21,6 +21,10 @@ body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--
 .nav{background:var(--nav-bg);color:#fff;padding:12px 20px;display:flex;gap:20px;align-items:center}
 .nav a{color:var(--nav-link);text-decoration:none}
 .nav a:hover{color:#fff}
+/* plain content links (contact names, "download vCard", etc.): use the
+   theme link color instead of the browser default blue/purple */
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
 .nav .sp{flex:1}
 .theme-toggle{background:none;border:0;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1}
 .theme-toggle:hover{background:rgba(255,255,255,.14)}
