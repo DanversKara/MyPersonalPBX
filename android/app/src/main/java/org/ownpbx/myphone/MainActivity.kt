@@ -27,7 +27,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         CrashLog.install(this)
         enableEdgeToEdge()
-        model = Holder.model ?: AppModel(Store(applicationContext)).also { Holder.model = it }
+        model = Holder.model ?: AppModel(Store(applicationContext), applicationContext).also { Holder.model = it }
         model.onSecureChanged = { applySecure() }
         model.onSignedOut = { Notifier.stop(applicationContext) }
         applySecure()

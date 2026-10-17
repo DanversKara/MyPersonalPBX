@@ -42,15 +42,33 @@ fun ContactsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier
     }
 
     var contacts by remember { mutableStateOf<List<Contact>?>(null) }
+    var offline by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var dialog by remember { mutableStateOf<Contact?>(null) }   // id == 0 -> new contact
     val scope = rememberCoroutineScope()
 
     suspend fun refresh() {
         val r = model.guard { it.contacts() }
-        if (r == null) model.notice = "Couldn't load contacts" else contacts = r.contacts
+        if (r != null) {
+            contacts = r.contacts
+            offline = false
+            model.contactCache.save(r.contacts)
+        } else {
+            val cached = model.contactCache.load()
+            if (cached.isNotEmpty()) {
+                contacts = cached
+                offline = true
+            } else {
+                model.notice = "Couldn't load contacts"
+            }
+        }
     }
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(Unit) {
+        // Show the offline copy immediately; refresh from the server in back.
+        val cached = model.contactCache.load()
+        if (cached.isNotEmpty()) { contacts = cached; offline = true }
+        refresh()
+    }
 
     val q = query.trim()
     val dq = q.filter { it.isDigit() }
@@ -62,6 +80,12 @@ fun ContactsScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier
     Scaffold(modifier = modifier, topBar = {
         Column(Modifier.statusBarsPadding().padding(16.dp, 8.dp)) {
             Text("Contacts", style = MaterialTheme.typography.headlineSmall)
+            if (offline) {
+                Spacer(Modifier.height(4.dp))
+                Text("Offline — showing saved contacts",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.tertiary)
+            }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
                 placeholder = { Text("Search name or number") },

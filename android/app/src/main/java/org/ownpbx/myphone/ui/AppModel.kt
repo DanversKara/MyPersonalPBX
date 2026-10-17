@@ -21,7 +21,9 @@ import org.ownpbx.myphone.data.Store
 enum class Stage { SignIn, SetPin, Locked, Ready }
 
 /** App-wide state: where we are (sign in / PIN / main) and error messages. */
-class AppModel(val store: Store) {
+class AppModel(val store: Store, context: android.content.Context) {
+    /** Offline copy of PBX contacts (emergency access without internet). */
+    val contactCache = org.ownpbx.myphone.data.ContactCache(context)
     var stage by mutableStateOf(initialStage())
     /** One-shot message for the snackbar. */
     var notice by mutableStateOf<String?>(null)
