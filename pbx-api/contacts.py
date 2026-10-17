@@ -437,18 +437,36 @@ def contacts_page(request: Request):
     csrf = M._csrf_field(s)
     flash = M.ucp._flash(request)
     trs = "".join(
-        f'<tr><td><a href="/ucp/contacts/{r["id"]}">{M.esc(r["name"])}</a></td>'
+        f'<tr><td><input type="checkbox" name="ids" value="{r["id"]}" aria-label="Select {M.esc(r["name"])}"></td>'
+        f'<td><a href="/ucp/contacts/{r["id"]}">{M.esc(r["name"])}</a></td>'
         f'<td>{M.esc(r["number"])}</td><td>{M.esc(r["org"])}</td>'
         f'<td>{counts.get(r["id"], 0) or ""}</td>'
         f'<td class="actions"><form method="post" action="/ucp/contacts/delete" class="inline"'
         f' onsubmit="return confirm(\'Delete this contact and its notes?\')">{csrf}'
         f'<input type="hidden" name="ids" value="{r["id"]}"><button class="btn ghost danger">Delete</button></form></td></tr>'
-        for r in rows) or f'<tr><td colspan="5" class="muted">{"No contacts match." if q else "No contacts yet."}</td></tr>'
+        for r in rows) or f'<tr><td colspan="6" class="muted">{"No contacts match." if q else "No contacts yet."}</td></tr>'
     body = f"""{flash}
 <form method="get" action="/ucp/contacts" class="inline">
 <input type="search" name="q" value="{M.esc(q)}" placeholder="Search contacts" aria-label="Search contacts">
 <button class="btn ghost">Search</button></form>
-<table><tr><th>Name</th><th>Number</th><th>Organization</th><th>Notes</th><th></th></tr>{trs}</table>
+<form method="post" action="/ucp/contacts/delete" id="bulkdel"
+ onsubmit="return confirm('Delete the selected contacts and their notes?')">{csrf}
+<table><tr><th><input type="checkbox" id="selall" aria-label="Select all" title="Select all"></th><th>Name</th><th>Number</th><th>Organization</th><th>Notes</th><th></th></tr>{trs}</table>
+<p><button class="btn ghost danger">Delete selected</button>
+<button class="btn ghost danger" formaction="/ucp/contacts/delete-all"
+ onclick="return confirm('Delete ALL contacts and their notes? This cannot be undone.')">Delete all</button></p>
+</form>
+<script>
+document.getElementById('selall').addEventListener('change', function(e) {{
+  document.querySelectorAll('#bulkdel input[name="ids"]').forEach(function(cb) {{ cb.checked = e.target.checked; }});
+}});
+document.getElementById('bulkdel').addEventListener('submit', function(e) {{
+  if (!document.querySelector('#bulkdel input[name="ids"]:checked')) {{
+    e.preventDefault();
+    alert('Select at least one contact first.');
+  }}
+}});
+</script>
 <h3>Add contact</h3>
 <form method="post" action="/ucp/contacts/save">{csrf}
 <label>Name <input name="name" required maxlength="120"></label>
@@ -549,6 +567,21 @@ async def contact_delete(request: Request):
     return M.ucp._back("/ucp/contacts", "deleted")
 
 
+async def contact_delete_all(request: Request):
+    s, me = M.ucp._me(request)
+    if not s:
+        raise HTTPException(401)
+    await M._check_csrf(request, s)
+    if M.ucp._locked():
+        return M.ucp._back("/ucp/contacts", "locked")
+    with M.db() as c:
+        ids = [r["id"] for r in c.execute(
+            "SELECT id FROM contacts WHERE login_id=?", (me["id"],))]
+    n = remove_contacts(me["id"], ids)
+    M.ucp._audit(me, "ucp.contact.delete_all", f"n={n}")
+    return M.ucp._back("/ucp/contacts", "deleted")
+
+
 async def contact_import(request: Request):
     s, me = M.ucp._me(request)
     if not s:
@@ -626,6 +659,7 @@ def install(app_module):
     app.get("/ucp/contacts/{cid}", **html)(contact_page)
     app.post("/ucp/contacts/save")(contact_save)
     app.post("/ucp/contacts/delete")(contact_delete)
+    app.post("/ucp/contacts/delete-all")(contact_delete_all)
     app.post("/ucp/contacts/import")(contact_import)
     app.get("/ucp/contacts/export")(contact_export)
     app.post("/ucp/notes/save")(note_save)
