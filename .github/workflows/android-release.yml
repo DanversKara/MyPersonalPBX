@@ -92,10 +92,10 @@ jobs:
           for apk in android/app/build/outputs/apk/release/*.apk; do
             cp "$apk" "$out/my-phone-$APP_VERSION.apk"
           done
-          # R8 is on for release: keep the mapping so stack traces can be read.
-          for m in android/app/build/outputs/mapping/release/mapping.txt; do
-            cp "$m" "$out/my-phone-$APP_VERSION-mapping.txt"
-          done
+          # R8 mapping (only present when minify is enabled).
+          if [ -f android/app/build/outputs/mapping/release/mapping.txt ]; then
+            cp android/app/build/outputs/mapping/release/mapping.txt "$out/my-phone-$APP_VERSION-mapping.txt"
+          fi
           ls -l "$out"
 
       # Fails the release if the APK came out unsigned (the signing block in
