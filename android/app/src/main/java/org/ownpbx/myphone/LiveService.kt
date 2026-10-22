@@ -96,11 +96,21 @@ class LiveService : Service() {
         super.onDestroy()
     }
 
+    /** Swiped away from Recents (Motorola kills apps there): try to come
+     *  straight back, while this process is still able to start itself. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        try { sync(applicationContext) } catch (_: Exception) {}
+        super.onTaskRemoved(rootIntent)
+    }
+
     /** Keep the built-in phone signed in on the app line (incoming calls),
-     *  or signed out when they're off. Re-checked every 10 minutes. */
+     *  or signed out when they're off. Re-checked every 10 minutes while
+     *  the sign-in is healthy; an unregistered phone re-checks on every
+     *  loop pass instead, so a dropped registration recovers in under a
+     *  minute rather than sitting dead for up to 10 minutes. */
     private suspend fun ensureCalls(store: Store) {
         val now = android.os.SystemClock.elapsedRealtime()
-        if (!refreshCalls && now - callsCheckedAt < 10 * 60_000L) return
+        if (!refreshCalls && (!store.incomingCalls || Phone.registered) && now - callsCheckedAt < 10 * 60_000L) return
         refreshCalls = false
         callsCheckedAt = now
         if (!store.incomingCalls) {

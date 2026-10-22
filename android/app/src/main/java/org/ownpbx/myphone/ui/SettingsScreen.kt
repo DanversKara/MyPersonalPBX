@@ -83,6 +83,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
     var lastCheck by remember { mutableStateOf(store.lastCheckAt to store.lastCheckInfo) }
     var checking by remember { mutableStateOf(false) }
     var checkEvery by remember { mutableIntStateOf(store.checkEvery) }
+    var incoming by remember { mutableStateOf(store.incomingCalls) }
     val power = ctx.getSystemService(android.os.PowerManager::class.java)
     var unrestricted by remember { mutableStateOf(power?.isIgnoringBatteryOptimizations(ctx.packageName) == true) }
     // Re-read after coming back from Android's battery screen.
@@ -190,9 +191,18 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 }
             }
         }
-        if (notifyOn && checkEvery < 900 && !unrestricted) {
-            ClickRow(Icons.Filled.BatteryAlert, "Let it run in the background",
-                "Android's battery saver can pause the connection. Tap and choose Allow.") {
+        // Shown whenever the connection service can run — for fast
+        // notifications OR for incoming calls — and it stays visible after
+        // "Allow" too. It used to vanish for good the moment Android
+        // reported the exemption (and was hidden entirely for calls-only
+        // use), so when Motorola quietly re-enabled battery killing there
+        // was no way back here from inside the app. Motorola also has a
+        // second switch, hence the App settings row under it.
+        if ((notifyOn && checkEvery < 900) || incoming) {
+            ClickRow(if (unrestricted) Icons.Filled.BatteryStd else Icons.Filled.BatteryAlert,
+                "Let it run in the background",
+                if (unrestricted) "Allowed in Android — tap to re-check. On Motorola the row below matters too."
+                else "Android's battery saver can pause the connection. Tap and choose Allow.") {
                 try {
                     ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                         android.net.Uri.parse("package:" + ctx.packageName)))
@@ -200,6 +210,13 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                     try { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
                     catch (_: Exception) {}
                 }
+            }
+            ClickRow(Icons.Filled.SettingsApplications, "App settings (Motorola battery killer)",
+                "Battery > Unrestricted, and turn off 'Pause app activity if unused'") {
+                try {
+                    ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.parse("package:" + ctx.packageName)))
+                } catch (_: Exception) {}
             }
         }
         SwitchRow(Icons.Filled.Sms, "Show text in notifications",
@@ -252,7 +269,6 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         ClickRow(Icons.Filled.Lock, "Lock now") { model.lock() }
 
         Section("Calling")
-        var incoming by remember { mutableStateOf(store.incomingCalls) }
         SwitchRow(Icons.Filled.PhoneCallback, "Incoming calls",
             if (incoming) org.ownpbx.myphone.phone.Phone.registration else "Calls ring your other phones only", incoming) {
             incoming = it; store.incomingCalls = it

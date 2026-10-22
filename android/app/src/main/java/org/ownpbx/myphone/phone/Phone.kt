@@ -221,6 +221,13 @@ object Phone {
     /** Sign in for incoming calls (or keep the current sign-in). Main thread. */
     fun startListening(ctx: Context, sip: SipInfo): Boolean = try {
         ensure(ctx, sip, register = true)
+        // Already configured is not the same as still registered: if the
+        // TLS connection dropped while Android froze the process (Doze /
+        // Motorola battery killing), the account sits unregistered and
+        // ensure() alone does nothing — nothing re-registers until the
+        // app is reopened, and callers get a dead / busy line meanwhile.
+        // Force a fresh REGISTER whenever we know we're not signed in.
+        if (!registered) try { core?.refreshRegisters() } catch (_: Exception) {}
         canRegister(sip)
     } catch (e: Exception) { registration = "The phone engine couldn't start (${e.javaClass.simpleName})"; false }
 

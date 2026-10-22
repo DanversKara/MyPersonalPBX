@@ -66,7 +66,9 @@ object Notifier {
     fun schedule(ctx: Context) {
         val store = Store(ctx)
         val wm = WorkManager.getInstance(ctx)
-        if (store.token == null || !store.notifyOn) { wm.cancelUniqueWork(WORK_PERIODIC); return }
+        // Keep the periodic job while incoming calls are on even if
+        // notifications are off: CheckWorker is also LiveService's watchdog.
+        if (store.token == null || (!store.notifyOn && !store.incomingCalls)) { wm.cancelUniqueWork(WORK_PERIODIC); return }
         createChannels(ctx)
         val req = PeriodicWorkRequestBuilder<CheckWorker>(15, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -344,6 +346,14 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             // Offline or PBX unreachable: try again next time.
             Notifier.record(store, "Couldn't reach the PBX (${e.javaClass.simpleName})")
         }
+        // Watchdog: if the connection service was killed (Motorola /
+        // Android battery savers kill even foreground services after a
+        // few hours), this 15-minute job is the only thing still running
+        // that can bring it back — previously nothing restarted it until
+        // the user reopened the app, so the "Connected" icon vanished
+        // and calls stopped reaching the phone. Android may still refuse
+        // a background start; LiveService.sync already swallows that.
+        try { LiveService.sync(applicationContext) } catch (_: Exception) {}
         return Result.success()
     }
 }
