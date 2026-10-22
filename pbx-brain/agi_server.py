@@ -49,13 +49,36 @@ def text_quota(c, login_id):
         return 0
 
 
-def _guest_sms_ok(login):
-    """Guest extensions may only text when the admin turned guest_sms on.
-    Normal logins always pass; missing columns (pre-migration DB) pass."""
+def _guest_sms_mode(login):
+    """Guest texting scope: 'all' | 'external' | 'internal' | 'off'.
+    Normal logins read as 'all'; rows from before the mode column fall
+    back to the on/off flag; missing columns (pre-guest DB) pass."""
     try:
-        return not login["is_guest"] or bool(login["guest_sms"])
+        if not login["is_guest"]:
+            return "all"
     except (IndexError, KeyError, TypeError):
-        return True
+        return "all"
+    try:
+        mode = login["guest_sms_mode"]
+    except (IndexError, KeyError, TypeError):
+        mode = None
+    if mode in ("all", "external", "internal", "off"):
+        return mode
+    try:
+        return "all" if login["guest_sms"] else "off"
+    except (IndexError, KeyError, TypeError):
+        return "all"
+
+
+def _guest_sms_ok(login):
+    """External texting check (real phone numbers), used by the external
+    msg-route. Internal extension-to-extension texts use the check below."""
+    return _guest_sms_mode(login) in ("all", "external")
+
+
+def _guest_sms_internal_ok(login):
+    """Internal (extension-to-extension) texting check for the msg-route."""
+    return _guest_sms_mode(login) in ("all", "internal")
 
 
 def _push_to_phone(to_exten, from_exten, body):
@@ -139,14 +162,14 @@ def handle_msg_route(agi_vars):
         if not _pref(sender["id"], "msg_out"):
             log.info("msg-route: %s has sending turned off", from_exten)
             return
-        if not _guest_sms_ok(sender):
-            log.info("msg-route: %s is a guest extension with texting off", from_exten)
+        if not _guest_sms_internal_ok(sender):
+            log.info("msg-route: %s is a guest extension with internal texting off", from_exten)
             return
         if not _pref(dest["id"], "msg_in"):
             log.info("msg-route: %s isn't accepting texts", dest_exten)
             return
-        if not _guest_sms_ok(dest):
-            log.info("msg-route: %s is a guest extension with texting off", dest_exten)
+        if not _guest_sms_internal_ok(dest):
+            log.info("msg-route: %s is a guest extension with internal texting off", dest_exten)
             return
         try:
             if c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?",

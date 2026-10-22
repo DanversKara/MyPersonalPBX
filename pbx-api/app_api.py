@@ -466,6 +466,8 @@ def me_settings(request: Request):
         "guest_outbound": bool(me.get("guest_outbound")),
         "guest_inbound": bool(me.get("guest_inbound")),
         "guest_sms": bool(me.get("guest_sms")),
+        "guest_sms_mode": (me.get("guest_sms_mode")
+                           or ("all" if me.get("guest_sms") else "off")) if me.get("is_guest") else "all",
         "guest_e911": bool(me.get("guest_e911")),
         "record_ack_needed": ver < ent.RECORDING_CONSENT_VERSION,
         "vm_email": me.get("vm_email") or "", "text_email": bool(p["text_email"]),

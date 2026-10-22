@@ -10,24 +10,39 @@ invite, or convert any existing login either way under Logins → Edit
 E911 page lists every guest and its 911 state; type/rule changes are
 audit-logged (`logins.guest_change`).
 
+## Update: 4-way texting scope
+The SMS/MMS rule is now a dropdown — **Both external and internal**,
+**External only**, **Internal only**, **Block all** — stored as
+`logins.guest_sms_mode` / `invites.guest_sms_mode`
+(`all | external | internal | off`). `guest_sms` remains as the synced
+"external allowed" flag, so the external gates (voip.ms webhook, AGI
+external route, portal external send) are unchanged; the internal paths
+(portal/app send, brain `send_message_api`, AGI internal route) check
+the mode. The boot migration adds the column and backfills existing
+guests (texting on -> `all`, off -> `off`), so upgrading changes
+nobody's behavior. Deploy is the usual `pbx-update`; no app change.
+
 ## Files
-- `db/schema.sql` — five guest columns on `logins` and `invites`
-  (fresh installs).
-- `pbx-api/app.py` — idempotent migration for existing DBs; Logins list
-  Type column + editor account-type/rules; Invites generator picker +
-  redeem carries the flags; inbound voip.ms webhook drops texts for
-  guests with texting off.
-- `pbx-api/ucp.py` — portal/app send path refuses texts for blocked
-  guests (sender or recipient).
+- `db/schema.sql` — the guest columns on `logins` and `invites`
+  (fresh installs), incl. `guest_sms_mode`.
+- `pbx-api/app.py` — idempotent migrations for existing DBs; Logins list
+  Type column + editor account-type/rules (texting = the scope
+  dropdown); Invites generator picker + redeem carries the flags/mode;
+  inbound voip.ms webhook drops texts for guests whose scope excludes
+  external numbers.
+- `pbx-api/ucp.py` — portal/app send path refuses texts outside the
+  guest's scope (sender or recipient, internal and external branches).
 - `pbx-api/e911_ui.py` — "Guest extensions" section + 911 states.
 - `pbx-api/app_api.py` — `me/settings` exposes `is_guest` + the four
-  rule flags (additive; older apps ignore them).
+  rule flags + `guest_sms_mode` (additive; older apps ignore them).
 - `pbx-brain/app.py` — the gates: 911 fast-fail for blocked guests,
   outbound deny (dial path + `handle_outbound` for DISA/forwards),
   PSTN ring skip in ring groups + voicemail path for direct rings,
   `send_message_api` texting gates.
 - `pbx-brain/agi_server.py` — SIP MESSAGE (Zoiper) texting gates.
-- `README.md`, `dev/test-brain-guest.py`, `dev/test-guest-api.py`.
+- `README.md`, `dev/test-brain-guest.py` (30 checks), `dev/test-guest-api.py`
+  (34 checks), `dev/test-guest-agi.py` (9 checks: the AGI internal route
+  across all four modes).
 
 No Android app change is needed: enforcement is entirely server-side,
 and the app API only gained additive fields.
@@ -46,9 +61,10 @@ python3 -m py_compile pbx-api/app.py pbx-api/ucp.py pbx-api/e911_ui.py \
   pbx-api/app_api.py pbx-brain/app.py pbx-brain/agi_server.py && echo COMPILE-OK
 export PBX_DB=/tmp/guesttest.db && rm -f $PBX_DB
 python3 dev/seed-test-db.py
-python3 dev/test-brain-guest.py    # 21 checks: 911 / outbound / inbound / sms matrix
-python3 dev/test-guest-api.py      # 20 checks: migration, convert, invites, e911 page, app gate
-sqlite3 /var/lib/pbx/pbx.db "PRAGMA table_info(logins);" | grep guest   # 5 rows on the live DB
+python3 dev/test-brain-guest.py    # 30 checks: 911 / outbound / inbound / sms mode matrix
+python3 dev/test-guest-api.py      # 34 checks: migration, convert, invites, modes, e911 page, app gate
+python3 dev/test-guest-agi.py      # 9 checks: AGI msg-route across the four modes
+sqlite3 /var/lib/pbx/pbx.db "PRAGMA table_info(logins);" | grep guest   # 6 rows on the live DB
 ```
 Then in the panel: Logins shows a Type column; edit any login →
 Account type → Guest extension; the E911 page lists it under

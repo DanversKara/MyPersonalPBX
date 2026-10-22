@@ -7,7 +7,9 @@ creates a guest and converts normal <-> guest in place (same login id,
 history kept); the invite flow carries the admin's guest choice into the
 new login; the E911 page lists guests and their 911 state; me/settings
 exposes the guest state to the app; and the portal/app send path refuses
-texts for a guest with guest_sms off (and allows them once it's on).
+texts for a guest with guest_sms off (and allows them once it's on); and
+the 4-way texting scope (guest_sms_mode: all | external | internal |
+off) across the editor, invites, me/settings and the send path.
 
     export PBX_DB=/tmp/guestapi.db && rm -f $PBX_DB && python3 dev/seed-test-db.py
     python3 dev/test-guest-api.py     # run from the repo root
@@ -39,9 +41,11 @@ def csrf(html):
 # --- schema / migration columns -------------------------------------------
 for t in ("logins", "invites"):
     cols = {r[1] for r in q(f"PRAGMA table_info({t})")}
-    check(f"schema: {t} has the five guest columns",
-          {"is_guest", "guest_outbound", "guest_inbound", "guest_sms", "guest_e911"} <= cols,
-          sorted(cols & {"is_guest", "guest_outbound", "guest_inbound", "guest_sms", "guest_e911"}))
+    check(f"schema: {t} has the guest columns + sms mode",
+          {"is_guest", "guest_outbound", "guest_inbound", "guest_sms", "guest_e911",
+           "guest_sms_mode"} <= cols,
+          sorted(cols & {"is_guest", "guest_outbound", "guest_inbound", "guest_sms",
+                         "guest_e911", "guest_sms_mode"}))
 
 # --- admin sign-in ----------------------------------------------------------
 r = c.post("/login", data={"username": "admin", "password": "admin123"}, follow_redirects=False)
@@ -168,6 +172,87 @@ r = c.post("/api/v1/me/messages/send", headers=H, data={"to": "8800", "body": "h
            follow_redirects=False)
 sent = q("SELECT COUNT(*) n FROM messages WHERE login_id=?", (new[0]["id"],))[0]["n"]
 check("guest with sms on: app send stored", sent == 1, (r.status_code, sent))
+# Legacy checkbox 'on' resolved to the mode 'all' (external flag stays 1).
+row = q("SELECT guest_sms_mode, guest_sms FROM logins WHERE id=?", (new[0]["id"],))
+check("legacy sms checkbox maps to mode 'all'",
+      row and row[0]["guest_sms_mode"] == "all" and row[0]["guest_sms"] == 1,
+      dict(row[0]) if row else None)
+
+# --- the 4-way texting scope ---------------------------------------------------
+r = c.get(f"/logins/{new[0]['id']}/edit")
+check("editor offers the texting-scope dropdown",
+      'name="guest_sms_mode"' in r.text and "Internal only" in r.text
+      and "External only" in r.text and "Block all" in r.text)
+
+def set_mode(mode):
+    r = c.get(f"/logins/{new[0]['id']}/edit")
+    c.post(f"/logins/{new[0]['id']}/edit", data={
+        "csrf_token": csrf(r.text), "username": guest_exten, "password": "", "role": "user",
+        "exten": guest_exten, "sip_username": new[0]["sip_username"], "sip_secret": "",
+        "display_name": "Visitor Desk", "vm_email": "", "account_type": "guest",
+        "guest_inbound": "on", "guest_sms_mode": mode, "enabled": "on"}, follow_redirects=False)
+    return q("SELECT guest_sms_mode, guest_sms FROM logins WHERE id=?", (new[0]["id"],))[0]
+
+def send(to):
+    r = c.post("/api/v1/me/messages/send", headers=H, data={"to": to, "body": "mode test"},
+               follow_redirects=False)
+    try:
+        return r.json().get("code", "")
+    except Exception:
+        return r.headers.get("location", "")
+
+def sent_count():
+    return q("SELECT COUNT(*) n FROM messages WHERE login_id=?", (new[0]["id"],))[0]["n"]
+
+m = set_mode("internal")
+check("mode=internal stored, external flag synced off",
+      m["guest_sms_mode"] == "internal" and m["guest_sms"] == 0, dict(m))
+n0 = sent_count()
+send("8800")
+check("mode=internal: internal send allowed", sent_count() == n0 + 1, sent_count())
+check("mode=internal: external send refused (msgoff)",
+      send("+15550192837") == "msgoff", "")
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("me/settings exposes the mode",
+      st.get("guest_sms_mode") == "internal" and st.get("guest_sms") is False, st)
+
+m = set_mode("external")
+check("mode=external stored, external flag synced on",
+      m["guest_sms_mode"] == "external" and m["guest_sms"] == 1, dict(m))
+n0 = sent_count()
+code = send("8800")
+check("mode=external: internal send refused (msgoff), nothing stored",
+      code == "msgoff" and sent_count() == n0, (code, sent_count()))
+check("mode=external: external send passes the guest gate (fails later: no DID route)",
+      send("+15550192837") != "msgoff", "")
+
+m = set_mode("off")
+n0 = sent_count()
+check("mode=off: internal send refused", send("8800") == "msgoff" and sent_count() == n0,
+      sent_count())
+
+# Invites carry the mode too.
+r = c.get("/invites")
+tok = csrf(r.text)
+r = c.post("/invites/new", data={
+    "csrf_token": tok, "expires_days": "7", "email": "",
+    "account_type": "guest", "guest_sms_mode": "external"}, follow_redirects=False)
+check("invite with a texting mode generated", r.status_code == 200 and "/invite/" in r.text,
+      r.status_code)
+m = re.search(r"/invite/([A-Za-z0-9_\-]+)", r.text)
+token2 = m.group(1) if m else ""
+inv = q("SELECT * FROM invites ORDER BY id DESC LIMIT 1")
+check("invite row carries mode=external (+ synced flag)",
+      inv and inv[0]["guest_sms_mode"] == "external" and inv[0]["guest_sms"] == 1,
+      dict(inv[0]) if inv else None)
+r = c.get(f"/invite/{token2}")
+r = c.post(f"/invite/{token2}", data={
+    "token": token2, "display_name": "Shop Phone", "vm_email": "",
+    "password": "shopphonepass1", "password2": "shopphonepass1"}, follow_redirects=False)
+new2 = q("SELECT * FROM logins WHERE display_name='Shop Phone'")
+check("redeemed login carries mode=external",
+      new2 and new2[0]["guest_sms_mode"] == "external" and new2[0]["guest_sms"] == 1,
+      dict(new2[0]) if new2 else None)
 
 print()
 print("FAILED:", fails if fails else "none")

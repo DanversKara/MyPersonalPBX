@@ -658,7 +658,9 @@ def ptt_can_receive(login):
 # admin turned that one thing on for the guest:
 #   guest_outbound  call outside numbers (plan minutes still apply)
 #   guest_inbound   receive PSTN calls from DIDs
-#   guest_sms       send/receive SMS/MMS and internal texts
+#   guest_sms_mode  texting scope: all | external | internal | off
+#                   (guest_sms stays as the synced "external allowed"
+#                   flag; guest_can(.., 'sms') means external texting)
 #   guest_e911      place 911/933 calls (an admin decision; normal
 #                   extensions can never be blocked from 911)
 # The helpers tolerate pre-migration DBs (missing columns read as
@@ -678,10 +680,38 @@ def is_guest(login):
 def guest_can(login, cap):
     """True when `login` may do `cap` ('outbound'|'inbound'|'sms'|'e911').
     Normal (non-guest) logins always can; guests only where the admin
-    turned that rule on."""
+    turned that rule on. 'sms' means EXTERNAL texting (real phone
+    numbers) — internal texting has its own check below."""
     if not is_guest(login):
         return True
+    if cap == "sms":
+        return guest_can_text_external(login)
     return _guest_flag(login, "guest_" + cap)
+
+
+def _guest_sms_mode(login):
+    """A guest's texting scope: 'all' | 'external' | 'internal' | 'off'.
+    Non-guests read as 'all'. Rows from before the mode column fall back
+    to the on/off flag (on = all, off = off)."""
+    if not is_guest(login):
+        return "all"
+    try:
+        mode = login["guest_sms_mode"]
+    except (IndexError, KeyError, TypeError):
+        mode = None
+    if mode in ("all", "external", "internal", "off"):
+        return mode
+    return "all" if _guest_flag(login, "guest_sms") else "off"
+
+
+def guest_can_text_external(login):
+    """May text real phone numbers (send and receive)."""
+    return _guest_sms_mode(login) in ("all", "external")
+
+
+def guest_can_text_internal(login):
+    """May text other extensions (send and receive)."""
+    return _guest_sms_mode(login) in ("all", "internal")
 
 
 def handle_ptt(channel, me, target):
@@ -3348,11 +3378,11 @@ def send_message_api(to_exten, from_exten, body):
 
         if not _pref(sender["id"], "msg_out"):
             return False, {"error": "sending is turned off for this extension"}
-        if not guest_can(sender, "sms"):
+        if not guest_can_text_internal(sender):
             return False, {"error": "sending is turned off for this extension"}
         if not _pref(dest["id"], "msg_in"):
             return False, {"error": "recipient isn't accepting texts"}
-        if not guest_can(dest, "sms"):
+        if not guest_can_text_internal(dest):
             return False, {"error": "recipient isn't accepting texts"}
         try:
             blocked = c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?",

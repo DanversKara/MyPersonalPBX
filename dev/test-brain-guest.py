@@ -90,6 +90,13 @@ def set_guest(exten, **flags):
     sets = ", ".join("%s=%d" % (k, 1 if v else 0) for k, v in flags.items())
     d.execute("UPDATE logins SET %s WHERE exten=?" % sets, (exten,)); d.commit()
 
+def set_sms_mode(exten, mode):
+    """Set the guest texting scope + the synced external flag, the way
+    the admin panel writes them."""
+    ext = 1 if mode in ("all", "external") else 0
+    d.execute("UPDATE logins SET guest_sms_mode=?, guest_sms=? WHERE exten=?",
+              (mode, ext, exten)); d.commit()
+
 def reset():
     B.CALLS.clear(); B.PENDING.clear(); B.B_LOGIN.clear()
     LOG.clear(); CHANS.clear(); VM.clear(); BRIDGES.clear(); EMERG.clear()
@@ -189,21 +196,50 @@ check("inbound: direct ring_local to blocked guest goes to voicemail, never ring
       len(VM) == 1 and originates() == [], (VM, originates()))
 
 # --- texts ------------------------------------------------------------------
-reset(); set_guest("8802", guest_sms=0)
+# The texting scope is 4-way: all | external | internal | off.
+reset(); set_sms_mode("8802", "off")
 ok, info = B.send_message_api("8800", "8802", "hello from guest")
-check("sms: guest with sms off cannot text internally", ok is False, info)
+check("sms(off): guest cannot text internally", ok is False, info)
 ok, info = B.send_message_api("8802", "8800", "hello to guest")
-check("sms: texts to a guest with sms off are refused", ok is False, info)
+check("sms(off): texts to the guest are refused", ok is False, info)
 ok, info = B.send_message_api(OUTSIDE, "8802", "hello outside")
-check("sms: guest with sms off cannot text outside numbers", ok is False, info)
+check("sms(off): guest cannot text outside numbers", ok is False, info)
 
-reset(); set_guest("8802", guest_sms=1)
+reset(); set_sms_mode("8802", "all")
 ok, info = B.send_message_api("8800", "8802", "hello from guest")
-check("sms: guest with sms on can text internally", ok is True, info)
+check("sms(all): guest can text internally", ok is True, info)
 ok, info = B.send_message_api("8802", "8800", "hello to guest")
-check("sms: texts to a guest with sms on are delivered/stored", ok is True, info)
+check("sms(all): texts to the guest are delivered/stored", ok is True, info)
 
-reset(); set_guest("8802", guest_sms=0)
+reset(); set_sms_mode("8802", "internal")
+ok, info = B.send_message_api("8800", "8802", "hello from guest")
+check("sms(internal): guest can text internally", ok is True, info)
+ok, info = B.send_message_api("8802", "8800", "hello to guest")
+check("sms(internal): texts to the guest are delivered/stored", ok is True, info)
+ok, info = B.send_message_api(OUTSIDE, "8802", "hello outside")
+check("sms(internal): guest cannot text outside numbers",
+      ok is False and "turned off" in str(info.get("error", "")), info)
+
+reset(); set_sms_mode("8802", "external")
+ok, info = B.send_message_api("8800", "8802", "hello from guest")
+check("sms(external): guest cannot text internally", ok is False, info)
+ok, info = B.send_message_api("8802", "8800", "hello to guest")
+check("sms(external): internal texts to the guest are refused", ok is False, info)
+ok, info = B.send_message_api(OUTSIDE, "8802", "hello outside")
+check("sms(external): guest passes the guest gate for outside numbers (fails later on DID/config)",
+      "turned off" not in str(info.get("error", "")), info)
+
+# Legacy rows (mode column blank) fall back to the old on/off flag.
+reset(); d.execute("UPDATE logins SET guest_sms_mode='' WHERE exten='8802'"); d.commit()
+set_guest("8802", guest_sms=1)
+ok, info = B.send_message_api("8800", "8802", "legacy on")
+check("sms(legacy flag on, no mode): internal text allowed", ok is True, info)
+set_guest("8802", guest_sms=0)
+ok, info = B.send_message_api("8800", "8802", "legacy off")
+check("sms(legacy flag off, no mode): internal text refused", ok is False, info)
+set_sms_mode("8802", "off")
+
+reset(); set_sms_mode("8802", "off")
 ok, info = B.send_message_api("8801", "8800", "normal to normal")
 check("sms: normal-to-normal texting unaffected", ok is True, info)
 

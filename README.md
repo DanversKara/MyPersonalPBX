@@ -472,9 +472,12 @@ that guest:
 - **Receiving calls from real phone numbers** — DID routes and ring
   groups ring the guest for outside callers. Off: the guest is skipped,
   exactly as if it weren't in the list.
-- **SMS / MMS texting** — send and receive texts (outside numbers and
-  other extensions), in both directions. Off: sends are refused and
-  inbound texts are dropped.
+- **SMS / MMS texting** — a dropdown, not on/off: **Both external and
+  internal** (real phone numbers and other extensions), **External
+  only** (real numbers; no extension-to-extension texts), **Internal
+  only** (extension-to-extension; no real numbers), or **Block all**.
+  The scope applies in both directions: sends outside the scope are
+  refused and inbound texts outside it are dropped.
 - **911 / 933 calls** — off: emergency dialing from that guest extension
   is not routed. This is an explicit per-extension admin decision for
   phones that are not E911-provisioned; normal extensions can never be

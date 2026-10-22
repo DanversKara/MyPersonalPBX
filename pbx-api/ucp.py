@@ -968,13 +968,35 @@ _send_times: dict[int, list[float]] = {}
 MSG_RATE = 20  # per minute per user (stops spam / runaway scripts)
 
 
-def _guest_sms_off(row) -> bool:
-    """True when `row` (a logins row) is a guest extension whose admin
-    left guest_sms off. Tolerates pre-migration rows without the columns."""
+def _guest_sms_mode(row) -> str:
+    """A logins row's guest texting scope: 'all' | 'external' |
+    'internal' | 'off'. Non-guests read as 'all'; rows from before the
+    mode column fall back to the on/off flag."""
     try:
-        return bool(row["is_guest"]) and not bool(row["guest_sms"])
+        if not row["is_guest"]:
+            return "all"
     except (IndexError, KeyError, TypeError):
-        return False
+        return "all"
+    try:
+        mode = row["guest_sms_mode"]
+    except (IndexError, KeyError, TypeError):
+        mode = None
+    if mode in ("all", "external", "internal", "off"):
+        return mode
+    try:
+        return "all" if row["guest_sms"] else "off"
+    except (IndexError, KeyError, TypeError):
+        return "off"
+
+
+def _guest_sms_off(row) -> bool:
+    """External texting off for this row (real phone numbers)."""
+    return _guest_sms_mode(row) in ("off", "internal")
+
+
+def _guest_sms_internal_off(row) -> bool:
+    """Internal (extension-to-extension) texting off for this row."""
+    return _guest_sms_mode(row) in ("off", "external")
 
 
 async def msg_send(request: Request):
@@ -1030,10 +1052,10 @@ async def msg_send(request: Request):
         dest = c.execute("SELECT id, exten FROM logins WHERE exten=? AND enabled=1", (to,)).fetchone()
         if not dest or not re.fullmatch(r"\d{2,8}", to) or to == me["exten"]:
             return RedirectResponse(back + "msg=msgto", status_code=303)
-        if _guest_sms_off(me):
+        if _guest_sms_internal_off(me):
             return RedirectResponse(back + "msg=msgoff", status_code=303)
         dest_full = c.execute("SELECT * FROM logins WHERE id=?", (dest["id"],)).fetchone()
-        if dest_full and _guest_sms_off(dest_full):
+        if dest_full and _guest_sms_internal_off(dest_full):
             # Same answer as "turned off / blocked" (doesn't reveal why).
             return RedirectResponse(back + "msg=msgnotaccepting", status_code=303)
         if not M.safety_ui.msg_prefs(me["id"])["msg_out"]:
