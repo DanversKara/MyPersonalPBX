@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -269,7 +270,8 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
             SwitchRow(
                 Icons.Filled.RecordVoiceOver,
                 "Push-to-talk",
-                if (st.ptt_allowed) "Walkie-talkie calls: they answer on speaker, you hold to talk"
+                if (st.ptt_allowed)
+                    "Pages chirp first and only connect when you accept; you hold to talk"
                 else "Not included in your plan",
                 st.user_ptt,
                 enabled = st.ptt_allowed,
@@ -277,6 +279,35 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 // The server saves the PTT wish on the calls POST (unlike
                 // recording, which lives on prefs) — save it there.
                 saveCalls(st.copy(user_ptt = it))
+            }
+            // Missed-PTT behaviour (a server-side user setting, saved on the
+            // same calls POST): what the PBX does when I don't accept a page.
+            Text(
+                "If I don't accept a push-to-talk",
+                Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = st.user_ptt_missed != "retry",
+                    onClick = { saveCalls(st.copy(user_ptt_missed = "voicemail")) },
+                    enabled = st.ptt_allowed,
+                )
+                Text("Send the caller to my voicemail")
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = st.user_ptt_missed == "retry",
+                    onClick = { saveCalls(st.copy(user_ptt_missed = "retry")) },
+                    enabled = st.ptt_allowed,
+                )
+                Text("Chirp me again (up to 3 tries), then voicemail")
             }
             // This phone's own PTT defaults (not PBX settings): the
             // in-call toggles start here, and changing them in a call

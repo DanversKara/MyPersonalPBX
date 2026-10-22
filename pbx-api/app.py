@@ -103,7 +103,8 @@ def _migrate(c):
     if "answer_ivr_id" not in cols("user_prefs"):
         c.execute("ALTER TABLE user_prefs ADD COLUMN answer_ivr_id INTEGER DEFAULT NULL")
     for col, ddl in (("call_minutes", "INTEGER NOT NULL DEFAULT 0"), ("voicemail", "INTEGER NOT NULL DEFAULT 0"),
-                     ("messages", "INTEGER NOT NULL DEFAULT 0"), ("recording", "INTEGER NOT NULL DEFAULT 0")):
+                     ("messages", "INTEGER NOT NULL DEFAULT 0"), ("recording", "INTEGER NOT NULL DEFAULT 0"),
+                     ("push_to_talk", "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols("billing_plans"):
             c.execute(f"ALTER TABLE billing_plans ADD COLUMN {col} {ddl}")
     if "recording_consent_at" not in cols("user_prefs"):
@@ -171,6 +172,8 @@ def _migrate(c):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_allowed INTEGER NOT NULL DEFAULT 0")
     if "ptt_enabled" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_enabled INTEGER NOT NULL DEFAULT 0")
+    if "ptt_missed" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN ptt_missed TEXT NOT NULL DEFAULT 'voicemail'")
     # Guest extensions: a restricted account type with its own admin-set
     # rules (outside calling, PSTN inbound, SMS/MMS, 911). All flags default
     # OFF, so a login only becomes less restricted where the admin opts in.
@@ -1131,8 +1134,8 @@ def login_edit_page(request: Request, lid: str):
 Massachusetts, Pennsylvania, Washington) require every party's consent. "User call recording" only records once the user has
 accepted the recording notice in their control panel and their plan includes recording. Admin recording is your responsibility
 to use lawfully.</p>
-<label><input type="checkbox" name="ptt_allowed" {'checked' if t and t['ptt_allowed'] else ''}> Allow push-to-talk</label>
-<span class="muted">Lets the user place push-to-talk calls (dial *88 + extension) and receive them. They must still turn on push-to-talk in their own Settings themselves — this cannot enable it for them. Uncheck to disable push-to-talk entirely.</span><br>
+<label><input type="checkbox" name="ptt_allowed" {'checked' if t and t['ptt_allowed'] else ''}> Allow push-to-talk (override)</label>
+<span class="muted">Override: this user can place and receive push-to-talk calls (dial *88 + extension) even when their plan doesn't include push-to-talk. Without this tick, push-to-talk works only when the user's plan includes it (Billing → Plans) — a user with no plan, or a plan without push-to-talk, gets none. They must still turn on push-to-talk in their own Settings themselves to receive calls — this cannot enable it for them. Uncheck to go back to plan-only.</span><br>
 <label>Account type<br><select name="account_type"><option value="normal" {'selected' if not (t and t['is_guest']) else ''}>Normal extension</option><option value="guest" {'selected' if t and t['is_guest'] else ''}>Guest extension</option></select></label>
 <span class="muted">A guest extension is a restricted account (a courtesy, lobby or visitor phone). Calling other extensions, feature codes and internal ring groups always works. Everything below is OFF for a guest unless you turn it on. Switching type takes effect immediately — the account, extension and history are kept; switch back any time.</span><br>
 <label><input type="checkbox" name="guest_outbound" {'checked' if t and t['guest_outbound'] else ''}> Guest: allow outside calling</label>

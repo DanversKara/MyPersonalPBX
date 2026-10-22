@@ -244,6 +244,56 @@ fun InCallScreen(c: CallUi) {
                         Text("Answer")
                     }
                 }
+            } else if (c.incoming && c.ptt && c.connectedAt == 0L) {
+                // A PTT page never connects on its own: the phone chirps and
+                // waits here until the user accepts (or doesn't).
+                Text(
+                    "is paging you — nothing is connected yet. Accept to listen " +
+                        "and talk back. No accept follows your Settings choice " +
+                        "(voicemail, or chirp again).",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(24.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(64.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        LargeFloatingActionButton(
+                            { Phone.decline() },
+                            containerColor = Color(0xFFD93025),
+                            contentColor = Color.White,
+                            shape = CircleShape,
+                        ) {
+                            Icon(Icons.Filled.CallEnd, "No accept", Modifier.size(36.dp))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text("No accept")
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        LargeFloatingActionButton(
+                            {
+                                if (
+                                    androidx.core.content.ContextCompat.checkSelfPermission(
+                                        ctx,
+                                        android.Manifest.permission.RECORD_AUDIO,
+                                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                )
+                                    org.ownpbx.myphone.phone.CallService.answer(ctx)
+                                else
+                                    try {
+                                        askMic.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    } catch (_: Exception) {}
+                            },
+                            containerColor = Color(0xFF188038),
+                            contentColor = Color.White,
+                            shape = CircleShape,
+                        ) {
+                            Icon(Icons.Filled.Call, "Accept", Modifier.size(36.dp))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text("Accept")
+                    }
+                }
             } else if (c.ptt) {
                 PttControls(c, pttTalking) { on ->
                     pttTalking = on

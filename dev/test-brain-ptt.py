@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """pbx-brain push-to-talk (*88<exten>) with a fake ARI: the gate is the
-recording-style split — placing needs the caller's ptt_allowed, receiving
-needs the callee's ptt_allowed AND ptt_enabled. Anything else fast-fails
-(denied announcement + hangup) and never reaches voicemail or the normal
-ring path. A good PTT call originates B legs carrying the PJSIP_HEADER
-variables (X-PTT / Call-Info answer-after=0), bridges on answer with a
-beep, is never recorded, and lands in the CDR with direction 'ptt'.
+recording-style split — placing needs the caller's effective permission,
+receiving needs the callee's effective permission AND ptt_enabled. Gate
+failures fast-fail (denied announcement + hangup). A good PTT call
+originates B legs carrying ONLY the X-PTT header (nothing auto-answers:
+no Call-Info answer-after), bridges on accept with a beep, is never
+recorded, and lands in the CDR with direction 'ptt'. If the callee
+doesn't accept, THEIR ptt_missed setting decides: 'voicemail' (default)
+routes the caller to voicemail; 'retry' re-rings up to 3 total attempts,
+then voicemail.
 
     export PBX_DB=/tmp/apptest.db && rm -f $PBX_DB && python3 dev/seed-test-db.py
     python3 dev/test-brain-ptt.py      # run from the repo root; exits non-zero on failure
@@ -86,6 +89,9 @@ def set_ptt(exten, allowed, enabled):
     d.execute("UPDATE logins SET ptt_allowed=?, ptt_enabled=? WHERE exten=?",
               (allowed, enabled, exten)); d.commit()
 
+def set_missed(exten, mode):
+    d.execute("UPDATE logins SET ptt_missed=? WHERE exten=?", (mode, exten)); d.commit()
+
 def reset():
     B.CALLS.clear(); B.PENDING.clear(); B.B_LOGIN.clear(); B.B_SCREEN.clear()
     B.REC_RECORDINGS.clear(); LOG.clear(); CHANS.clear(); VM.clear()
@@ -141,16 +147,32 @@ check("e: originate failed -> denied + hung up", denied(a), (a.played, a.hung))
 check("e: voicemail never invoked", VM == [], VM)
 check("e: no pending legs left", B.PENDING == {}, B.PENDING)
 
-# (f) B leg originated but ends unanswered -> caller fast-fails, no voicemail
-reset(); set_ptt("8800", 1, 1); set_ptt("8801", 1, 1)
+# (f) B leg ends unanswered, callee's missed setting = voicemail (the
+#     default) -> caller goes to the callee's voicemail, NOT denied
+reset(); set_ptt("8800", 1, 1); set_ptt("8801", 1, 1); set_missed("8801", "voicemail")
 STATES[sip["8801"] + "-app"] = "offline"
 a = dial_ptt("a5")
 orig = originates()
 check("f: one B leg originated", len(orig) == 1, orig)
 b_id = B.CALLS["a5"]["b_id"]
 B.on_channel_destroyed(CHANS[b_id], {"cause_txt": "unreachable"})
-check("f: B died -> caller denied + hung up", denied(a), (a.played, a.hung))
-check("f: voicemail never invoked", VM == [], VM)
+check("f: B died -> caller routed to voicemail", VM == [("a5", "8801")], VM)
+check("f: caller not denied", not denied(a), (a.played, a.hung))
+
+# (g) callee's missed setting = retry -> the phone rings again (chirp
+#     again) up to 3 total attempts, then voicemail
+reset(); set_ptt("8800", 1, 1); set_ptt("8801", 1, 1); set_missed("8801", "retry")
+STATES[sip["8801"] + "-app"] = "offline"
+a = dial_ptt("a7")
+check("g: attempt 1 originated", len(originates()) == 1, originates())
+B.on_channel_destroyed(CHANS[B.CALLS["a7"]["b_id"]], {"cause_txt": "no answer"})
+check("g: no accept -> attempt 2 rings", len(originates()) == 2 and not a.hung, originates())
+B.on_channel_destroyed(CHANS[B.CALLS["a7"]["b_id"]], {"cause_txt": "no answer"})
+check("g: no accept -> attempt 3 rings", len(originates()) == 3 and not a.hung, originates())
+B.on_channel_destroyed(CHANS[B.CALLS["a7"]["b_id"]], {"cause_txt": "no answer"})
+check("g: attempts exhausted -> voicemail", VM == [("a7", "8801")], VM)
+check("g: no 4th attempt", len(originates()) == 3, originates())
+set_missed("8801", "voicemail")
 
 # (c) both on -> B legs carry the PTT headers, bridge + beep on answer,
 #     recording never starts, CDR is marked direction='ptt'
@@ -160,9 +182,9 @@ a = dial_ptt("a6")
 orig = originates()
 check("c: B legs originated (main + app)", [o[0] for o in orig] ==
       ["PJSIP/%s" % sip["8801"], "PJSIP/%s-app" % sip["8801"]], orig)
-check("c: headers on every leg", all(
+check("c: X-PTT header on every leg, and NO auto-answer header", all(
     (o[1].get("variables") or {}).get("PJSIP_HEADER(add,X-PTT)") == "1" and
-    "answer-after=0" in ((o[1].get("variables") or {}).get("PJSIP_HEADER(add,Call-Info)") or "")
+    "PJSIP_HEADER(add,Call-Info)" not in (o[1].get("variables") or {})
     for o in orig), orig)
 check("c: caller ID name is PTT-prefixed", all(
     (o[1].get("caller_id") or "").startswith("PTT ") for o in orig), orig)

@@ -376,6 +376,85 @@ new3 = q("SELECT * FROM logins WHERE display_name='Upgrade Guest'")
 check("redeemed login carries the upgrade permission",
       new3 and new3[0]["guest_upgrade"] == 1, dict(new3[0]) if new3 else None)
 
+# --- push-to-talk: plan feature + override + missed setting -------------------
+import entitlements as ENT
+import app_api as API
+
+c2 = sqlite3.connect(DB)
+c2.execute("INSERT INTO billing_plans (name, description, price_cents, currency, stripe_mode,"
+           " stripe_price_id, active, push_to_talk) VALUES ('Test PTT', '', 500, 'usd', 'test', 'price_ptt', 1, 1)")
+c2.commit(); c2.close()
+
+def mk_user(exten):
+    cc = sqlite3.connect(DB)
+    cc.execute("INSERT INTO logins (username, pwhash, role, exten, sip_username, sip_secret)"
+               " VALUES (?, 'x', 'user', ?, ?, 's')", ("u" + exten, exten, "phone" + exten))
+    cc.commit()
+    lid = cc.execute("SELECT id FROM logins WHERE exten=?", (exten,)).fetchone()[0]
+    cc.close()
+    return lid
+
+def ent_ptt(lid):
+    r = q("SELECT quota FROM user_entitlements WHERE login_id=? AND feature='push_to_talk'", (lid,))
+    return r[0]["quota"] if r else None
+
+u_ptt = mk_user("8870")
+check("no plan + no override: no push_to_talk entitlement",
+      ent_ptt(u_ptt) is None, ent_ptt(u_ptt))
+B.apply_subscription(u_ptt, fake_sub("sub_ptt", "price_ptt"))
+check("subscribing to a PTT plan grants the push_to_talk entitlement",
+      ent_ptt(u_ptt) == 1, ent_ptt(u_ptt))
+cc = sqlite3.connect(DB); cc.row_factory = sqlite3.Row
+row = cc.execute("SELECT * FROM logins WHERE id=?", (u_ptt,)).fetchone()
+check("ent.ptt_allowed is True via the plan while the login flag is 0",
+      ENT.ptt_allowed(cc, row) is True and not row["ptt_allowed"], dict(row))
+row2 = cc.execute("SELECT * FROM logins WHERE id=?", (g_off,)).fetchone()
+check("ent.ptt_allowed False for a guest on a non-PTT plan with no override",
+      ENT.ptt_allowed(cc, row2) is False, dict(row2))
+cc.close()
+
+cc = sqlite3.connect(DB)
+cc.execute("UPDATE logins SET ptt_enabled=1 WHERE id=?", (u_ptt,)); cc.commit(); cc.close()
+ptt_map = API._ptt_by_exten()
+check("app contacts map: plan-PTT user with the wish on is reachable",
+      ptt_map.get("8870") is True, ptt_map.get("8870"))
+check("app contacts map: guest on a non-PTT plan is not",
+      ptt_map.get("8860") in (False, None), ptt_map.get("8860"))
+
+# Admin adds PTT to an existing plan -> current subscribers are re-granted.
+r = c.get(f"/billing/plans/{paid_id}/edit")
+r = c.post(f"/billing/plans/{paid_id}/edit", data={
+    "csrf_token": csrf(r.text), "name": "Test Paid", "description": "",
+    "call_minutes": "3000", "messages": "3000", "voicemail": "1",
+    "ivr_menus": "0", "price": "10.00", "currency": "usd",
+    "sort_order": "0", "active": "1", "push_to_talk": "1"}, follow_redirects=False)
+prow = q("SELECT push_to_talk FROM billing_plans WHERE id=?", (paid_id,))
+check("plan edit saves push_to_talk on the plan",
+      prow and prow[0]["push_to_talk"] == 1, dict(prow[0]) if prow else None)
+check("plan edit re-grants current subscribers (guest on Test Paid gains PTT)",
+      ent_ptt(g_off) == 1, ent_ptt(g_off))
+
+# Missed-PTT setting round-trips through the app API (visitor guest, H).
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("me/settings defaults the missed-PTT choice to voicemail",
+      st.get("user_ptt_missed") == "voicemail", st.get("user_ptt_missed"))
+r = c.post("/api/v1/me/settings/calls", headers=H, data={
+    "dnd": "0", "forward_always": "", "forward_noanswer": "", "ring_seconds": "30",
+    "user_ptt": "1", "user_ptt_missed": "retry"})
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("me/settings saves the missed-PTT choice (retry)",
+      st.get("user_ptt_missed") == "retry", st.get("user_ptt_missed"))
+r = c.post("/api/v1/me/settings/calls", headers=H, data={
+    "dnd": "0", "forward_always": "", "forward_noanswer": "", "ring_seconds": "30",
+    "user_ptt": "1"})
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("partial settings POST preserves the missed-PTT choice",
+      st.get("user_ptt_missed") == "retry", st.get("user_ptt_missed"))
+cvv = portal(guest_exten, "visitorpass1")
+r = cvv.get("/ucp/settings")
+check("portal Settings shows the missed-PTT select",
+      'name="user_ptt_missed"' in r.text and "Chirp me again" in r.text, r.status_code)
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

@@ -243,6 +243,80 @@ reset(); set_sms_mode("8802", "off")
 ok, info = B.send_message_api("8801", "8800", "normal to normal")
 check("sms: normal-to-normal texting unaffected", ok is True, info)
 
+# --- push-to-talk -------------------------------------------------------------
+# PTT permission is effective: the admin override flag (ptt_allowed) OR
+# the plan's push_to_talk entitlement. Guests follow the same rule.
+def set_ptt(exten, allowed=None, enabled=None, plan="keep"):
+    if allowed is not None:
+        d.execute("UPDATE logins SET ptt_allowed=? WHERE exten=?", (allowed, exten))
+    if enabled is not None:
+        d.execute("UPDATE logins SET ptt_enabled=? WHERE exten=?", (enabled, exten))
+    if plan != "keep":
+        lid = d.execute("SELECT id FROM logins WHERE exten=?", (exten,)).fetchone()[0]
+        d.execute("DELETE FROM user_entitlements WHERE login_id=? AND feature='push_to_talk'", (lid,))
+        if plan is not None:
+            d.execute("INSERT INTO user_entitlements (login_id, feature, quota, source)"
+                      " VALUES (?, 'push_to_talk', ?, 'plan:1')", (lid, plan))
+    d.commit()
+
+def ptt(a_id, caller, target):
+    reset()
+    return dial(a_id, caller, "*88" + target)
+
+# Control callee: 8800 can receive (override + wish on).
+set_ptt("8800", allowed=1, enabled=1, plan=None)
+set_ptt("8802", allowed=0, enabled=1, plan=None)
+a = ptt("p1", "8802", "8800")
+check("ptt: guest with no override and no plan cannot place", denied(a), (a.played, a.hung))
+
+set_ptt("8802", allowed=1)
+a = ptt("p2", "8802", "8800")
+check("ptt: guest with the admin override can place",
+      not denied(a) and any(ep == "PJSIP/phone8800" for ep in originates()), originates())
+
+set_ptt("8802", allowed=0, plan=1)
+a = ptt("p3", "8802", "8800")
+check("ptt: guest with a PTT plan (no override) can place",
+      not denied(a) and any(ep == "PJSIP/phone8800" for ep in originates()), originates())
+
+set_ptt("8802", plan=0)
+a = ptt("p4", "8802", "8800")
+check("ptt: plan entitlement of 0 does not grant", denied(a), (a.played, a.hung))
+set_ptt("8802", plan=None)
+
+# Receiving: caller 8800 has the override; the guest is the callee.
+set_ptt("8800", allowed=1, enabled=1, plan=None)
+set_ptt("8802", allowed=0, enabled=1, plan=None)
+a = ptt("p5", "8800", "8802")
+check("ptt: guest with no override/plan cannot receive", denied(a), (a.played, a.hung))
+
+set_ptt("8802", plan=1)
+a = ptt("p6", "8800", "8802")
+check("ptt: guest with a PTT plan can receive",
+      not denied(a) and any(ep == "PJSIP/phone8802" for ep in originates()), originates())
+
+set_ptt("8802", plan=None, allowed=1)
+a = ptt("p7", "8800", "8802")
+check("ptt: guest with the override can receive",
+      not denied(a) and any(ep == "PJSIP/phone8802" for ep in originates()), originates())
+
+set_ptt("8802", enabled=0)
+a = ptt("p8", "8800", "8802")
+check("ptt: permission without the user's own wish still cannot receive",
+      denied(a), (a.played, a.hung))
+set_ptt("8802", allowed=0, enabled=0, plan=None)
+
+# Baseline: a normal user with no plan and no override has no PTT either.
+set_ptt("8801", allowed=0, enabled=1, plan=None)
+set_ptt("8800", allowed=1, enabled=1, plan=None)
+a = ptt("p9", "8801", "8800")
+check("ptt: normal user with no override and no plan cannot place", denied(a), (a.played, a.hung))
+set_ptt("8801", plan=1)
+a = ptt("p10", "8801", "8800")
+check("ptt: normal user with a PTT plan can place",
+      not denied(a) and any(ep == "PJSIP/phone8800" for ep in originates()), originates())
+set_ptt("8801", allowed=0, enabled=0, plan=None)
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

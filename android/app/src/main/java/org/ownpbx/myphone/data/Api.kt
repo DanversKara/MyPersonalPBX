@@ -144,6 +144,8 @@ data class Settings(
     val record_ack_needed: Boolean = true,
     val user_ptt: Boolean = false,
     val ptt_allowed: Boolean = false,
+    /** Missed-PTT behaviour (server-side): "voicemail" or "retry" (chirp again). */
+    val user_ptt_missed: String = "voicemail",
     val vm_email: String = "",
     val text_email: Boolean = true,
     val msg_in: Boolean = true,
@@ -459,6 +461,8 @@ class Api(base: String, private val token: String?) {
                 // the stored wish — so always send it explicitly ("1"/"0"),
                 // never checkbox-style, or turning PTT off wouldn't stick.
                 add("user_ptt" to if (s.user_ptt) "1" else "0")
+                // Same presence rule for the missed-PTT choice.
+                add("user_ptt_missed" to s.user_ptt_missed)
             },
         )
 

@@ -367,15 +367,27 @@ def me_recordings(request: Request):
 
 
 def _ptt_by_exten() -> dict:
-    """{exten: effective push-to-talk} for every login, in one query.
+    """{exten: effective push-to-talk} for every login.
 
-    Effective = the admin allow-flag AND the user's own wish
-    (logins.ptt_allowed / logins.ptt_enabled), mirroring the recording
-    split. Empty on a pre-migration DB (no PTT columns yet)."""
+    Effective = PERMISSION AND the user's own wish. Permission is the
+    admin override flag (logins.ptt_allowed) or the plan's push_to_talk
+    entitlement; the wish is logins.ptt_enabled. Empty on a
+    pre-migration DB (no PTT columns yet)."""
     try:
         with M.db() as c:
-            return {r["exten"]: bool(r["ptt_allowed"]) and bool(r["ptt_enabled"])
-                    for r in c.execute("SELECT exten, ptt_allowed, ptt_enabled FROM logins"
+            granted = set()
+            try:
+                granted = {r["login_id"] for r in c.execute(
+                    "SELECT login_id FROM user_entitlements"
+                    " WHERE feature='push_to_talk' AND quota != 0")}
+                d = c.execute("SELECT value FROM kv_settings WHERE key='default_quota_push_to_talk'").fetchone()
+                if d and str(d[0]).strip() not in ("", "0"):
+                    granted = None  # default grants everyone
+            except Exception:
+                granted = set()
+            return {r["exten"]: (bool(r["ptt_allowed"]) or granted is None or r["id"] in granted)
+                    and bool(r["ptt_enabled"])
+                    for r in c.execute("SELECT id, exten, ptt_allowed, ptt_enabled FROM logins"
                                        " WHERE exten != ''")}
     except Exception:
         return {}
@@ -460,8 +472,9 @@ def me_settings(request: Request):
         "answer_ivr_id": p.get("answer_ivr_id"), "ivr_menus": ivrs,
         "user_record": bool(me.get("user_wants_record")),
         "record_allowed": U._quota(me, "recording") != 0,
-        "ptt_allowed": bool(me.get("ptt_allowed")),
+        "ptt_allowed": bool(me.get("ptt_allowed")) or U._quota(me, "push_to_talk") != 0,
         "user_ptt": bool(me.get("ptt_enabled")),
+        "user_ptt_missed": "retry" if str(me.get("ptt_missed") or "").strip().lower() == "retry" else "voicemail",
         "is_guest": bool(me.get("is_guest")),
         "guest_outbound": bool(me.get("guest_outbound")),
         "guest_inbound": bool(me.get("guest_inbound")),
@@ -523,7 +536,7 @@ def me_usage(request: Request):
             "messages": U._quota(me, "messages") != 0,
             "recording": U._quota(me, "recording") != 0,
             "ivr_menus": U._quota(me, "ivr_menus") != 0,
-            "push_to_talk": bool(me.get("ptt_allowed")),
+            "push_to_talk": bool(me.get("ptt_allowed")) or U._quota(me, "push_to_talk") != 0,
         },
     }
 

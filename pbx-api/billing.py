@@ -31,7 +31,7 @@ from stripe_api import Stripe, StripeError, mode_of, verify_webhook
 
 M = None
 ACTIVE = ("active", "trialing", "past_due")
-PLAN_FEATURES = ("call_minutes", "voicemail", "messages", "recording", "ivr_menus")
+PLAN_FEATURES = ("call_minutes", "voicemail", "messages", "recording", "ivr_menus", "push_to_talk")
 SYNC_EVERY = 60
 STATUS_LABEL = {"active": ("Active", "ok"), "trialing": ("Trial", "ok"),
                 "past_due": ("Payment overdue", "warn"), "unpaid": ("Unpaid", "bad"),
@@ -913,7 +913,7 @@ async def admin_sync(request: Request):
 
 def _plan_form(s, p, err=""):
     p = p or {"id": None, "name": "", "description": "", "ivr_menus": 0, "call_minutes": 500, "voicemail": 1,
-              "messages": 1000, "recording": 0, "price_cents": 500, "currency": "usd", "active": 1, "sort_order": 0}
+              "messages": 1000, "recording": 0, "push_to_talk": 0, "price_cents": 500, "currency": "usd", "active": 1, "sort_order": 0}
     csrf = M._csrf_field(s)
 
     def num(name, label, hint):
@@ -934,6 +934,7 @@ def _plan_form(s, p, err=""):
 {num("messages", "Text messages", "Texts the user can send.")}
 {chk("voicemail", "Voicemail")}
 {chk("recording", "Call recording (users must accept the recording-law notice)")}
+{chk("push_to_talk", "Push-to-talk (*88 intercom — subscribers can place/receive PTT calls; the login's Allow push-to-talk tick overrides this per user)")}
 <label>IVR menus<br><input name="ivr_menus" value="{int(p.get('ivr_menus') or 0)}" inputmode="numeric" style="width:120px"></label>
 <h3>Star codes included</h3>
 <p class="muted">Codes set to "By plan" on the Features page are on for subscribers of this plan and off otherwise.
@@ -984,6 +985,7 @@ async def admin_plan_save(request: Request, plan_id: str):
         menus, cents, sort = -1, -1, 0
     feats = {"call_minutes": lim("call_minutes"), "messages": lim("messages"),
              "voicemail": 1 if f.get("voicemail") else 0, "recording": 1 if f.get("recording") else 0,
+             "push_to_talk": 1 if f.get("push_to_talk") else 0,
              "ivr_menus": menus}
     codes = _picked_codes(f, "codes")
     draft = dict({"id": old["id"] if old else None, "name": name, "description": desc, "feature_codes": codes,
@@ -999,7 +1001,7 @@ async def admin_plan_save(request: Request, plan_id: str):
     elif not 0 <= menus <= 100:
         err = "IVR menus must be between 0 and 100."
     elif not plan_features(draft):
-        err = "Include at least one feature (minutes, texts, voicemail, recording, IVR menus or star codes)."
+        err = "Include at least one feature (minutes, texts, voicemail, recording, push-to-talk, IVR menus or star codes)."
     elif cents < 50:
         err = "Price must be at least 0.50 (Stripe's minimum)."
     if err:
@@ -1008,16 +1010,16 @@ async def admin_plan_save(request: Request, plan_id: str):
     with M.db() as c:
         if old:
             c.execute("UPDATE billing_plans SET name=?, description=?, ivr_menus=?, call_minutes=?, voicemail=?,"
-                      " messages=?, recording=?, price_cents=?, currency=?, active=?, sort_order=?, feature_codes=? WHERE id=?",
+                      " messages=?, recording=?, push_to_talk=?, price_cents=?, currency=?, active=?, sort_order=?, feature_codes=? WHERE id=?",
                       (name, desc, menus, feats["call_minutes"], feats["voicemail"], feats["messages"],
-                       feats["recording"], cents, cur, draft["active"], sort, codes, old["id"]))
+                       feats["recording"], feats["push_to_talk"], cents, cur, draft["active"], sort, codes, old["id"]))
             pid = old["id"]
         else:
             pid = c.execute("INSERT INTO billing_plans (name, description, ivr_menus, call_minutes, voicemail,"
-                            " messages, recording, price_cents, currency, active, sort_order, feature_codes)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            " messages, recording, push_to_talk, price_cents, currency, active, sort_order, feature_codes)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (name, desc, menus, feats["call_minutes"], feats["voicemail"], feats["messages"],
-                             feats["recording"], cents, cur, draft["active"], sort, codes)).lastrowid
+                             feats["recording"], feats["push_to_talk"], cents, cur, draft["active"], sort, codes)).lastrowid
         c.commit()
         # Current subscribers get the new allowances right away.
         if old and any(old.get(k) != v for k, v in feats.items()):

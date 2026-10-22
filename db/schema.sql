@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS logins (
   user_wants_record INTEGER NOT NULL DEFAULT 0, -- user's own "record my calls" wish
   ptt_allowed INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for push-to-talk
   ptt_enabled INTEGER NOT NULL DEFAULT 0,  -- user's own "receive push-to-talk" wish
+  ptt_missed TEXT NOT NULL DEFAULT 'voicemail',  -- missed PTT: 'voicemail' | 'retry' (chirp again)
   is_guest INTEGER NOT NULL DEFAULT 0,     -- guest extension: restricted account type (admin-set)
   guest_outbound INTEGER NOT NULL DEFAULT 0, -- guest may call outside numbers (plan minutes still apply)
   guest_inbound INTEGER NOT NULL DEFAULT 0,  -- guest may receive PSTN calls from DIDs
@@ -269,6 +270,7 @@ CREATE TABLE IF NOT EXISTS billing_plans (
   voicemail INTEGER NOT NULL DEFAULT 0,      -- 1 = voicemail included
   messages INTEGER NOT NULL DEFAULT 0,       -- texts sent / month (-1 = unlimited)
   recording INTEGER NOT NULL DEFAULT 0,      -- 1 = "record my calls" included
+  push_to_talk INTEGER NOT NULL DEFAULT 0,   -- 1 = push-to-talk (*88) included
   price_cents INTEGER NOT NULL,              -- per month
   currency TEXT NOT NULL DEFAULT 'usd',
   stripe_mode TEXT NOT NULL DEFAULT '',      -- test | live: which account the ids belong to

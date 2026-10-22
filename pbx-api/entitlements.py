@@ -31,6 +31,7 @@ FEATURES = {
     "messages": ("Text messages", "monthly"),
     "recording": ("Call recording", "bool"),
     "ivr_menus": ("IVR menus", "count"),
+    "push_to_talk": ("Push-to-talk", "bool"),
 }
 
 # Shown to users before they can turn on "Record my calls". Bump the
@@ -106,6 +107,21 @@ def quota(c, login_id, feature) -> int:
         return int(d[0]) if d and str(d[0]).strip() else 0
     except ValueError:
         return 0
+
+
+def ptt_allowed(c, login) -> bool:
+    """Effective push-to-talk permission for a login row: the admin
+    override flag on the login itself (logins.ptt_allowed — 'allow it
+    even without a plan'), or the push_to_talk entitlement (granted by
+    the user's plan, or set as a per-user exception). Receiving also
+    needs the user's own wish (logins.ptt_enabled); this is only the
+    permission half, mirroring the recording split."""
+    try:
+        if login["ptt_allowed"]:
+            return True
+    except (IndexError, KeyError, TypeError):
+        pass
+    return quota(c, login["id"], "push_to_talk") != 0
 
 
 def has_override(c, login_id, feature) -> bool:

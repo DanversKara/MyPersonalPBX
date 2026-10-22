@@ -1191,32 +1191,42 @@ def _settings_body(request, s, me, extra_top=""):
     cell_delay_opts = "".join(
         f'<option value="{v}" {"selected" if v == cur_delay else ""}>{v} seconds</option>'
         for v in (0, 5, 10, 15, 20, 30))
-    # Push-to-talk, mirroring the recording split above: the admin allow-flag
-    # (logins.ptt_allowed) gates everything, the user's own wish
+    # Push-to-talk, mirroring the recording split above: the PERMISSION
+    # (the admin override flag logins.ptt_allowed, or the plan's
+    # push_to_talk entitlement) gates everything; the user's own wish
     # (logins.ptt_enabled) decides whether they actually receive PTT calls.
     # The checkbox lives in the Call handling form, so it is persisted by
     # settings_calls; ptt_present lets that handler tell "user unchecked it"
     # apart from "this POST never carried the PTT control" (partial app
     # posts), which must leave the stored wish alone.
-    ptt_admin_ok = bool(me.get("ptt_allowed", 0))
+    ptt_admin_ok = bool(me.get("ptt_allowed", 0)) or _quota(me, "push_to_talk") != 0
     ptt_wish = bool(me.get("ptt_enabled", 0))
     if not ptt_admin_ok:
-        ptt_status = ('<p class="warn">⚠️ <b>Push-to-talk is turned off by your admin</b> for this extension. '
+        ptt_status = ('<p class="warn">⚠️ <b>Push-to-talk is not available</b> for this extension. '
+                      'It is included only when your plan has push-to-talk or your admin turns it on for you. '
                       'Your preference below is saved, but you will not receive push-to-talk calls '
-                      '(and cannot place them) until your admin allows it.</p>')
+                      '(and cannot place them) until then.</p>')
     elif ptt_wish:
-        ptt_status = ('<p class="ok">✅ <b>Push-to-talk is on</b> — people your admin has allowed can reach you '
-                      'instantly by dialling *88 followed by your extension; your phone answers automatically.</p>')
+        ptt_status = ('<p class="ok">✅ <b>Push-to-talk is on</b> — other push-to-talk users can page you '
+                      'by dialling *88 followed by your extension. Your phone chirps and shows who is '
+                      'calling; nothing connects until you accept.</p>')
     else:
-        ptt_status = ('<p class="muted">Push-to-talk is allowed by your admin. '
+        ptt_status = ('<p class="muted">Push-to-talk is available on your account (through your plan or your admin). '
                       'Check "Enable push-to-talk" below to start receiving push-to-talk calls.</p>')
+    ptt_missed_cur = "retry" if str(me.get("ptt_missed") or "").strip().lower() == "retry" else "voicemail"
     ptt_block = (f'{ptt_status}'
                  f'<input type="hidden" name="ptt_present" value="1">'
                  f'<label class="switch"><input type="checkbox" name="user_ptt" value="1" {chk(ptt_wish)}> '
                  f'<span>Enable push-to-talk</span></label>'
-                 f'<p class="muted">To talk to someone instantly, dial <b>*88</b> followed by their extension '
-                 f'(for example *88{esc(me["exten"] or "8801")}). Your phone must be allowed by your admin, '
-                 f'and theirs must be allowed and switched on here.</p>')
+                 f'<label>If I don\'t accept a push-to-talk<br><select name="user_ptt_missed">'
+                 f'<option value="voicemail" {"selected" if ptt_missed_cur == "voicemail" else ""}>Send the caller to my voicemail</option>'
+                 f'<option value="retry" {"selected" if ptt_missed_cur == "retry" else ""}>Chirp me again (up to 3 tries), then voicemail</option>'
+                 f'</select></label>'
+                 f'<p class="muted">A push-to-talk never opens your line by itself: your phone chirps first '
+                 f'and only connects when you accept. To page someone, dial <b>*88</b> followed by their '
+                 f'extension (for example *88{esc(me["exten"] or "8801")}). Your account must have '
+                 f'push-to-talk (through your plan or your admin), and theirs must have it and be '
+                 f'switched on here.</p>')
     return extra_top + f"""
 <div class="grid2">
 <section class="panel">
@@ -1352,6 +1362,11 @@ async def settings_calls(request: Request):
     ptt_enabled = None
     if "user_ptt" in f or "ptt_present" in f:
         ptt_enabled = 1 if (f.get("user_ptt") or "") in ("1", "on", "true", "yes") else 0
+    # Missed-PTT choice (logins.ptt_missed): same presence rule — only
+    # touch it when the POST carried the control.
+    ptt_missed = None
+    if "user_ptt_missed" in f:
+        ptt_missed = "retry" if (f.get("user_ptt_missed") or "").strip().lower() == "retry" else "voicemail"
     ivr_raw = (f.get("answer_ivr_id") or "").strip()
     ivr_id = None
     if ivr_raw:
@@ -1376,10 +1391,13 @@ async def settings_calls(request: Request):
                   (me["id"], dnd, fa, fn, ring_store, ivr_id, cell, ring_cell, cell_delay))
         if ptt_enabled is not None:
             c.execute("UPDATE logins SET ptt_enabled=? WHERE id=?", (ptt_enabled, me["id"]))
+        if ptt_missed is not None:
+            c.execute("UPDATE logins SET ptt_missed=? WHERE id=?", (ptt_missed, me["id"]))
         c.commit()
     _audit(me, "ucp.calls", f"dnd={dnd} fwd_always={fa} fwd_noanswer={fn} ring={ring} ivr={ivr_id}"
                             f" cell={cell} ring_cell={ring_cell} cell_delay={cell_delay}"
-                            f" ptt={'keep' if ptt_enabled is None else ptt_enabled}")
+                            f" ptt={'keep' if ptt_enabled is None else ptt_enabled}"
+                            f" ptt_missed={'keep' if ptt_missed is None else ptt_missed}")
     return _back("/ucp/settings", "saved")
 
 

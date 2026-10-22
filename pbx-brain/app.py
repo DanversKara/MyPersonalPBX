@@ -622,18 +622,33 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
 
 
 # ---------------------------------------------------------------- push-to-talk
-# *88<exten>: an instant intercom call. The callee's phone auto-answers on
-# speaker (SIP Call-Info answer-after=0 + X-PTT header) and the two sides are
-# bridged at once — no ringing, no ring timeout, no voicemail, ever. The
-# flags mirror the recording split exactly (see start_call_recordings):
-# logins.ptt_allowed is the admin allow-flag, logins.ptt_enabled is the
-# user's own wish. Placing a PTT call needs the CALLER's ptt_allowed;
-# receiving one needs the callee to be effective (allowed AND enabled).
-# Anything else fast-fails with the standard denied announcement: a PTT
-# attempt must never fall through to the normal ring / voicemail path.
+# *88<exten>: a walkie-talkie page — not a normal call, and NOT an open
+# line. The B leg rings with the X-PTT header set and NOTHING is bridged
+# until the callee answers: the My Phone app plays its PTT chirp (over
+# the ringtone) and shows an Accept / No-accept screen; desk phones ring
+# normally and are picked up by hand. (Round 1 auto-answered via
+# Call-Info answer-after=0; that opened the callee's mic/speaker to any
+# allowed caller instantly, which is a privacy hole, not a feature.)
+# If the callee doesn't accept, THEIR missed-PTT setting decides
+# (logins.ptt_missed, user-chosen in portal/app Settings): "voicemail"
+# sends the caller to the callee's voicemail box; "retry" rings again
+# (the phone chirps again) up to PTT_MAX_ATTEMPTS tries total, then
+# voicemail. No box -> the denied announcement.
+# Permissions mirror the recording split (see ptt_can_receive /
+# ptt_allowed_effective): logins.ptt_enabled is the user's own wish. The
+# PERMISSION half is effective: the admin override flag on the login
+# (logins.ptt_allowed — "allow it even without a plan") OR the
+# push_to_talk entitlement from the user's plan (Billing → Plans). No
+# plan + no override = no PTT, guests included. Placing needs the
+# CALLER's effective permission; receiving needs the callee effective
+# (permission AND wish). Bad targets/permissions still fast-fail with the
+# denied announcement — the accept flow only replaces the old
+# never-voicemail rule for a callee who simply didn't pick up.
 
 PTT_BEEP = "sound:beep"   # Asterisk core sound; already used for cell-leg
                           # screening fallback and the *555 spy beep.
+PTT_RING_SECONDS = 20     # per attempt; the app chirps while it rings
+PTT_MAX_ATTEMPTS = 3      # total rings when the callee chose "chirp again"
 
 
 def _ptt_flag(login, col):
@@ -645,9 +660,124 @@ def _ptt_flag(login, col):
         return False
 
 
+def _ptt_plan_granted(login_id):
+    """Plan-granted push-to-talk, mirroring entitlements.quota: the
+    'push_to_talk' entitlements row wins (written from the plan when a
+    subscription activates, re-granted when the plan is edited, or set
+    as a per-user exception), else the default_quota_push_to_talk
+    setting, else no. Any failure reads as 'not granted'."""
+    try:
+        row = q1("SELECT quota FROM user_entitlements WHERE login_id=? AND feature='push_to_talk'",
+                 (login_id,))
+        if row is not None:
+            return int(row["quota"]) != 0
+        d = q1("SELECT value FROM kv_settings WHERE key='default_quota_push_to_talk'")
+        return bool(d and str(d["value"]).strip() not in ("", "0"))
+    except Exception:
+        return False
+
+
+def ptt_allowed_effective(login):
+    """Effective PTT permission: the admin override flag on the login,
+    or a plan that includes push-to-talk."""
+    return _ptt_flag(login, "ptt_allowed") or _ptt_plan_granted(login["id"])
+
+
 def ptt_can_receive(login):
-    """Effective receive-PTT for a login: admin allow AND user wish."""
-    return _ptt_flag(login, "ptt_allowed") and _ptt_flag(login, "ptt_enabled")
+    """Effective receive-PTT for a login: permission AND user wish."""
+    return ptt_allowed_effective(login) and _ptt_flag(login, "ptt_enabled")
+
+
+def _ptt_missed(login):
+    """The callee's missed-PTT choice: 'retry' or 'voicemail' (default);
+    anything unreadable (incl. a pre-migration DB) reads as voicemail."""
+    try:
+        return "retry" if str(login["ptt_missed"]).strip().lower() == "retry" else "voicemail"
+    except (IndexError, KeyError, TypeError):
+        return "voicemail"
+
+
+def _ptt_ring(channel, me, callee):
+    """Originate one PTT ring attempt and register its legs. Only the
+    X-PTT header rides along — no answer-after, so nothing auto-answers;
+    the caller ID NAME's "PTT " prefix is the fallback signal for phones
+    that ignore the header. Returns the legs ([] = callee unreachable)."""
+    leg_cid = "PTT %s <%s>" % (me["display_name"] or me["exten"], me["exten"])
+    variables = {"PJSIP_HEADER(add,X-PTT)": "1"}
+    legs = []
+    for ep in phone_endpoints(callee):
+        try:
+            legs.append(CLIENT.channels.originate(
+                endpoint=ep,
+                app=APP,
+                app_args="legb,%s" % channel.id,
+                caller_id=leg_cid,
+                timeout=PTT_RING_SECONDS + 10,
+                variables=variables))
+        except Exception:
+            log.exception("PTT originate to %s failed", ep)
+    for leg in legs:
+        PENDING[leg.id] = channel.id
+        B_LOGIN[leg.id] = callee["id"]
+    return legs
+
+
+def _ptt_arm_timer(a_id, legs):
+    """Ring timeout for one PTT attempt (mirrors ring_local's timer):
+    when it fires, end every still-ringing leg, which lands in
+    hangup_other_leg -> ptt_no_answer."""
+    def _timeout(b_ids=[l.id for l in legs]):
+        for b_id in b_ids:
+            if b_id in PENDING:
+                end_unanswered_leg(b_id)
+    t = threading.Timer(float(PTT_RING_SECONDS), _timeout)
+    t.daemon = True
+    t.start()
+    if a_id in CALLS:
+        CALLS[a_id]["ring_timer"] = t
+
+
+def ptt_no_answer(a_id, info):
+    """A PTT attempt ended with no accept (declined, busy, unreachable
+    or ring timeout): apply the CALLEE's missed-PTT setting. 'retry'
+    re-rings — the phone chirps again — until PTT_MAX_ATTEMPTS total
+    tries; then, and for 'voicemail' right away, the caller lands in the
+    callee's voicemail if they have a box, else the denied announcement.
+    Called with LEG_LOCK held, all of the attempt's legs already gone."""
+    timer = info.pop("ring_timer", None)
+    if timer:
+        timer.cancel()
+    callee = q1("SELECT * FROM logins WHERE id=? AND enabled=1",
+                (info.get("callee_id"),)) if info.get("callee_id") else None
+    chan = None
+    try:
+        chan = CLIENT.channels.get(a_id)
+    except Exception:
+        pass
+    attempt = int(info.get("ptt_attempt", 1))
+    if callee and chan and _ptt_missed(callee) == "retry" and attempt < PTT_MAX_ATTEMPTS:
+        me = q1("SELECT * FROM logins WHERE id=?",
+                (info.get("login_id"),)) if info.get("login_id") else None
+        if me:
+            legs = _ptt_ring(chan, me, callee)
+            if legs:
+                info["ptt_attempt"] = attempt + 1
+                info["b_id"] = legs[0].id
+                info["ringing"] = True
+                _ptt_arm_timer(a_id, legs)
+                log.info("PTT chirp-again %d/%d: %s -> %s",
+                         attempt + 1, PTT_MAX_ATTEMPTS, me["exten"], callee["exten"])
+                return
+    if callee and get_voicemail_box(callee["id"]):
+        log.info("PTT no answer from %s, routing %s to voicemail",
+                 info.get("callee"), info.get("caller"))
+        route_to_voicemail(a_id, info["callee"])
+        return
+    if chan:
+        deny_and_hangup(chan, DENIED_PROMPT,
+                        "PTT %s did not answer" % info.get("callee"))
+    else:
+        _hangup(a_id)
 
 
 # ---------------------------------------------------------------- guest extensions
@@ -719,7 +849,7 @@ def handle_ptt(channel, me, target):
     target = (target or "").strip()
     callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1",
                 (target,)) if target else None
-    if not _ptt_flag(me, "ptt_allowed"):
+    if not ptt_allowed_effective(me):
         deny_and_hangup(channel, DENIED_PROMPT,
                         "PTT not allowed for caller %s" % me["exten"])
         return
@@ -736,53 +866,35 @@ def handle_ptt(channel, me, target):
     # Asterisk offers for adding a header to the outgoing INVITE, and the
     # originate variables are set before that INVITE is sent (a Local
     # channel + pre-dial snippet would need new dialplan, which this
-    # codebase deliberately keeps empty — everything lives here).
-    # X-PTT marks the call for the My Phone app; Call-Info answer-after=0
-    # asks any SIP phone to auto-answer. The caller ID NAME carries a
-    # "PTT " prefix as a fallback signal for clients that ignore both.
-    leg_cid = "PTT %s <%s>" % (me["display_name"] or me["exten"], me["exten"])
-    variables = {"PJSIP_HEADER(add,X-PTT)": "1",
-                 "PJSIP_HEADER(add,Call-Info)": "<sip:x>;answer-after=0"}
-    legs = []
-    for ep in phone_endpoints(callee):
-        try:
-            legs.append(CLIENT.channels.originate(
-                endpoint=ep,
-                app=APP,
-                app_args="legb,%s" % channel.id,
-                caller_id=leg_cid,
-                timeout=30,
-                variables=variables))
-        except Exception:
-            log.exception("PTT originate to %s failed", ep)
+    # codebase deliberately keeps empty \u2014 everything lives here).
+    legs = _ptt_ring(channel, me, callee)
     if not legs:
-        # Callee offline / unreachable: same fast-fail, never voicemail.
+        # Callee offline / unreachable: fast-fail, as before.
         deny_and_hangup(channel, DENIED_PROMPT,
                         "PTT target %s unreachable" % callee["exten"])
         return
-    for leg in legs:
-        PENDING[leg.id] = channel.id
-        B_LOGIN[leg.id] = callee["id"]
     # direction "ptt" is the CDR marker: cdr.direction is the call-type
     # field every other flow uses (inbound / outbound / internal /
     # forwarded / emergency), so PTT needs no schema change. It also keeps
-    # PTT out of the minute quotas and, in hangup_other_leg, out of the
-    # internal/inbound no-answer branches that lead to voicemail.
-    # Deliberately no DND / forward / block / IVR handling and no ring
-    # timer: PTT is a direct intercom, and on_legb_answer bridges the
-    # first leg that answers (auto-answer should make that immediate).
+    # PTT out of the minute quotas. Deliberately no DND / forward / block /
+    # IVR handling: a PTT page rings only the callee's own phones, and if
+    # nobody accepts, the only exits are the callee's own missed-PTT
+    # choices (chirp again, then voicemail \u2014 see ptt_no_answer);
+    # on_legb_answer bridges the first leg that answers/accepts.
     CALLS[channel.id] = {
         "caller": me["exten"], "callee": callee["exten"],
         "start": time.time(), "b_id": legs[0].id,
         "direction": "ptt", "login_id": me["id"],
         "callee_id": callee["id"], "ptt": True,
+        "ptt_attempt": 1, "ringing": True,
     }
+    _ptt_arm_timer(channel.id, legs)
     try:
-        channel.ring()  # 180 Ringing to A while B (auto-)answers
+        channel.ring()  # 180 Ringing to A while B rings/chirps
     except Exception:
         pass
     log.info("PTT %s -> %s (b legs %s)", me["exten"], callee["exten"],
-             ",".join(l.id for l in legs))
+             ", ".join(l.id for l in legs))
 
 
 def try_forward_noanswer(a_id, info):
@@ -2132,14 +2244,10 @@ def hangup_other_leg(ended_id):
         _cancel_cell_timers(a_id)
         info["ringing"] = False
         if info.get("ptt"):
-            # Push-to-talk has no no-answer path: the callee didn't
-            # (auto-)answer, so fast-fail the caller — never voicemail,
-            # never a forward.
-            try:
-                deny_and_hangup(CLIENT.channels.get(a_id), DENIED_PROMPT,
-                                "PTT %s did not answer" % info.get("callee"))
-            except Exception:
-                _hangup(a_id)
+            # Push-to-talk not accepted: the callee's missed-PTT setting
+            # decides — chirp again or voicemail (see ptt_no_answer).
+            # Never a forward.
+            ptt_no_answer(a_id, info)
             return
         # All B legs done (no answer/timeout)
         if info.get("direction") in ("inbound", "group"):

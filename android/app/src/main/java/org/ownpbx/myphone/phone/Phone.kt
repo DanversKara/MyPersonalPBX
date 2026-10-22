@@ -2,8 +2,6 @@
 package org.ownpbx.myphone.phone
 
 import android.content.Context
-import android.media.AudioManager
-import android.media.ToneGenerator
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -34,8 +32,9 @@ data class CallUi(
     val incoming: Boolean = false,
     val name: String = "", // caller's name, if the PBX sent one
     /**
-     * Push-to-talk call (placed with *88, or an auto-answered incoming PTT): the mic starts muted
-     * and the screen shows hold-to-talk.
+     * Push-to-talk call (placed with *88, or an incoming PTT page the user accepted): the mic
+     * starts muted and the screen shows hold-to-talk. Incoming pages never auto-answer — they chirp
+     * and wait for an explicit Accept.
      */
     val ptt: Boolean = false,
     /** PTT extra-loud boost is on for this call (max stream volume + playback gain). */
@@ -165,8 +164,10 @@ object Phone {
                                 }
                         else -> cur
                     }
-                if (state == Call.State.Connected || state == Call.State.StreamsRunning)
+                if (state == Call.State.Connected || state == Call.State.StreamsRunning) {
+                    stopChirp()
                     appCtx?.let { IncomingNotice.cancel(it) }
+                }
                 if (state == Call.State.Connected || state == Call.State.StreamsRunning) {
                     val u = ui
                     if (u != null && u.ptt) {
@@ -191,14 +192,17 @@ object Phone {
                 }
                 if (state == Call.State.End || state == Call.State.Released) {
                     pttTalking = false
+                    stopChirp()
                     stopVox()
                     restoreBoost()
                 }
-                if (ui?.ended == true)
+                if (ui?.ended == true) {
+                    stopChirp()
                     appCtx?.let {
                         CallService.stop(it)
                         IncomingNotice.cancel(it)
                     }
+                }
             }
 
             override fun onAccountRegistrationStateChanged(
@@ -245,11 +249,12 @@ object Phone {
         val from = call.remoteAddress
         val number = from.username.orEmpty()
         val rawName = from.displayName.orEmpty().takeIf { it != number }.orEmpty()
-        // PTT marker: the PBX sets X-PTT: 1 (and Call-Info answer-after=0)
-        // on the INVITE and prefixes the caller name with "PTT ". The
-        // headers live on the call's remote params (Linphone SDK 5.4:
-        // Call.getRemoteParams() -> CallParams.getCustomHeader(name));
-        // the name prefix is the fallback when no header can be read.
+        // PTT marker: the PBX sets X-PTT: 1 on the INVITE and prefixes the
+        // caller name with "PTT ". The headers live on the call's remote
+        // params (Linphone SDK 5.4: Call.getRemoteParams() ->
+        // CallParams.getCustomHeader(name)); the name prefix (and the old
+        // Call-Info answer-after marker from pre-accept-flow servers) is
+        // the fallback when no header can be read.
         val xPtt =
             try {
                 call.remoteParams?.getCustomHeader("X-PTT")?.trim()
@@ -282,16 +287,18 @@ object Phone {
             if (ctx != null) IncomingNotice.show(ctx, number, ui?.name.orEmpty())
             return
         }
-        // Incoming PTT with my PTT on: beep, auto-answer on speakerphone,
-        // mic muted until the user holds the talk button. No ringing UI
-        // and no IncomingNotice (CallService going foreground + answer()
-        // handles it, exactly like answering from the notification).
+        // Incoming PTT with my PTT on: NEVER answer on its own — a page
+        // must not open the line (mic/speaker) until I accept it. Chirp
+        // over the ringtone and show the Accept / No-accept screen; if I
+        // don't accept, the PBX applies my missed-PTT setting (voicemail
+        // or chirp again). The IncomingNotice full-screen intent brings
+        // the accept screen up, and its actions work from the lock screen.
         val prefs = if (ctx != null) Store(ctx) else null
         ui =
             CallUi(
                 number = number,
                 name = rawName.removePrefix("PTT "),
-                status = "PTT call",
+                status = "PTT page — Accept to connect",
                 incoming = true,
                 ptt = true,
                 muted = true,
@@ -299,26 +306,96 @@ object Phone {
                 boost = prefs?.pttExtraLoud == true,
                 vox = prefs?.pttVox == true,
             )
-        beep()
-        if (ctx != null) CallService.answer(ctx) else answer()
+        if (ctx != null) {
+            IncomingNotice.show(ctx, number, ui?.name.orEmpty(), ptt = true)
+            startChirp(ctx)
+        }
     }
 
-    /** Short "PTT call arriving" beep (generated, no bundled sound file). */
-    private fun beep() {
+    // ---- PTT chirp ------------------------------------------------------
+    // An original alert tone, synthesized at runtime from sine waves: three
+    // short rising tones (1320 -> 1760 -> 2200 Hz) and a pause, looped. It
+    // is NOT the Nextel chirp and not any sampled or trademarked sound, and
+    // the app ships no audio file for it. It plays on the alarm audio
+    // stream so a PTT page cuts over the ringtone and notification sounds
+    // instead of mixing with them, with a matching vibration pattern.
+    private var chirpTrack: android.media.AudioTrack? = null
+    private var chirpVibrator: android.os.Vibrator? = null
+
+    private fun chirpPcm(): ShortArray {
+        val sr = 22050
+        val tones = intArrayOf(1320, 1760, 2200)
+        val burst = (sr * 0.07).toInt() // 70 ms per tone
+        val gap = (sr * 0.04).toInt() // 40 ms between tones
+        val pause = (sr * 1.5).toInt() // 1.5 s of quiet, then repeat
+        val out = ShortArray(tones.size * (burst + gap) + pause)
+        var pos = 0
+        for (f in tones) {
+            for (i in 0 until burst) {
+                // Raised-cosine envelope, so the tones chirp instead of clicking.
+                val env = 0.5 - 0.5 * kotlin.math.cos(2.0 * Math.PI * i / burst)
+                val s = kotlin.math.sin(2.0 * Math.PI * f * i / sr)
+                val h = 0.25 * kotlin.math.sin(4.0 * Math.PI * f * i / sr)
+                out[pos + i] = ((s + h) * env * 0.55 * Short.MAX_VALUE).toInt().toShort()
+            }
+            pos += burst + gap
+        }
+        return out
+    }
+
+    private fun startChirp(ctx: Context) {
+        stopChirp()
         try {
-            val tg = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
-            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 200)
-            android.os
-                .Handler(android.os.Looper.getMainLooper())
-                .postDelayed(
-                    {
-                        try {
-                            tg.release()
-                        } catch (_: Exception) {}
-                    },
-                    500,
-                )
+            val pcm = chirpPcm()
+            val track =
+                android.media.AudioTrack.Builder()
+                    .setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        android.media.AudioFormat.Builder()
+                            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(22050)
+                            .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(pcm.size * 2)
+                    .setTransferMode(android.media.AudioTrack.MODE_STATIC)
+                    .build()
+            track.write(pcm, 0, pcm.size)
+            track.setLoopPoints(0, pcm.size, -1)
+            track.play()
+            chirpTrack = track
         } catch (_: Exception) {}
+        try {
+            val v = ctx.getSystemService(android.os.Vibrator::class.java)
+            if (v != null && v.hasVibrator()) {
+                v.vibrate(
+                    android.os.VibrationEffect.createWaveform(
+                        longArrayOf(0, 160, 120, 160, 1400),
+                        0,
+                    )
+                )
+                chirpVibrator = v
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun stopChirp() {
+        try {
+            chirpTrack?.stop()
+        } catch (_: Exception) {}
+        try {
+            chirpTrack?.release()
+        } catch (_: Exception) {}
+        chirpTrack = null
+        try {
+            chirpVibrator?.cancel()
+        } catch (_: Exception) {}
+        chirpVibrator = null
     }
 
     private fun elsewhere(call: Call): Boolean =
