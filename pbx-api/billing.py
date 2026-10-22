@@ -747,12 +747,13 @@ def access_section(s):
             admin_ov = {f: v for f, (v, src) in ov.items() if not str(src).startswith("plan:")}
             if plan_src:
                 pl = _plan(int(plan_src.split(":")[1]))
-                cells = f'<td colspan="5" class="muted">On plan <b>{esc(pl["name"] if pl else "?")}</b> (limits come from the plan)</td><td></td>'
+                cells = f'<td colspan="6" class="muted">On plan <b>{esc(pl["name"] if pl else "?")}</b> (limits come from the plan)</td><td></td>'
             else:
                 cells = (f'<td>{_lim_input("call_minutes", admin_ov.get("call_minutes"), "default")}</td>'
                          f'<td>{_onoff_select("voicemail", admin_ov.get("voicemail"))}</td>'
                          f'<td>{_lim_input("messages", admin_ov.get("messages"), "default")}</td>'
                          f'<td>{_onoff_select("recording", admin_ov.get("recording"))}</td>'
+                         f'<td>{_onoff_select("push_to_talk", admin_ov.get("push_to_talk"))}</td>'
                          f'<td>{_lim_input("ivr_menus", admin_ov.get("ivr_menus"), "default")}</td>'
                          f'<td><button class="link-btn">Save</button></td>')
             if not plan_src:
@@ -775,13 +776,14 @@ Empty = use the default. While a user has an active plan, the plan decides.</p>
 <label>Voicemail <select name="voicemail"><option value="1" {"selected" if d["voicemail"] else ""}>on</option><option value="0" {"" if d["voicemail"] else "selected"}>off</option></select></label>
 <label>Texts {_lim_input("messages", d["messages"], "0")}</label>
 <label>Recording <select name="recording"><option value="1" {"selected" if d["recording"] else ""}>on</option><option value="0" {"" if d["recording"] else "selected"}>off</option></select></label>
+<label>Push-to-talk <select name="push_to_talk"><option value="1" {"selected" if d["push_to_talk"] else ""}>on</option><option value="0" {"" if d["push_to_talk"] else "selected"}>off</option></select></label>
 <label>IVR menus {_lim_input("ivr_menus", d["ivr_menus"], "0")}</label>
 <div style="flex-basis:100%"><b>Star codes (no plan):</b> <span class="muted">for codes set to "By plan" on the Features page; none ticked = new accounts get no star codes until they buy a plan that includes them.</span><br>
 {_codes_checkboxes("codes", dcodes)}</div>
 <button class="btn ghost">Save defaults</button>
 </form>
-<div class="scrollbox"><table class="access"><tr><th>User</th><th>Outside min/mo</th><th>Voicemail</th><th>Texts/mo</th><th>Recording</th><th>IVR menus</th><th></th></tr>
-{"".join(rows) or '<tr><td colspan="7" class="muted">No users</td></tr>'}</table></div>"""
+<div class="scrollbox"><table class="access"><tr><th>User</th><th>Outside min/mo</th><th>Voicemail</th><th>Texts/mo</th><th>Recording</th><th>Push-to-talk</th><th>IVR menus</th><th></th></tr>
+{"".join(rows) or '<tr><td colspan="8" class="muted">No users</td></tr>'}</table></div>"""
 
 
 _LIM_LABEL = {"call_minutes": "Outside minutes", "messages": "Texts", "ivr_menus": "IVR menus"}
@@ -810,7 +812,8 @@ async def admin_access_defaults(request: Request):
                 "messages": _parse_lim(f.get("messages"), field="messages") or 0,
                 "ivr_menus": _parse_lim(f.get("ivr_menus"), False, field="ivr_menus") or 0,
                 "voicemail": 1 if f.get("voicemail") == "1" else 0,
-                "recording": 1 if f.get("recording") == "1" else 0}
+                "recording": 1 if f.get("recording") == "1" else 0,
+                "push_to_talk": 1 if f.get("push_to_talk") == "1" else 0}
     except ValueError as e:
         return _admin_back(err=str(e))
     codes = _picked_codes(f, "codes")
@@ -833,7 +836,8 @@ async def admin_access_user(request: Request, login_id: int):
                 "messages": _parse_lim(f.get("messages"), field="messages"),
                 "ivr_menus": _parse_lim(f.get("ivr_menus"), False, field="ivr_menus"),
                 "voicemail": None if f.get("voicemail", "") == "" else (1 if f.get("voicemail") == "1" else 0),
-                "recording": None if f.get("recording", "") == "" else (1 if f.get("recording") == "1" else 0)}
+                "recording": None if f.get("recording", "") == "" else (1 if f.get("recording") == "1" else 0),
+                "push_to_talk": None if f.get("push_to_talk", "") == "" else (1 if f.get("push_to_talk") == "1" else 0)}
     except ValueError as e:
         return _admin_back(err=str(e))
     with M.db() as c:

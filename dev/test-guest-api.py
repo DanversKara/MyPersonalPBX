@@ -455,6 +455,43 @@ r = cvv.get("/ucp/settings")
 check("portal Settings shows the missed-PTT select",
       'name="user_ptt_missed"' in r.text and "Chirp me again" in r.text, r.status_code)
 
+# --- User access page: push-to-talk default + per-user exception --------------
+r = c.get("/billing")
+check("User access page carries push-to-talk (defaults + per-user)",
+      'name="push_to_talk"' in r.text and "<th>Push-to-talk</th>" in r.text, r.status_code)
+btok = csrf(r.text)
+r = c.post("/billing/access-defaults", data={
+    "csrf_token": btok, "call_minutes": "100", "messages": "100", "ivr_menus": "0",
+    "voicemail": "1", "recording": "0", "push_to_talk": "1"}, follow_redirects=False)
+kv = q("SELECT value FROM kv_settings WHERE key='default_quota_push_to_talk'")
+check("defaults save stores default_quota_push_to_talk=1",
+      kv and kv[0]["value"] == "1", dict(kv[0]) if kv else None)
+u_def = mk_user("8871")
+cc = sqlite3.connect(DB); cc.row_factory = sqlite3.Row
+rowd = cc.execute("SELECT * FROM logins WHERE id=?", (u_def,)).fetchone()
+check("no-plan user inherits the PTT default (ent.ptt_allowed True)",
+      ENT.ptt_allowed(cc, rowd) is True, ENT.quota(cc, u_def, "push_to_talk"))
+cc.close()
+r = c.post("/billing/access-defaults", data={
+    "csrf_token": btok, "call_minutes": "100", "messages": "100", "ivr_menus": "0",
+    "voicemail": "1", "recording": "0", "push_to_talk": "0"}, follow_redirects=False)
+kv = q("SELECT value FROM kv_settings WHERE key='default_quota_push_to_talk'")
+check("defaults save can turn the PTT default back off",
+      kv and kv[0]["value"] == "0", dict(kv[0]) if kv else None)
+
+r = c.post(f"/billing/access/{u_def}", data={
+    "csrf_token": btok, "call_minutes": "", "messages": "", "ivr_menus": "",
+    "voicemail": "", "recording": "", "push_to_talk": "1"}, follow_redirects=False)
+erow = q("SELECT quota, source FROM user_entitlements WHERE login_id=? AND feature='push_to_talk'", (u_def,))
+check("per-user exception grants PTT (admin source)",
+      erow and erow[0]["quota"] == 1 and erow[0]["source"] == "admin",
+      dict(erow[0]) if erow else None)
+r = c.post(f"/billing/access/{u_def}", data={
+    "csrf_token": btok, "call_minutes": "", "messages": "", "ivr_menus": "",
+    "voicemail": "", "recording": "", "push_to_talk": ""}, follow_redirects=False)
+check("per-user exception cleared by choosing 'default'",
+      ent_ptt(u_def) is None, ent_ptt(u_def))
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)
