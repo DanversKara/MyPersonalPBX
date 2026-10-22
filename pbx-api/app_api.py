@@ -366,14 +366,37 @@ def me_recordings(request: Request):
     return {"recordings": recs}
 
 
+def _ptt_by_exten() -> dict:
+    """{exten: effective push-to-talk} for every login, in one query.
+
+    Effective = the admin allow-flag AND the user's own wish
+    (logins.ptt_allowed / logins.ptt_enabled), mirroring the recording
+    split. Empty on a pre-migration DB (no PTT columns yet)."""
+    try:
+        with M.db() as c:
+            return {r["exten"]: bool(r["ptt_allowed"]) and bool(r["ptt_enabled"])
+                    for r in c.execute("SELECT exten, ptt_allowed, ptt_enabled FROM logins"
+                                       " WHERE exten != ''")}
+    except Exception:
+        return {}
+
+
+def _contact_ptt(contact, ptt_map) -> bool:
+    """True when this contact's number is an extension whose login can
+    receive push-to-talk right now. Outside numbers never match a login."""
+    return bool(ptt_map.get(M.contacts.norm_number(contact.get("number") or ""), False))
+
+
 def me_contacts(request: Request, q: str = ""):
     """This user's contacts, with note counts."""
     me = _need(request)
     rows = M.contacts.contacts_for(me["id"], q=(q or "").strip()[:60])
     counts = M.contacts.note_counts(me["id"])
+    ptt_map = _ptt_by_exten()
     for r in rows:
         r["notes_count"] = counts.get(r["id"], 0)
         r["last_at"] = ""
+        r["ptt"] = _contact_ptt(r, ptt_map)
     # Most-recently-active first would need a scan; name order is fine and cheap.
     return {"contacts": rows}
 
@@ -384,6 +407,7 @@ def me_contact_detail(request: Request, contact_id: int):
     if not c:
         raise HTTPException(404, "no such contact")
     c["notes_count"] = M.contacts.note_counts(me["id"]).get(c["id"], 0)
+    c["ptt"] = _contact_ptt(c, _ptt_by_exten())
     return {"contact": c,
             "timeline": M.contacts.timeline_for(me["id"], limit=200, contact_id=contact_id),
             "notes": M.contacts.notes_for(me["id"], contact_id=contact_id)}
@@ -436,6 +460,8 @@ def me_settings(request: Request):
         "answer_ivr_id": p.get("answer_ivr_id"), "ivr_menus": ivrs,
         "user_record": bool(me.get("user_wants_record")),
         "record_allowed": U._quota(me, "recording") != 0,
+        "ptt_allowed": bool(me.get("ptt_allowed")),
+        "user_ptt": bool(me.get("ptt_enabled")),
         "record_ack_needed": ver < ent.RECORDING_CONSENT_VERSION,
         "vm_email": me.get("vm_email") or "", "text_email": bool(p["text_email"]),
         "msg_in": bool(mp["msg_in"]), "msg_out": bool(mp["msg_out"]),

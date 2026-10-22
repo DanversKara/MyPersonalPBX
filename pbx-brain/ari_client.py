@@ -105,13 +105,18 @@ class _ChannelNS:
         self._c = client
 
     def originate(self, endpoint, app, app_args="", caller_id="",
-                  timeout=30):
+                  timeout=30, variables=None):
         params = {"endpoint": endpoint, "app": app, "timeout": timeout}
         if app_args:
             params["appArgs"] = app_args
         if caller_id:
             params["callerId"] = caller_id
-        data = self._c.post("channels", params=params)
+        # Channel variables travel in the JSON body (ARI has no query-param
+        # form for them). On a PJSIP leg, a variable named
+        # "PJSIP_HEADER(add,<Header>)" is how Asterisk attaches an outgoing
+        # SIP header to the INVITE — push-to-talk relies on this (app.py).
+        body = {"variables": variables} if variables else None
+        data = self._c.post("channels", params=params, json_body=body)
         ch = Channel(self._c, data["id"])
         ch.json = data
         return ch
@@ -151,10 +156,10 @@ class ARIClient:
         self.bridges = _BridgeNS(self)
 
     # -- REST -----------------------------------------------------------
-    def _req(self, method, path, params=None):
+    def _req(self, method, path, params=None, json_body=None):
         url = self.base + path.lstrip("/")
         r = requests.request(method, url, params=params, auth=self.auth,
-                             timeout=15)
+                             timeout=15, json=json_body)
         if r.status_code >= 400:
             raise RuntimeError("ARI %s %s -> %s: %s"
                                % (method, path, r.status_code, r.text[:200]))
@@ -163,8 +168,8 @@ class ARIClient:
     def get(self, path, params=None):
         return self._req("GET", path, params)
 
-    def post(self, path, params=None):
-        return self._req("POST", path, params)
+    def post(self, path, params=None, json_body=None):
+        return self._req("POST", path, params, json_body)
 
     def put(self, path, params=None):
         return self._req("PUT", path, params)

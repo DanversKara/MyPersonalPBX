@@ -252,6 +252,12 @@ def handle_internal(channel, dialed):
             return
         handle_disa(channel, me)
         return
+    if dialed.startswith("*88"):
+        # *88<exten>: push-to-talk (instant intercom) to that extension.
+        # Gated by the PTT flags themselves (handle_ptt), not feature_codes:
+        # the caller's admin allow-flag is what authorises placing one.
+        handle_ptt(channel, me, dialed[3:])
+        return
     # IVR menus with an internal number (e.g. 7000) can be dialed directly.
     try:
         ivr = q1("SELECT * FROM ivr_menus WHERE exten=? AND exten!='' AND enabled=1",
@@ -590,6 +596,106 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
              info["caller"], callee["exten"], ring_secs, ",".join(l.id for l in legs))
 
 
+# ---------------------------------------------------------------- push-to-talk
+# *88<exten>: an instant intercom call. The callee's phone auto-answers on
+# speaker (SIP Call-Info answer-after=0 + X-PTT header) and the two sides are
+# bridged at once — no ringing, no ring timeout, no voicemail, ever. The
+# flags mirror the recording split exactly (see start_call_recordings):
+# logins.ptt_allowed is the admin allow-flag, logins.ptt_enabled is the
+# user's own wish. Placing a PTT call needs the CALLER's ptt_allowed;
+# receiving one needs the callee to be effective (allowed AND enabled).
+# Anything else fast-fails with the standard denied announcement: a PTT
+# attempt must never fall through to the normal ring / voicemail path.
+
+PTT_BEEP = "sound:beep"   # Asterisk core sound; already used for cell-leg
+                          # screening fallback and the *555 spy beep.
+
+
+def _ptt_flag(login, col):
+    """One PTT flag of a login row; False on pre-migration DBs (mirrors
+    _party_wants_record's tolerance for a missing column)."""
+    try:
+        return bool(login[col])
+    except (IndexError, KeyError, TypeError):
+        return False
+
+
+def ptt_can_receive(login):
+    """Effective receive-PTT for a login: admin allow AND user wish."""
+    return _ptt_flag(login, "ptt_allowed") and _ptt_flag(login, "ptt_enabled")
+
+
+def handle_ptt(channel, me, target):
+    """Push-to-talk from `me` to extension `target` (the part after *88)."""
+    target = (target or "").strip()
+    callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1",
+                (target,)) if target else None
+    if not _ptt_flag(me, "ptt_allowed"):
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT not allowed for caller %s" % me["exten"])
+        return
+    if not callee or callee["id"] == me["id"]:
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT target %s unavailable" % (target or "?"))
+        return
+    if not ptt_can_receive(callee):
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT not enabled for %s" % callee["exten"])
+        return
+    # Headers ride on the B leg as ARI originate variables: on a PJSIP
+    # channel, setting "PJSIP_HEADER(add,<Header>)" is the one mechanism
+    # Asterisk offers for adding a header to the outgoing INVITE, and the
+    # originate variables are set before that INVITE is sent (a Local
+    # channel + pre-dial snippet would need new dialplan, which this
+    # codebase deliberately keeps empty — everything lives here).
+    # X-PTT marks the call for the My Phone app; Call-Info answer-after=0
+    # asks any SIP phone to auto-answer. The caller ID NAME carries a
+    # "PTT " prefix as a fallback signal for clients that ignore both.
+    leg_cid = "PTT %s <%s>" % (me["display_name"] or me["exten"], me["exten"])
+    variables = {"PJSIP_HEADER(add,X-PTT)": "1",
+                 "PJSIP_HEADER(add,Call-Info)": "<sip:x>;answer-after=0"}
+    legs = []
+    for ep in phone_endpoints(callee):
+        try:
+            legs.append(CLIENT.channels.originate(
+                endpoint=ep,
+                app=APP,
+                app_args="legb,%s" % channel.id,
+                caller_id=leg_cid,
+                timeout=30,
+                variables=variables))
+        except Exception:
+            log.exception("PTT originate to %s failed", ep)
+    if not legs:
+        # Callee offline / unreachable: same fast-fail, never voicemail.
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT target %s unreachable" % callee["exten"])
+        return
+    for leg in legs:
+        PENDING[leg.id] = channel.id
+        B_LOGIN[leg.id] = callee["id"]
+    # direction "ptt" is the CDR marker: cdr.direction is the call-type
+    # field every other flow uses (inbound / outbound / internal /
+    # forwarded / emergency), so PTT needs no schema change. It also keeps
+    # PTT out of the minute quotas and, in hangup_other_leg, out of the
+    # internal/inbound no-answer branches that lead to voicemail.
+    # Deliberately no DND / forward / block / IVR handling and no ring
+    # timer: PTT is a direct intercom, and on_legb_answer bridges the
+    # first leg that answers (auto-answer should make that immediate).
+    CALLS[channel.id] = {
+        "caller": me["exten"], "callee": callee["exten"],
+        "start": time.time(), "b_id": legs[0].id,
+        "direction": "ptt", "login_id": me["id"],
+        "callee_id": callee["id"], "ptt": True,
+    }
+    try:
+        channel.ring()  # 180 Ringing to A while B (auto-)answers
+    except Exception:
+        pass
+    log.info("PTT %s -> %s (b legs %s)", me["exten"], callee["exten"],
+             ",".join(l.id for l in legs))
+
+
 def try_forward_noanswer(a_id, info):
     """Internal call not answered: forward if the callee set it up."""
     callee = q1("SELECT * FROM logins WHERE id=? AND enabled=1",
@@ -774,6 +880,13 @@ def on_legb_answer(b_channel):
         bridge.add_channel(b_channel.id)
         # Start call recordings per admin/user flags (Phase 2b)
         start_call_recordings(bridge, a_id, B_LOGIN.get(b_channel.id))
+        if info.get("ptt"):
+            # Push-to-talk: a short beep on the bridge tells both sides the
+            # intercom is live (start_call_recordings above no-ops for PTT).
+            try:
+                bridge.play(PTT_BEEP)
+            except Exception:
+                pass
     except Exception:
         log.exception("bridge failed")
         b_channel.hangup()
@@ -804,6 +917,10 @@ def start_call_recordings(bridge, a_id, answered_id=None):
     records their calls gets their own copy, filed under them."""
     info = CALLS.get(a_id)
     if not info:
+        return
+    if info.get("ptt"):
+        # Push-to-talk is a live intercom, never a recorded call: skip the
+        # whole admin/user gate below even when both parties record calls.
         return
     # Caller: the extension that placed the call (none for calls from outside).
     caller = None
@@ -1925,6 +2042,16 @@ def hangup_other_leg(ended_id):
         # Reads the live b_ids so delayed cell legs are covered too.
         _cancel_cell_timers(a_id)
         info["ringing"] = False
+        if info.get("ptt"):
+            # Push-to-talk has no no-answer path: the callee didn't
+            # (auto-)answer, so fast-fail the caller — never voicemail,
+            # never a forward.
+            try:
+                deny_and_hangup(CLIENT.channels.get(a_id), DENIED_PROMPT,
+                                "PTT %s did not answer" % info.get("callee"))
+            except Exception:
+                _hangup(a_id)
+            return
         # All B legs done (no answer/timeout)
         if info.get("direction") in ("inbound", "group"):
             # Inbound no-answer: the single rung user's forward-on-no-answer,

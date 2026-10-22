@@ -165,6 +165,12 @@ def _migrate(c):
     # Backfill wish=0: every user (re-)opts in via Settings -> "Record my calls".
     if "user_wants_record" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN user_wants_record INTEGER NOT NULL DEFAULT 0")
+    # Push-to-talk, split the same way: admin allow-flag + user wish-flag,
+    # so an admin can never force PTT on for a user who hasn't opted in.
+    if "ptt_allowed" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN ptt_allowed INTEGER NOT NULL DEFAULT 0")
+    if "ptt_enabled" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN ptt_enabled INTEGER NOT NULL DEFAULT 0")
     # Single sign-on: "<issuer>|<subject>" of the provider account linked to this login.
     if "sso_subject" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN sso_subject TEXT NOT NULL DEFAULT ''")
@@ -1045,6 +1051,8 @@ def login_edit_page(request: Request, lid: str):
 <span class="muted">{'(on system-wide)' if _get_setting("admin_rec_enabled") == "1" else '(off system-wide - nothing is recorded until it is turned on under <a href="/recordings">Recordings</a>)'}</span><br>
 <label><input type="checkbox" name="user_record" {'checked' if t and t['user_record'] else ''}> User call recording (allow)</label>
 <span class="muted">Lets the user record their own calls. They must still turn on "Record my calls" in Settings themselves — this cannot enable it for them. Uncheck to disable user recording entirely.</span><br>
+<label><input type="checkbox" name="ptt_allowed" {'checked' if t and t['ptt_allowed'] else ''}> Allow push-to-talk</label>
+<span class="muted">Lets the user place push-to-talk calls (dial *88 + extension) and receive them. They must still turn on push-to-talk in their own Settings themselves — this cannot enable it for them. Uncheck to disable push-to-talk entirely.</span><br>
 <p class="muted" style="max-width:560px">Recording laws vary; some US states (e.g. California, Florida, Illinois, Maryland,
 Massachusetts, Pennsylvania, Washington) require every party's consent. "User call recording" only records once the user has
 accepted the recording notice in their control panel and their plan includes recording. Admin recording is your responsibility
@@ -1072,6 +1080,7 @@ async def login_edit_save(request: Request, lid: str,
                     sip_username: str = Form(""), sip_secret: str = Form(""),
                     display_name: str = Form(""), vm_email: str = Form(""),
                     record_admin: str = Form(None), user_record: str = Form(None),
+                    ptt_allowed: str = Form(None),
                     enabled: str = Form(None)):
     s = _sess(request)
     if not s or s["role"] != "admin":
@@ -1090,11 +1099,12 @@ async def login_edit_save(request: Request, lid: str,
             if exten and not sip_secret:
                 raise HTTPException(400, "SIP secret is required when an extension is set")
             cur = c.execute("""INSERT INTO logins (username, pwhash, role, exten, sip_username, sip_secret,
-                       display_name, vm_email, record_admin, user_record, enabled)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                       display_name, vm_email, record_admin, user_record, ptt_allowed, enabled)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (username, pwh, role, exten or "", sip_u, sip_secret or "",
                        display_name or "", vm_email or "",
                        1 if record_admin else 0, 1 if user_record else 0,
+                       1 if ptt_allowed else 0,
                        1 if enabled else 0))
             new_id = cur.lastrowid
             # Create their voicemail box
@@ -1112,6 +1122,7 @@ async def login_edit_save(request: Request, lid: str,
                 sets.append(f"{k}=?"); vals.append(val)
             sets.append("record_admin=?"); vals.append(1 if record_admin else 0)
             sets.append("user_record=?"); vals.append(1 if user_record else 0)
+            sets.append("ptt_allowed=?"); vals.append(1 if ptt_allowed else 0)
             sets.append("enabled=?"); vals.append(1 if enabled else 0)
             if password:
                 sets.append("pwhash=?"); vals.append(bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode())

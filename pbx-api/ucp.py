@@ -1152,6 +1152,32 @@ def _settings_body(request, s, me, extra_top=""):
     cell_delay_opts = "".join(
         f'<option value="{v}" {"selected" if v == cur_delay else ""}>{v} seconds</option>'
         for v in (0, 5, 10, 15, 20, 30))
+    # Push-to-talk, mirroring the recording split above: the admin allow-flag
+    # (logins.ptt_allowed) gates everything, the user's own wish
+    # (logins.ptt_enabled) decides whether they actually receive PTT calls.
+    # The checkbox lives in the Call handling form, so it is persisted by
+    # settings_calls; ptt_present lets that handler tell "user unchecked it"
+    # apart from "this POST never carried the PTT control" (partial app
+    # posts), which must leave the stored wish alone.
+    ptt_admin_ok = bool(me.get("ptt_allowed", 0))
+    ptt_wish = bool(me.get("ptt_enabled", 0))
+    if not ptt_admin_ok:
+        ptt_status = ('<p class="warn">⚠️ <b>Push-to-talk is turned off by your admin</b> for this extension. '
+                      'Your preference below is saved, but you will not receive push-to-talk calls '
+                      '(and cannot place them) until your admin allows it.</p>')
+    elif ptt_wish:
+        ptt_status = ('<p class="ok">✅ <b>Push-to-talk is on</b> — people your admin has allowed can reach you '
+                      'instantly by dialling *88 followed by your extension; your phone answers automatically.</p>')
+    else:
+        ptt_status = ('<p class="muted">Push-to-talk is allowed by your admin. '
+                      'Check "Enable push-to-talk" below to start receiving push-to-talk calls.</p>')
+    ptt_block = (f'{ptt_status}'
+                 f'<input type="hidden" name="ptt_present" value="1">'
+                 f'<label class="switch"><input type="checkbox" name="user_ptt" value="1" {chk(ptt_wish)}> '
+                 f'<span>Enable push-to-talk</span></label>'
+                 f'<p class="muted">To talk to someone instantly, dial <b>*88</b> followed by their extension '
+                 f'(for example *88{esc(me["exten"] or "8801")}). Your phone must be allowed by your admin, '
+                 f'and theirs must be allowed and switched on here.</p>')
     return extra_top + f"""
 <div class="grid2">
 <section class="panel">
@@ -1170,6 +1196,8 @@ def _settings_body(request, s, me, extra_top=""):
 <p class="muted">When an inbound number rings a group you're in, your cell rings too. Your cell's voicemail can't grab the call: you press 1 to accept. Uses your outside-call minutes.</p>
 <label>Start ringing my cell after<br><select name="cell_delay">{cell_delay_opts}</select></label>
 <p class="muted">Outside numbers use the company's phone lines. Forwarding on a shared inbound number that rings a group applies only to other extensions, not outside numbers.</p>
+<h4>Push-to-talk</h4>
+{ptt_block}
 <button class="btn">Save call handling</button>
 </form>
 </section>
@@ -1277,6 +1305,14 @@ async def settings_calls(request: Request):
     else:
         cur = _prefs(me["id"])
         cell, ring_cell, cell_delay = cur.get("cell_number") or "", cur.get("ring_cell") or 0, cur.get("cell_delay") or 15
+    # Push-to-talk wish (logins.ptt_enabled, field "user_ptt"): only touch it
+    # when this POST actually carried the PTT control — the web form always
+    # sends ptt_present (plus user_ptt=1 when ticked), the app sends user_ptt
+    # explicitly. A POST that omits both (e.g. an app call-handling update)
+    # must preserve the stored wish, exactly like the cell fields above.
+    ptt_enabled = None
+    if "user_ptt" in f or "ptt_present" in f:
+        ptt_enabled = 1 if (f.get("user_ptt") or "") in ("1", "on", "true", "yes") else 0
     ivr_raw = (f.get("answer_ivr_id") or "").strip()
     ivr_id = None
     if ivr_raw:
@@ -1299,9 +1335,12 @@ async def settings_calls(request: Request):
                   " cell_delay=excluded.cell_delay,"
                   " updated_at=excluded.updated_at",
                   (me["id"], dnd, fa, fn, ring_store, ivr_id, cell, ring_cell, cell_delay))
+        if ptt_enabled is not None:
+            c.execute("UPDATE logins SET ptt_enabled=? WHERE id=?", (ptt_enabled, me["id"]))
         c.commit()
     _audit(me, "ucp.calls", f"dnd={dnd} fwd_always={fa} fwd_noanswer={fn} ring={ring} ivr={ivr_id}"
-                            f" cell={cell} ring_cell={ring_cell} cell_delay={cell_delay}")
+                            f" cell={cell} ring_cell={ring_cell} cell_delay={cell_delay}"
+                            f" ptt={'keep' if ptt_enabled is None else ptt_enabled}")
     return _back("/ucp/settings", "saved")
 
 
