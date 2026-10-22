@@ -32,7 +32,7 @@ object Updates {
 
     private const val RELEASES_URL =
         "https://api.github.com/repos/DanversKara/MyPersonalPBX/releases?per_page=10"
-    private const val CHECK_INTERVAL_MS = 24 * 60 * 60_000L
+    private const val CHECK_INTERVAL_MS = 60 * 60_000L
 
     /** The running app's version, from the build (never hardcoded). */
     fun installedVersion(): String = org.ownpbx.myphone.BuildConfig.VERSION_NAME
@@ -55,10 +55,14 @@ object Updates {
         return v.takeIf { it.isNotBlank() && it.all { ch -> ch.isDigit() || ch == '.' } }
     }
 
-    /** The offer already known (checked earlier, not dismissed, still newer than this app). */
+    /**
+     * The offer already known (checked earlier, still newer than this app). A version the user
+     * tapped "Later" on is NOT filtered out: the dialog comes back the next time the app is opened,
+     * so an update can't get buried by one stray tap — it only goes away by being installed.
+     */
     fun pendingOffer(store: Store): Offer? {
         val v = store.updateAvailable
-        if (v.isBlank() || v == store.updateDismissed) return null
+        if (v.isBlank()) return null
         if (compareVersions(v, installedVersion()) <= 0) return null
         val url = store.updateApkUrl
         return Offer(v, url).takeIf { url.isNotBlank() }

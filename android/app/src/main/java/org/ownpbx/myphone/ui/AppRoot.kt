@@ -34,10 +34,25 @@ import org.ownpbx.myphone.CrashLog
 fun AppRoot(model: AppModel, activity: FragmentActivity) {
     CrashReportDialog()
     val appCtx = LocalContext.current
-    // Look for a newer release (at most once a day; a dismissed version
-    // isn't offered again, the next one is).
+    // Look for a newer release every time the app comes to the front, so
+    // an available update is on screen the moment the app is opened —
+    // nobody has to go hunting in Settings. The first composition checks
+    // too (the lifecycle observer only fires on later foregrounds), and
+    // Updates throttles the actual network call; a known offer reappears
+    // from cache instantly, even after "Later".
     LaunchedEffect(Unit) { model.checkUpdates(appCtx) }
-    if (model.stage == Stage.Ready) UpdateDialog(model)
+    DisposableEffect(activity) {
+        val obs =
+            androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                    model.checkUpdates(appCtx)
+                }
+            }
+        activity.lifecycle.addObserver(obs)
+        onDispose { activity.lifecycle.removeObserver(obs) }
+    }
+    // Never over a call: the update can wait until the call screen clears.
+    if (model.stage == Stage.Ready && org.ownpbx.myphone.phone.Phone.ui == null) UpdateDialog(model)
     // A call (ringing or in progress) shows over everything, including the
     // PIN lock: answering shouldn't need the PIN. Only call controls show.
     org.ownpbx.myphone.phone.Phone.ui?.let { c ->
@@ -54,7 +69,7 @@ fun AppRoot(model: AppModel, activity: FragmentActivity) {
     }
 }
 
-/** "My Phone X.Y.Z is available" with Update / Later, once per version. */
+/** "My Phone X.Y.Z is available" with Update / Later; returns on every app open until installed. */
 @Composable
 private fun UpdateDialog(model: AppModel) {
     val offer = model.updateOffer ?: return

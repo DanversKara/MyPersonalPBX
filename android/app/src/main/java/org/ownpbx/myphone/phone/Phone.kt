@@ -69,26 +69,47 @@ object Phone {
         private set
 
     private var appCtx: Context? = null
-    /** True while the user holds the PTT talk button (mic live). */
+    /**
+     * The call the current [ui] belongs to. Linphone state events for any OTHER call are stale
+     * leftovers (e.g. a declined PTT page still tearing down while its retry already rings) and
+     * must never touch this call's screen — that mix-up once turned a fresh ringing page into
+     * "Missed call" and cancelled its notification, leaving it ringing with no way to answer.
+     */
+    private var uiCall: Call? = null
+    /** True while the PTT mic should be live (talk button held, or VOX has it open). */
     private var pttTalking = false
+    /** True while the user physically holds the PTT talk button. */
+    private var manualTalk = false
 
     // ---- PTT extra-loud boost: what to put back when it ends.
     private var boostApplied = false
     private var savedStreamVolume: Int? = null
     private var savedPlaybackGainDb: Float? = null
 
-    // ---- PTT VOX: main-thread metering loop over the call's record level.
+    // ---- PTT VOX: while the call's mic is gated shut, its own level meter
+    // (Call.getRecordVolume) reads the silence the gate sends, not the room —
+    // so the trigger is metered on a separate AudioRecord over the real mic.
+    // Once VOX opens the mic, the call's meter is live again and runs the
+    // hang/close watch. See startVoxMeter / voxTick.
     private val voxHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var voxRunnable: Runnable? = null
     private var voxOpen = false
     private var voxLastAboveAt = 0L
+    private var voxMeterThread: Thread? = null
+    @Volatile private var voxMeterRun = false
+    private var voxMeterRec: android.media.AudioRecord? = null
 
     /** Extra playback gain while the boost is on, on top of max stream volume. */
     private const val BOOST_GAIN_DB = 8f
-    /** VOX opens the mic above this local level (Call.getRecordVolume, dBm0). */
+    /** VOX keeps the mic open above this call level (Call.getRecordVolume, dBm0). */
     private const val VOX_THRESHOLD_DBM0 = -30f
     /** VOX keeps the mic open this long after the level drops (word gaps). */
     private const val VOX_HANG_MS = 800L
+    /** Side-meter trigger level (RMS of the real mic, dBFS) and how long it must hold. */
+    private const val VOX_OPEN_DBFS = -38.0
+    private const val VOX_SUSTAIN_WINDOWS = 3 // 3 x ~50 ms of speech, not a click or the beep
+    /** Wait this long after VOX arms before the meter can open the mic (bridge beep is over). */
+    private const val VOX_ARM_DELAY_MS = 700L
 
     private val listener =
         object : CoreListenerStub() {
@@ -102,6 +123,9 @@ object Phone {
                     incoming(call)
                     return
                 }
+                // Stale events for a different call (one still tearing down)
+                // must never touch the call the screen is showing.
+                if (uiCall != null && call != uiCall) return
                 val cur = ui ?: return
                 ui =
                     when (state) {
@@ -193,6 +217,8 @@ object Phone {
                 }
                 if (state == Call.State.End || state == Call.State.Released) {
                     pttTalking = false
+                    manualTalk = false
+                    voxOpen = false
                     stopChirp()
                     stopVox()
                     restoreBoost()
@@ -203,6 +229,9 @@ object Phone {
                         CallService.stop(it)
                         IncomingNotice.cancel(it)
                     }
+                }
+                if ((state == Call.State.End || state == Call.State.Released) && call == uiCall) {
+                    uiCall = null
                 }
             }
 
@@ -284,6 +313,7 @@ object Phone {
                 }
         val isPtt = marked && myPtt
         if (!isPtt) {
+            uiCall = call
             ui = CallUi(number = number, name = rawName, status = "Incoming call", incoming = true)
             if (ctx != null) IncomingNotice.show(ctx, number, ui?.name.orEmpty())
             return
@@ -295,6 +325,7 @@ object Phone {
         // or chirp again). The IncomingNotice full-screen intent brings
         // the accept screen up, and its actions work from the lock screen.
         val prefs = if (ctx != null) Store(ctx) else null
+        uiCall = call
         ui =
             CallUi(
                 number = number,
@@ -621,6 +652,7 @@ object Phone {
             )
         CallService.start(ctx, shown)
         val placed = c.inviteAddressWithParams(to, params)
+        uiCall = placed
         if (placed == null) {
             ui =
                 CallUi(
@@ -661,13 +693,23 @@ object Phone {
      * Hold-to-talk for a PTT call: while held the mic is live, on release it goes back to muted.
      */
     fun setPttTalking(talking: Boolean) {
-        val call = current() ?: return
         if (ui?.ptt != true) return
-        pttTalking = talking
+        manualTalk = talking
+        applyPttMic()
+        // Releasing the button re-arms the VOX side meter (it stands down
+        // while the button is held).
+        if (!talking && ui?.vox == true && !voxOpen) startVoxMeter()
+    }
+
+    /** The PTT mic is live while the talk button is held OR VOX has it open. */
+    private fun applyPttMic() {
+        val live = manualTalk || voxOpen
+        pttTalking = live
+        val call = current() ?: return
         try {
-            call.microphoneMuted = !talking
+            call.microphoneMuted = !live
         } catch (_: Exception) {}
-        ui = ui?.copy(muted = !talking)
+        ui = ui?.copy(muted = !live)
     }
 
     /**
@@ -740,15 +782,21 @@ object Phone {
             startVox()
         } else {
             stopVox()
-            if (voxOpen) {
-                voxOpen = false
-                setPttTalking(false)
-            }
+            voxOpen = false
+            applyPttMic()
         }
     }
 
+    /**
+     * Arm VOX: the hang watch (which also covers phones whose call meter DOES track a gated mic)
+     * plus the side meter over the real microphone for the trigger.
+     */
     private fun startVox() {
         stopVox()
+        voxHandler.postDelayed(
+            { if (ui?.vox == true && !voxOpen) startVoxMeter() },
+            VOX_ARM_DELAY_MS,
+        )
         val r =
             object : Runnable {
                 override fun run() {
@@ -766,12 +814,112 @@ object Phone {
     private fun stopVox() {
         voxRunnable?.let { voxHandler.removeCallbacks(it) }
         voxRunnable = null
+        stopVoxMeter()
+    }
+
+    /** VOX heard speech on the real mic (side-meter thread, posted to the main thread). */
+    private fun onVoxHeard() {
+        val u = ui ?: return
+        if (!u.ptt || !u.vox || u.ended || voxOpen || manualTalk) return
+        stopVoxMeter()
+        voxOpen = true
+        voxLastAboveAt = android.os.SystemClock.elapsedRealtime()
+        applyPttMic()
     }
 
     /**
-     * One VOX sample: the call's measured record level (what the mic is sending, in dBm0 —
-     * Call.getRecordVolume, SDK 5.4.128) against the threshold, with a hang time so word gaps don't
-     * chop the mic. Returns false when VOX no longer applies (call over / VOX off).
+     * Meter the real microphone on its own recorder while the call's mic is gated shut. The
+     * VOICE_COMMUNICATION source gets the platform's echo cancellation, so the far side coming out
+     * of the speaker doesn't (mostly) trigger it. Needs a short burst of sustained speech, not a
+     * click. Any failure just leaves the call-meter path in charge.
+     */
+    private fun startVoxMeter() {
+        stopVoxMeter()
+        val u = ui ?: return
+        if (!u.ptt || !u.vox || u.ended || voxOpen) return
+        voxMeterRun = true
+        val t = Thread {
+            var rec: android.media.AudioRecord? = null
+            try {
+                val rate = 16000
+                val minBuf =
+                    android.media.AudioRecord.getMinBufferSize(
+                        rate,
+                        android.media.AudioFormat.CHANNEL_IN_MONO,
+                        android.media.AudioFormat.ENCODING_PCM_16BIT,
+                    )
+                check(minBuf > 0) { "no mic buffer" }
+                val r =
+                    android.media.AudioRecord(
+                        android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                        rate,
+                        android.media.AudioFormat.CHANNEL_IN_MONO,
+                        android.media.AudioFormat.ENCODING_PCM_16BIT,
+                        maxOf(minBuf, 3200),
+                    )
+                check(r.state == android.media.AudioRecord.STATE_INITIALIZED) { "mic busy" }
+                rec = r
+                voxMeterRec = r
+                r.startRecording()
+                val buf = ShortArray(800) // ~50 ms at 16 kHz
+                var above = 0
+                while (voxMeterRun) {
+                    val n = r.read(buf, 0, buf.size)
+                    if (n <= 0) {
+                        Thread.sleep(20)
+                        continue
+                    }
+                    var sum = 0.0
+                    for (i in 0 until n) {
+                        val s = buf[i].toDouble()
+                        sum += s * s
+                    }
+                    val rms = kotlin.math.sqrt(sum / n)
+                    val dbfs = if (rms > 0) 20 * kotlin.math.log10(rms / 32768.0) else -120.0
+                    if (dbfs > VOX_OPEN_DBFS) {
+                        above++
+                        if (above >= VOX_SUSTAIN_WINDOWS) {
+                            voxHandler.post { onVoxHeard() }
+                            break
+                        }
+                    } else {
+                        above = 0
+                    }
+                }
+            } catch (_: Exception) {
+                // No side meter (permission, busy mic): the call-meter
+                // watch in voxTick stays in charge on its own.
+            } finally {
+                try {
+                    rec?.stop()
+                } catch (_: Exception) {}
+                try {
+                    rec?.release()
+                } catch (_: Exception) {}
+                if (voxMeterRec === rec) voxMeterRec = null
+            }
+        }
+        t.isDaemon = true
+        voxMeterThread = t
+        t.start()
+    }
+
+    private fun stopVoxMeter() {
+        voxMeterRun = false
+        voxMeterThread?.interrupt()
+        voxMeterThread = null
+        // Unblock a read() in progress; the thread releases its recorder.
+        try {
+            voxMeterRec?.stop()
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * One hang-watch sample for an OPEN VOX mic: the call's measured record level (what the mic is
+     * sending, in dBm0 — Call.getRecordVolume, SDK 5.4.128) against the threshold, with a hang time
+     * so word gaps don't chop the mic. While the mic is still gated shut this also opens it on
+     * phones whose meter tracks a gated mic (the side meter covers the rest). Returns false when
+     * VOX no longer applies (call over / VOX off).
      */
     private fun voxTick(): Boolean {
         val u = ui ?: return false
@@ -788,11 +936,13 @@ object Phone {
             voxLastAboveAt = now
             if (!voxOpen) {
                 voxOpen = true
-                setPttTalking(true)
+                stopVoxMeter()
+                applyPttMic()
             }
-        } else if (voxOpen && now - voxLastAboveAt > VOX_HANG_MS) {
+        } else if (voxOpen && !manualTalk && now - voxLastAboveAt > VOX_HANG_MS) {
             voxOpen = false
-            setPttTalking(false)
+            applyPttMic()
+            startVoxMeter()
         }
         return true
     }

@@ -737,12 +737,15 @@ def _ptt_arm_timer(a_id, legs):
         CALLS[a_id]["ring_timer"] = t
 
 
-def ptt_no_answer(a_id, info):
+def ptt_no_answer(a_id, info, declined=False):
     """A PTT attempt ended with no accept (declined, busy, unreachable
     or ring timeout): apply the CALLEE's missed-PTT setting. 'retry'
     re-rings — the phone chirps again — until PTT_MAX_ATTEMPTS total
     tries; then, and for 'voicemail' right away, the caller lands in the
     callee's voicemail if they have a box, else the denied announcement.
+    An explicit decline (the callee pressed No accept) skips the retry
+    entirely — keep-calling is for pages nobody answered, not for
+    overriding a person who said no.
     Called with LEG_LOCK held, all of the attempt's legs already gone."""
     timer = info.pop("ring_timer", None)
     if timer:
@@ -755,7 +758,8 @@ def ptt_no_answer(a_id, info):
     except Exception:
         pass
     attempt = int(info.get("ptt_attempt", 1))
-    if callee and chan and _ptt_missed(callee) == "retry" and attempt < PTT_MAX_ATTEMPTS:
+    if (not declined and callee and chan and _ptt_missed(callee) == "retry"
+            and attempt < PTT_MAX_ATTEMPTS):
         me = q1("SELECT * FROM logins WHERE id=?",
                 (info.get("login_id"),)) if info.get("login_id") else None
         if me:
@@ -2201,8 +2205,10 @@ def vm_cleanup(chan_id):
         PB_CALLBACKS.pop(sess.get("pb"), None)
 
 
-def hangup_other_leg(ended_id):
-    """One leg ended: clean up the other side."""
+def hangup_other_leg(ended_id, cause=None, cause_txt=""):
+    """One leg ended: clean up the other side. cause/cause_txt come from
+    the ARI ChannelDestroyed event when there is one (a PTT B leg uses
+    them to tell an explicit decline from a ring timeout)."""
     # Bridged (active) call: hang up the other leg(s) in the same bridge
     bridge_id = BRIDGED.pop(ended_id, None)
     if bridge_id:
@@ -2246,8 +2252,10 @@ def hangup_other_leg(ended_id):
         if info.get("ptt"):
             # Push-to-talk not accepted: the callee's missed-PTT setting
             # decides — chirp again or voicemail (see ptt_no_answer).
-            # Never a forward.
-            ptt_no_answer(a_id, info)
+            # Never a forward. An explicit decline (SIP 603 -> cause 21)
+            # is a human "no", not a miss: it skips the retry.
+            declined = cause == 21 or "reject" in (cause_txt or "").lower()
+            ptt_no_answer(a_id, info, declined=declined)
             return
         # All B legs done (no answer/timeout)
         if info.get("direction") in ("inbound", "group"):
@@ -3217,7 +3225,8 @@ def on_channel_destroyed(channel, event):
         if channel.id in PENDING:
             log.info("b leg %s ended unanswered (%s)", channel.id,
                      event.get("cause_txt", ""))
-            hangup_other_leg(channel.id)
+            hangup_other_leg(channel.id, cause=event.get("cause"),
+                             cause_txt=event.get("cause_txt", ""))
 
 
 def on_stasis_end(channel, event):

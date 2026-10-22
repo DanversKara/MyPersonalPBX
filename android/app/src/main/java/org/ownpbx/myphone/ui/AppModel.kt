@@ -66,8 +66,9 @@ class AppModel(val store: Store, context: android.content.Context) {
         private set
 
     /**
-     * Look for a newer release (throttled to once a day inside Updates unless [force]) and, if
-     * there is one the user hasn't dismissed, offer it. Run on app start and from Settings' "Check
+     * Look for a newer release (network-throttled inside Updates unless [force]) and, if there is
+     * one, offer it. Run every time the app comes to the front — so an available update is on
+     * screen the moment the app is opened, never buried in Settings — and from Settings' "Check
      * now". Never disturbs anything else when it fails.
      */
     fun checkUpdates(ctx: android.content.Context, force: Boolean = false) {
@@ -84,9 +85,11 @@ class AppModel(val store: Store, context: android.content.Context) {
         }
     }
 
-    /** "Later": don't offer this version again (the next one still prompts). */
+    /**
+     * "Later": hide the dialog for now only. The offer is still there, so the dialog comes back the
+     * next time the app is opened — an update is never dismissed for good by a stray tap.
+     */
     fun dismissUpdate() {
-        updateOffer?.let { store.updateDismissed = it.version }
         updateOffer = null
     }
 

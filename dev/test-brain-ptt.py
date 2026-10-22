@@ -174,6 +174,21 @@ check("g: attempts exhausted -> voicemail", VM == [("a7", "8801")], VM)
 check("g: no 4th attempt", len(originates()) == 3, originates())
 set_missed("8801", "voicemail")
 
+# (h) callee's missed setting = retry, but the callee explicitly DECLINES
+#     (SIP 603 -> cause 21 / "Call Rejected"): a human "no" skips the
+#     retry entirely and goes straight to voicemail
+reset(); set_ptt("8800", 1, 1); set_ptt("8801", 1, 1); set_missed("8801", "retry")
+STATES[sip["8801"] + "-app"] = "offline"
+a = dial_ptt("a8")
+check("h: attempt 1 originated", len(originates()) == 1, originates())
+B.on_channel_destroyed(CHANS[B.CALLS["a8"]["b_id"]],
+                       {"cause": 21, "cause_txt": "Call Rejected"})
+check("h: decline -> NO re-ring despite retry setting",
+      len(originates()) == 1, originates())
+check("h: decline -> caller routed to voicemail", VM == [("a8", "8801")], VM)
+check("h: caller not denied", not denied(a), (a.played, a.hung))
+set_missed("8801", "voicemail")
+
 # (c) both on -> B legs carry the PTT headers, bridge + beep on answer,
 #     recording never starts, CDR is marked direction='ptt'
 reset(); set_ptt("8800", 1, 0); set_ptt("8801", 1, 1)
