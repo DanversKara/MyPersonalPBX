@@ -165,6 +165,11 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         )
         return
     }
+    var showUsage by remember { mutableStateOf(false) }
+    if (showUsage) {
+        UsageScreen(model) { showUsage = false }
+        return
+    }
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Text(
@@ -195,6 +200,14 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 Modifier.padding(16.dp),
                 color = MaterialTheme.colorScheme.error,
             )
+
+        ClickRow(
+            Icons.Filled.DataUsage,
+            "Plan & usage",
+            "Minutes and texts left, and what your plan includes",
+        ) {
+            showUsage = true
+        }
 
         val st = s
         if (st == null) {
@@ -264,6 +277,29 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 // The server saves the PTT wish on the calls POST (unlike
                 // recording, which lives on prefs) — save it there.
                 saveCalls(st.copy(user_ptt = it))
+            }
+            // This phone's own PTT defaults (not PBX settings): the
+            // in-call toggles start here, and changing them in a call
+            // writes back here too.
+            var pttLoud by remember { mutableStateOf(store.pttExtraLoud) }
+            SwitchRow(
+                Icons.Filled.Campaign,
+                "Extra loud",
+                "Max volume plus extra gain on push-to-talk calls",
+                pttLoud,
+            ) {
+                pttLoud = it
+                store.pttExtraLoud = it
+            }
+            var pttVox by remember { mutableStateOf(store.pttVox) }
+            SwitchRow(
+                Icons.Filled.GraphicEq,
+                "VOX hands-free",
+                "No holding the button: the mic opens when you speak",
+                pttVox,
+            ) {
+                pttVox = it
+                store.pttVox = it
             }
 
             Section("Texts")
@@ -588,6 +624,23 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 Text("Free software (GPL-2.0-or-later). No ads, no tracking, no Google services.")
             },
         )
+        var updateCheck by remember { mutableStateOf(store.updateCheck) }
+        SwitchRow(
+            Icons.Filled.Update,
+            "Check for updates",
+            "Once a day, against the GitHub releases",
+            updateCheck,
+        ) {
+            updateCheck = it
+            store.updateCheck = it
+        }
+        ClickRow(
+            Icons.Filled.SystemUpdate,
+            "Check now",
+            "You have ${org.ownpbx.myphone.data.Updates.installedVersion()}",
+        ) {
+            model.checkUpdates(ctx, force = true)
+        }
         Spacer(Modifier.height(32.dp))
     }
 

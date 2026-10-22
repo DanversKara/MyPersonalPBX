@@ -69,6 +69,32 @@ cons = c.get("/api/v1/me/contacts", headers=H).json()["contacts"]
 pal = [x for x in cons if x.get("number") == "8801"]
 _ptt_check("contact ptt false when login wish off", bool(pal) and pal[0].get("ptt") is False, pal)
 if _ptt_fails: raise SystemExit("PTT CHECKS FAILED: %s" % _ptt_fails)
+# --- plan & usage (/api/v1/me/usage must agree with the portal's usage_panel) ---
+_usage_fails = []
+def _usage_check(name, ok, extra=""):
+    print(("PASS " if ok else "FAIL ") + "usage: " + name, extra)
+    if not ok: _usage_fails.append(name)
+_db = _sq.connect(os.environ["PBX_DB"])
+for _k, _v in (("default_quota_call_minutes", "500"), ("default_quota_messages", "-1"),
+               ("default_quota_voicemail", "1"), ("default_quota_recording", "0"),
+               ("default_quota_ivr_menus", "2")):
+    _db.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?,?)", (_k, _v))
+_db.commit(); _db.close()
+_usage_check("usage needs auth", c.get("/api/v1/me/usage").status_code == 401)
+u = j(c.get("/api/v1/me/usage", headers=H)).json()
+_usage_check("shape: plan/features/includes", "plan" in u and "features" in u and "includes" in u, u)
+_usage_check("plan null without a billing plan", u.get("plan") is None, u.get("plan"))
+_f = u["features"]
+_usage_check("call_minutes 500/0/500", _f["call_minutes"] == {"quota": 500, "used": 0, "left": 500}, _f["call_minutes"])
+_usage_check("messages unlimited is null/null", _f["messages"]["quota"] is None and _f["messages"]["left"] is None, _f["messages"])
+_usage_check("voicemail quota 1", _f["voicemail"]["quota"] == 1, _f["voicemail"])
+_usage_check("recording quota 0", _f["recording"]["quota"] == 0, _f["recording"])
+_usage_check("ivr_menus 2/0/2", _f["ivr_menus"] == {"quota": 2, "used": 0, "left": 2}, _f["ivr_menus"])
+_inc = u["includes"]
+_usage_check("includes mirrors quotas + ptt flag",
+             _inc == {"calls": True, "voicemail": True, "messages": True,
+                      "recording": False, "ivr_menus": True, "push_to_talk": True}, _inc)
+if _usage_fails: raise SystemExit("USAGE CHECKS FAILED: %s" % _usage_fails)
 j(c.get("/api/v1/me/calls", headers=H)); j(c.get("/api/v1/me/voicemail", headers=H)); j(c.get("/api/v1/me/recordings", headers=H))
 j(c.post("/api/v1/me/voicemail/5/heard", headers=H))
 j(c.post("/api/v1/me/block", headers=H, data={"number":"5551234567"}))

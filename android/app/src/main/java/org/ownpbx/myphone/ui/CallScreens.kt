@@ -127,8 +127,11 @@ fun DialPadScreen(initial: String = "", onCall: (String) -> Unit, onClose: () ->
 fun InCallScreen(c: CallUi) {
     var keypad by remember { mutableStateOf(false) }
     var digits by remember { mutableStateOf("") }
-    /** PTT: true while the user holds the talk button (mic live). */
+    /** PTT: true while the talk button is held (mic live). */
     var pttTalking by remember { mutableStateOf(false) }
+    // VOX opens/closes the mic inside Phone; follow its state so the
+    // button and the status line show "You're talking" then too.
+    LaunchedEffect(c.muted) { if (c.ptt) pttTalking = !c.muted }
     DisposableEffect(Unit) { onDispose { Phone.setPttTalking(false) } }
     var elapsed by remember { mutableLongStateOf(0L) }
     LaunchedEffect(c.connectedAt, c.ended) {
@@ -163,6 +166,7 @@ fun InCallScreen(c: CallUi) {
             Text(
                 when {
                     c.ptt && c.connectedAt > 0 && !c.ended && pttTalking -> "You're talking"
+                    c.ptt && c.connectedAt > 0 && !c.ended && c.vox -> "VOX on — just talk"
                     c.ptt && c.connectedAt > 0 && !c.ended -> "Listening — hold to talk"
                     c.connectedAt > 0 && !c.ended -> "%d:%02d".format(elapsed / 60, elapsed % 60)
                     else -> c.status
@@ -282,8 +286,8 @@ fun InCallScreen(c: CallUi) {
 }
 
 /**
- * Push-to-talk call controls: a speaker toggle and the big hold-to-talk button. The mic is muted
- * except while the button is held down.
+ * Push-to-talk call controls: speaker / extra-loud / VOX toggles and the big hold-to-talk button.
+ * The mic is muted except while the button is held down (or while VOX hears speech).
  */
 @Composable
 private fun PttControls(c: CallUi, talking: Boolean, onTalk: (Boolean) -> Unit) {
@@ -291,6 +295,10 @@ private fun PttControls(c: CallUi, talking: Boolean, onTalk: (Boolean) -> Unit) 
         CallToggle(Icons.AutoMirrored.Filled.VolumeUp, "Speaker", c.speaker) {
             Phone.toggleSpeaker()
         }
+        CallToggle(Icons.Filled.Campaign, "Extra loud", c.boost) {
+            Phone.setPttBoost(!c.boost)
+        }
+        CallToggle(Icons.Filled.GraphicEq, "VOX", c.vox) { Phone.setPttVox(!c.vox) }
     }
     Spacer(Modifier.height(24.dp))
     Surface(

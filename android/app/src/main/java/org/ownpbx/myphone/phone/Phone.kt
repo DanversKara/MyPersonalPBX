@@ -38,6 +38,10 @@ data class CallUi(
      * and the screen shows hold-to-talk.
      */
     val ptt: Boolean = false,
+    /** PTT extra-loud boost is on for this call (max stream volume + playback gain). */
+    val boost: Boolean = false,
+    /** PTT VOX (voice-activated, hands-free) is on for this call. */
+    val vox: Boolean = false,
 )
 
 /**
@@ -67,6 +71,24 @@ object Phone {
     private var appCtx: Context? = null
     /** True while the user holds the PTT talk button (mic live). */
     private var pttTalking = false
+
+    // ---- PTT extra-loud boost: what to put back when it ends.
+    private var boostApplied = false
+    private var savedStreamVolume: Int? = null
+    private var savedPlaybackGainDb: Float? = null
+
+    // ---- PTT VOX: main-thread metering loop over the call's record level.
+    private val voxHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var voxRunnable: Runnable? = null
+    private var voxOpen = false
+    private var voxLastAboveAt = 0L
+
+    /** Extra playback gain while the boost is on, on top of max stream volume. */
+    private const val BOOST_GAIN_DB = 8f
+    /** VOX opens the mic above this local level (Call.getRecordVolume, dBm0). */
+    private const val VOX_THRESHOLD_DBM0 = -30f
+    /** VOX keeps the mic open this long after the level drops (word gaps). */
+    private const val VOX_HANG_MS = 800L
 
     private val listener =
         object : CoreListenerStub() {
@@ -157,10 +179,21 @@ object Phone {
                             } catch (_: Exception) {}
                             ui = u.copy(muted = true)
                         }
-                        if (u.incoming && u.speaker) applySpeaker(call, true)
+                        // PTT is a speakerphone feature (nobody holds the
+                        // phone to their ear on a work site): speaker on by
+                        // default for the caller too, not just the side that
+                        // auto-answered. ui.speaker carries the choice, so a
+                        // manual toggle-off mid-call is respected here.
+                        if (u.speaker) applySpeaker(call, true)
+                        if (u.boost) applyBoost()
+                        if (u.vox) startVox()
                     }
                 }
-                if (state == Call.State.End || state == Call.State.Released) pttTalking = false
+                if (state == Call.State.End || state == Call.State.Released) {
+                    pttTalking = false
+                    stopVox()
+                    restoreBoost()
+                }
                 if (ui?.ended == true)
                     appCtx?.let {
                         CallService.stop(it)
@@ -253,6 +286,7 @@ object Phone {
         // mic muted until the user holds the talk button. No ringing UI
         // and no IncomingNotice (CallService going foreground + answer()
         // handles it, exactly like answering from the notification).
+        val prefs = if (ctx != null) Store(ctx) else null
         ui =
             CallUi(
                 number = number,
@@ -262,6 +296,8 @@ object Phone {
                 ptt = true,
                 muted = true,
                 speaker = true,
+                boost = prefs?.pttExtraLoud == true,
+                vox = prefs?.pttVox == true,
             )
         beep()
         if (ctx != null) CallService.answer(ctx) else answer()
@@ -492,7 +528,19 @@ object Phone {
         // For a PTT call the screens show the extension, not the *88 code.
         val shown = if (ptt) dial.removePrefix("*88") else dial
         pttTalking = false
-        ui = CallUi(number = shown, status = "Calling...", ptt = ptt, muted = ptt)
+        // A PTT call starts on speakerphone (it's a hands-free feature) with
+        // the user's saved boost / VOX preferences; a normal call is untouched.
+        val prefs = if (ptt) Store(ctx) else null
+        ui =
+            CallUi(
+                number = shown,
+                status = "Calling...",
+                ptt = ptt,
+                muted = ptt,
+                speaker = ptt,
+                boost = prefs?.pttExtraLoud == true,
+                vox = prefs?.pttVox == true,
+            )
         CallService.start(ctx, shown)
         val placed = c.inviteAddressWithParams(to, params)
         if (placed == null) {
@@ -544,6 +592,133 @@ object Phone {
         ui = ui?.copy(muted = !talking)
     }
 
+    /**
+     * Extra-loud boost for a PTT call: voice-call stream to max plus extra playback gain in the
+     * engine (Core.playbackGainDb, verified in SDK 5.4.128). The choice is remembered as the
+     * default for the next PTT call. Everything is put back when the boost goes off or the call
+     * ends, so a following normal call is never blasted.
+     */
+    fun setPttBoost(on: Boolean) {
+        if (ui?.ptt != true) return
+        ui = ui?.copy(boost = on)
+        appCtx?.let {
+            try {
+                Store(it).pttExtraLoud = on
+            } catch (_: Exception) {}
+        }
+        if (on) applyBoost() else restoreBoost()
+    }
+
+    private fun applyBoost() {
+        if (boostApplied) return
+        val ctx = appCtx ?: return
+        try {
+            val am = ctx.getSystemService(AudioManager::class.java) ?: return
+            if (savedStreamVolume == null)
+                savedStreamVolume = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+            am.setStreamVolume(
+                AudioManager.STREAM_VOICE_CALL,
+                am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
+                0,
+            )
+            core?.let { c ->
+                if (savedPlaybackGainDb == null) savedPlaybackGainDb = c.playbackGainDb
+                c.playbackGainDb = (savedPlaybackGainDb ?: 0f) + BOOST_GAIN_DB
+            }
+            boostApplied = true
+        } catch (_: Exception) {}
+    }
+
+    private fun restoreBoost() {
+        if (!boostApplied) return
+        boostApplied = false
+        try {
+            savedPlaybackGainDb?.let { g -> core?.playbackGainDb = g }
+            val ctx = appCtx
+            val v = savedStreamVolume
+            if (ctx != null && v != null) {
+                ctx.getSystemService(AudioManager::class.java)
+                    ?.setStreamVolume(AudioManager.STREAM_VOICE_CALL, v, 0)
+            }
+        } catch (_: Exception) {}
+        savedPlaybackGainDb = null
+        savedStreamVolume = null
+    }
+
+    /**
+     * VOX for a PTT call: the mic opens when the user actually speaks and closes again after a
+     * short silence, so nobody has to hold the button. The choice is remembered as the default for
+     * the next PTT call. Turning it off re-mutes at once.
+     */
+    fun setPttVox(on: Boolean) {
+        if (ui?.ptt != true) return
+        ui = ui?.copy(vox = on)
+        appCtx?.let {
+            try {
+                Store(it).pttVox = on
+            } catch (_: Exception) {}
+        }
+        if (on) {
+            startVox()
+        } else {
+            stopVox()
+            if (voxOpen) {
+                voxOpen = false
+                setPttTalking(false)
+            }
+        }
+    }
+
+    private fun startVox() {
+        stopVox()
+        val r =
+            object : Runnable {
+                override fun run() {
+                    if (!voxTick()) {
+                        voxRunnable = null
+                        return
+                    }
+                    voxHandler.postDelayed(this, 100)
+                }
+            }
+        voxRunnable = r
+        voxHandler.post(r)
+    }
+
+    private fun stopVox() {
+        voxRunnable?.let { voxHandler.removeCallbacks(it) }
+        voxRunnable = null
+    }
+
+    /**
+     * One VOX sample: the call's measured record level (what the mic is sending, in dBm0 —
+     * Call.getRecordVolume, SDK 5.4.128) against the threshold, with a hang time so word gaps don't
+     * chop the mic. Returns false when VOX no longer applies (call over / VOX off).
+     */
+    private fun voxTick(): Boolean {
+        val u = ui ?: return false
+        if (!u.ptt || !u.vox || u.ended) return false
+        val call = current() ?: return true // not connected yet: keep waiting
+        val level =
+            try {
+                call.recordVolume
+            } catch (_: Exception) {
+                return true
+            }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (level > VOX_THRESHOLD_DBM0) {
+            voxLastAboveAt = now
+            if (!voxOpen) {
+                voxOpen = true
+                setPttTalking(true)
+            }
+        } else if (voxOpen && now - voxLastAboveAt > VOX_HANG_MS) {
+            voxOpen = false
+            setPttTalking(false)
+        }
+        return true
+    }
+
     private fun current(): Call? = core?.currentCall ?: core?.calls?.firstOrNull()
 
     /** Answer the ringing call (CallService calls this after going foreground). */
@@ -591,6 +766,8 @@ object Phone {
 
     fun hangUp() {
         pttTalking = false
+        stopVox()
+        restoreBoost()
         val call = current()
         if (call != null) call.terminate() else ui = ui?.copy(status = "Call ended", ended = true)
         appCtx?.let {

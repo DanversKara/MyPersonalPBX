@@ -137,6 +137,52 @@ class Store(context: Context) {
     val pttOn: Boolean
         get() = pttAllowed && userPtt
 
+    /**
+     * PTT in-call preferences (this phone only, not PBX settings): extra-loud boost and VOX
+     * hands-free. The in-call toggles write these too, so the next PTT call starts the way the last
+     * one was left.
+     */
+    var pttExtraLoud: Boolean
+        get() = prefs.getBoolean("ptt_extra_loud", false)
+        set(v) = prefs.edit().putBoolean("ptt_extra_loud", v).apply()
+
+    var pttVox: Boolean
+        get() = prefs.getBoolean("ptt_vox", false)
+        set(v) = prefs.edit().putBoolean("ptt_vox", v).apply()
+
+    // ---- self-update check (GitHub releases)
+    /** Ask GitHub about new releases at all (Settings > About). On unless turned off. */
+    var updateCheck: Boolean
+        get() = prefs.getBoolean("update_check", true)
+        set(v) = prefs.edit().putBoolean("update_check", v).apply()
+
+    /** Wall-clock time of the last update check (the check runs at most once a day). */
+    var updateLastCheckAt: Long
+        get() = prefs.getLong("update_last_check", 0)
+        set(v) = prefs.edit().putLong("update_last_check", v).apply()
+
+    /** Newest release version known to be newer than this app ("" = none known). */
+    var updateAvailable: String
+        get() = prefs.getString("update_available", "") ?: ""
+        set(v) = prefs.edit().putString("update_available", v).apply()
+
+    /** Direct .apk download URL for [updateAvailable]. */
+    var updateApkUrl: String
+        get() = prefs.getString("update_apk_url", "") ?: ""
+        set(v) = prefs.edit().putString("update_apk_url", v).apply()
+
+    /**
+     * A version the user said "Later" to: don't prompt for it again (the next one still prompts).
+     */
+    var updateDismissed: String
+        get() = prefs.getString("update_dismissed", "") ?: ""
+        set(v) = prefs.edit().putString("update_dismissed", v).apply()
+
+    /** A version a background check already posted a notification for. */
+    var updateNotified: String
+        get() = prefs.getString("update_notified", "") ?: ""
+        set(v) = prefs.edit().putString("update_notified", v).apply()
+
     /** Ring this phone for calls to the extension (the app line). */
     var incomingCalls: Boolean
         get() = prefs.getBoolean("incoming_calls", true)

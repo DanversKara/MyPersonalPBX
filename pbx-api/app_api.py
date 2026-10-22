@@ -471,6 +471,55 @@ def me_settings(request: Request):
     }
 
 
+def me_usage(request: Request):
+    """Plan & usage for the app's "Plan & usage" screen.
+
+    Same numbers the web portal shows: quotas/remaining come from ucp._quota
+    and ucp._left (what billing.usage_panel renders on the Overview), so the
+    app and the portal can never disagree. Unlimited is JSON null — for the
+    quota and for what's left — matching _left returning None there. A quota
+    of 0 means the feature isn't in the plan at all.
+    """
+    me = _need(request)
+    U = M.ucp
+    import entitlements as ent
+
+    def feat(feature):
+        q = U._quota(me, feature)
+        with M.db() as c:
+            used = ent.usage(c, me["id"], feature)
+        return {
+            "quota": None if q == ent.UNLIMITED else q,
+            "used": used,
+            "left": U._left(me, feature),
+        }
+
+    plan_name = None
+    cust = M.billing._cust(me["id"])
+    if cust and cust.get("plan_id"):
+        plan = M.billing._plan(cust["plan_id"])
+        if plan:
+            plan_name = plan["name"]
+    return {
+        "plan": plan_name,
+        "features": {
+            "call_minutes": feat("call_minutes"),
+            "messages": feat("messages"),
+            "voicemail": feat("voicemail"),
+            "recording": feat("recording"),
+            "ivr_menus": feat("ivr_menus"),
+        },
+        "includes": {
+            "calls": U._quota(me, "call_minutes") != 0,
+            "voicemail": U._quota(me, "voicemail") != 0,
+            "messages": U._quota(me, "messages") != 0,
+            "recording": U._quota(me, "recording") != 0,
+            "ivr_menus": U._quota(me, "ivr_menus") != 0,
+            "push_to_talk": bool(me.get("ptt_allowed")),
+        },
+    }
+
+
 def app_line(me) -> str:
     """SIP username of the user's My Phone app line."""
     return "%s-app" % me["sip_username"]
@@ -876,6 +925,7 @@ def install(app_module):
     app.get("/api/v1/me/contacts/{contact_id}")(me_contact_detail)
     app.get("/api/v1/me/timeline")(me_timeline)
     app.get("/api/v1/me/settings")(me_settings)
+    app.get("/api/v1/me/usage")(me_usage)
     app.get("/api/v1/me/devices")(me_devices)
     app.delete("/api/v1/me/devices/{dev_id}")(me_device_delete)
     app.put("/api/v1/me/push")(me_push)

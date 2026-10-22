@@ -64,6 +64,38 @@ data class Overview(
     val locked: Boolean = false,
 )
 
+/** One quota'd feature on the Plan & usage screen. Null quota/left = unlimited. */
+@Serializable
+data class UsageFeature(val quota: Long? = null, val used: Long = 0, val left: Long? = null)
+
+@Serializable
+data class UsageFeatures(
+    val call_minutes: UsageFeature = UsageFeature(),
+    val messages: UsageFeature = UsageFeature(),
+    val voicemail: UsageFeature = UsageFeature(),
+    val recording: UsageFeature = UsageFeature(),
+    val ivr_menus: UsageFeature = UsageFeature(),
+)
+
+/** Which plan features are switched on at all (quota != 0), plus the PTT allow flag. */
+@Serializable
+data class UsageIncludes(
+    val calls: Boolean = false,
+    val voicemail: Boolean = false,
+    val messages: Boolean = false,
+    val recording: Boolean = false,
+    val ivr_menus: Boolean = false,
+    val push_to_talk: Boolean = false,
+)
+
+/** GET /api/v1/me/usage — the same numbers the web portal's usage panel shows. */
+@Serializable
+data class Usage(
+    val plan: String? = null,
+    val features: UsageFeatures = UsageFeatures(),
+    val includes: UsageIncludes = UsageIncludes(),
+)
+
 @Serializable
 data class Call(
     val id: Long,
@@ -337,6 +369,8 @@ class Api(base: String, private val token: String?) {
     suspend fun voicemail(folder: String): Vms = get("/me/voicemail", mapOf("folder" to folder))
 
     suspend fun settings(): Settings = get("/me/settings")
+
+    suspend fun usage(): Usage = get("/me/usage")
 
     /** Phone settings for the built-in phone (edge TLS + SRTP). */
     suspend fun sip(): SipInfo = get("/me/sip")

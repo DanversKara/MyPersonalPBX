@@ -57,6 +57,60 @@ class AppModel(val store: Store, context: android.content.Context) {
     /** A phone-login link opened from the camera, waiting for "Use it?". */
     var pendingSip by mutableStateOf<org.ownpbx.myphone.data.SipLogin?>(null)
 
+    /** A newer release the user hasn't dismissed (AppRoot shows the update dialog). */
+    var updateOffer by mutableStateOf<org.ownpbx.myphone.data.Updates.Offer?>(null)
+        private set
+
+    /** True while an update .apk is downloading. */
+    var updateWorking by mutableStateOf(false)
+        private set
+
+    /**
+     * Look for a newer release (throttled to once a day inside Updates unless [force]) and, if
+     * there is one the user hasn't dismissed, offer it. Run on app start and from Settings' "Check
+     * now". Never disturbs anything else when it fails.
+     */
+    fun checkUpdates(ctx: android.content.Context, force: Boolean = false) {
+        bg.launch {
+            val offer =
+                try {
+                    org.ownpbx.myphone.data.Updates.refresh(ctx, force)
+                } catch (e: Exception) {
+                    null
+                }
+            if (offer != null) updateOffer = offer
+            else if (force)
+                notice = "You're up to date (${org.ownpbx.myphone.data.Updates.installedVersion()})"
+        }
+    }
+
+    /** "Later": don't offer this version again (the next one still prompts). */
+    fun dismissUpdate() {
+        updateOffer?.let { store.updateDismissed = it.version }
+        updateOffer = null
+    }
+
+    /** Download the offered update and hand it to the system installer. */
+    fun startUpdate(ctx: android.content.Context) {
+        val offer = updateOffer ?: return
+        if (!org.ownpbx.myphone.data.Updates.canInstall(ctx)) {
+            notice = "Allow installs from My Phone, then tap Update again"
+            org.ownpbx.myphone.data.Updates.openInstallSettings(ctx)
+            return
+        }
+        updateWorking = true
+        bg.launch {
+            val file = org.ownpbx.myphone.data.Updates.download(ctx, offer)
+            updateWorking = false
+            if (file == null) {
+                notice = "The update couldn't be downloaded — check your connection"
+            } else {
+                updateOffer = null
+                org.ownpbx.myphone.data.Updates.install(ctx, file)
+            }
+        }
+    }
+
     /** A screen asked to call this number (MainScreen handles mic permission + the call). */
     var callRequest by mutableStateOf<String?>(null)
     /**
