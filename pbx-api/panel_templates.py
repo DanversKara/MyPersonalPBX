@@ -21,6 +21,10 @@ body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--
 .nav{background:var(--nav-bg);color:#fff;padding:12px 20px;display:flex;gap:20px;align-items:center}
 .nav a{color:var(--nav-link);text-decoration:none}
 .nav a:hover{color:#fff}
+/* plain content links (contact names, "download vCard", etc.): use the
+   theme link color instead of the browser default blue/purple */
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
 .nav .sp{flex:1}
 .theme-toggle{background:none;border:0;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1}
 .theme-toggle:hover{background:rgba(255,255,255,.14)}
@@ -286,8 +290,9 @@ _PIN_ADMIN_JS = """<script>
 (function(){
   var _fetch = window.fetch;
   var unlocking = null;
+  var statusCsrf = '';   // from /pin/status: pages without a form have no token of their own
   function csrfToken(){
-    return window.CSRF_TOKEN || ((document.querySelector('input[name="csrf_token"]')||{}).value) || '';
+    return window.CSRF_TOKEN || ((document.querySelector('input[name="csrf_token"]')||{}).value) || statusCsrf || '';
   }
   function pinPromptUnlock(){
     if (!unlocking) {
@@ -295,10 +300,19 @@ _PIN_ADMIN_JS = """<script>
         try {
           var pin = prompt('Enter the edit PIN to make this change:');
           if (!pin) throw new Error('cancelled');
+          if (!csrfToken()) await renderPinbar();
           var r = await _fetch('/api/v1/safety/pin/unlock', {method:'POST', credentials:'same-origin',
             headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},
             body: JSON.stringify({pin:pin})});
-          if (!r.ok) throw new Error(r.status===429 ? 'Too many attempts — try again later.' : 'Wrong PIN.');
+          if (!r.ok) {
+            var detail = '';
+            try { detail = ((await r.clone().json()) || {}).detail || ''; } catch(e){}
+            var msg = r.status===429 ? 'Too many attempts — try again later.' :
+                      (r.status===403 && !/csrf/i.test(detail)) ? 'Wrong PIN.' :
+                      "Couldn't unlock (" + (detail || "error " + r.status) + "). Reload the page and try again.";
+            alert(msg);
+            throw new Error(msg);
+          }
           await renderPinbar();
           return true;
         } finally { unlocking = null; }
@@ -326,6 +340,7 @@ _PIN_ADMIN_JS = """<script>
       var r = await _fetch('/api/v1/safety/pin/status', {credentials:'same-origin'});
       if (r.ok) st = await r.json();
     } catch(e){}
+    if (st && st.csrf) statusCsrf = st.csrf;
     if (!st || !st.pin_set) { pinSet = false; pinLocked = false; if (bar) bar.innerHTML = ''; return; }
     pinSet = true; pinLocked = !st.unlocked;
     if (!bar) return;
@@ -374,8 +389,10 @@ def page(title, body, username="", role="", tab=""):
         <a href="/features" class="{feat}">Features</a>
         <a href="/ivr" class="{ivr}">IVR</a>
         <a href="/billing" class="{bill}">Billing</a>
+        <a href="/storefront" class="{store}">Store</a>
         <a href="/email" class="{email}">Email</a>
         <a href="/network" class="{net}">Network</a>
+        <a href="/sso" class="{sso}">Sign-on</a>
         <a href="/e911" class="{e911}">E911</a>
         <a href="/reports" class="{rep}">Reports</a>
         <a href="/api-keys" class="{k}">API Keys</a>
@@ -388,8 +405,10 @@ def page(title, body, username="", role="", tab=""):
             sms="on" if tab == "sms" else "",
             feat="on" if tab == "features" else "",
             bill="on" if tab == "billing" else "",
+            store="on" if tab == "store" else "",
             email="on" if tab == "email" else "",
             net="on" if tab == "network" else "",
+            sso="on" if tab == "sso" else "",
             e911="on" if tab == "e911" else "",
             grp="on" if tab == "groups" else "",
             rep="on" if tab == "reports" else "",
@@ -406,7 +425,8 @@ def page(title, body, username="", role="", tab=""):
                     ("ucp-msg", "/ucp/messages", "Messages"),
                     ("ucp-ivr", "/ucp/ivr", "IVR"),
                     ("ucp-bill", "/ucp/billing", "Billing"),
-                    ("ucp-set", "/ucp/settings", "Settings")]
+                    ("ucp-set", "/ucp/settings", "Settings"),
+                    ("ucp-app", "/ucp/app", "App")]
         tabs = '<div class="tabs">' + "".join(
             f'<a href="{h}" class="{"on" if k == tab else ""}">{label}</a>'
             for k, h, label in ucp_tabs) + "</div>"

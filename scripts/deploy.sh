@@ -42,12 +42,29 @@ fi
 mkdir -p /var/spool/asterisk/recording
 chown "$PBX_USER" /var/spool/asterisk/recording
 
+# --- Python packages added after install.sh (existing servers get them here) ---
+# segno (pure Python, BSD): QR codes for app pairing. Optional: without it
+# the App page just shows the code as text.
+if ! /opt/pbx/api-venv/bin/python -c "import segno" 2>/dev/null; then
+    /opt/pbx/api-venv/bin/pip install -q segno || echo "NOTE: couldn't install segno; pairing QR codes stay off."
+fi
+
 # --- Code ---
 mkdir -p /opt/pbx/pbx-brain /opt/pbx/pbx-api /opt/pbx/config-gen
 cp "$SRC_DIR/pbx-brain/"*.py /opt/pbx/pbx-brain/
 cp "$SRC_DIR/pbx-api/"*.py /opt/pbx/pbx-api/
+# The one shared normalizer (shared/phone.py) is deployed flat into both
+# service dirs so `import phone` works everywhere without path hacks
+# (cp takes a single destination: one line per dir).
+cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-brain/
+cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-api/
 cp -r "$SRC_DIR/config-gen/"* /opt/pbx/config-gen/
 cp "$SRC_DIR/db/schema.sql" /opt/pbx/
+# Custom voice prompts (cell-leg "press 1" screening, etc.): Asterisk plays
+# them via sound:<name>, so they live in its sounds dir, world-readable.
+mkdir -p /var/lib/asterisk/sounds
+cp "$SRC_DIR/pbx-brain/sounds/"*.wav /var/lib/asterisk/sounds/
+chmod 644 /var/lib/asterisk/sounds/pbx-*.wav
 mkdir -p /opt/pbx/db
 cp "$SRC_DIR/db/schema.sql" /opt/pbx/db/
 # Code, venvs and helper scripts are root-owned and NOT writable by the pbx
@@ -99,6 +116,14 @@ chmod -R go-w /opt/pbx
 cp "$SRC_DIR/scripts/sudoers-pbx-apply-config" /etc/sudoers.d/pbx-apply-config
 chmod 440 /etc/sudoers.d/pbx-apply-config
 visudo -cf /etc/sudoers.d/pbx-apply-config
+# `pbx-update` shortcut: pull + deploy + edge in one command (scripts/update.sh).
+ln -sf "$SRC_DIR/scripts/update.sh" /usr/local/bin/pbx-update
+# Login notice when GitHub has a newer version (tells only, never updates).
+sed "s|@@SRC_DIR@@|$SRC_DIR|g" "$SRC_DIR/scripts/update-check.sh" > /etc/profile.d/pbx-update-check.sh
+chmod 644 /etc/profile.d/pbx-update-check.sh
+# Shells that don't read the login files (Proxmox console, `pct enter`).
+grep -q pbx-update-check /etc/bash.bashrc 2>/dev/null || \
+    echo '[ -r /etc/profile.d/pbx-update-check.sh ] && . /etc/profile.d/pbx-update-check.sh  # own-pbx update notice' >> /etc/bash.bashrc
 systemctl daemon-reload
 systemctl enable pbx-brain pbx-api pbx-agi
 # restart (not just start) so already-running services pick up new code

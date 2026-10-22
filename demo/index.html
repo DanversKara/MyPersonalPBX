@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>own-pbx — live demo</title>
+<style>
+:root{
+  --bg:#0d0d12; --panel:#17171f; --card:#1d1d28; --inset:#13131b;
+  --border:#282833; --border2:#33333f;
+  --text:#e9e9f0; --muted:#9a9aad; --faint:#6f6f82;
+  --accent:#f96a00; --accent-hi:#ff7d1f;
+  --green:#3fb96f; --green-bg:rgba(46,160,90,.16);
+  --red:#e5534b; --amber:#d9a441; --amber-bg:rgba(217,164,65,.12);
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#6ea8fe}
+button{font:inherit;cursor:pointer}
+.hidden{display:none!important}
+
+/* ---------- top gradient bar (matches the panel) ---------- */
+.topbar{background:linear-gradient(90deg,#ffd60a 0%,#ffb300 45%,#ff8a00 100%);height:46px;display:flex;align-items:center;padding:0 14px;gap:10px}
+.topbar .mark{display:flex;align-items:center;gap:8px;color:#fff;font-weight:800;font-size:19px;letter-spacing:.2px;text-shadow:0 1px 2px rgba(0,0,0,.25)}
+.topbar .mark .pin{width:22px;height:22px;border-radius:50%;background:#2b6cb0;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px}
+.topbar .mark small{display:block;font-size:8.5px;font-weight:600;letter-spacing:.4px;opacity:.9;line-height:1}
+.topbar .who{margin-left:auto;color:#fff;font-size:14px;display:flex;gap:14px;align-items:center;text-shadow:0 1px 2px rgba(0,0,0,.25)}
+.topbar .who button{background:none;border:none;color:#fff;font:inherit;padding:0}
+.topbar .who button:hover{text-decoration:underline}
+
+/* ---------- layout ---------- */
+.wrap{max-width:1100px;margin:0 auto;padding:22px 16px 30px}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.pills button{background:var(--card);color:#d8d8e2;border:1px solid transparent;border-radius:7px;padding:8px 15px;font-size:14.5px}
+.pills button:hover{border-color:var(--border2)}
+.pills button.active{background:var(--accent);color:#fff;font-weight:600}
+.pills.sub{background:none}
+.pills.sub button{background:none;color:var(--muted);border-radius:0;padding:6px 10px;border-bottom:2px solid transparent}
+.pills.sub button.active{background:none;color:var(--accent);border-bottom-color:var(--accent)}
+
+.banner{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:11px 16px;margin:14px 0 16px;font-size:14.5px}
+.banner.ok{border-left-color:var(--green)}
+
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:26px 28px}
+.panel h1,.panel h2.title{font-size:24px;margin:0 0 6px;font-weight:700}
+.panel h2{font-size:20px;margin:26px 0 10px;font-weight:700}
+.panel h2:first-child{margin-top:0}
+.panel h3{font-size:16.5px;margin:0 0 8px;font-weight:700}
+.lede{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.cols3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+@media(max-width:900px){.cols,.cols3{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px}
+.card h3{margin-top:0}
+
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:6px 0 4px}
+th{background:#22222f;text-align:left;padding:9px 10px;font-size:14px;color:#fff}
+td{padding:9px 10px;border-bottom:1px solid var(--border);color:#d3d3de;vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.dim,th.dim{color:var(--muted)}
+.empty{color:var(--muted);font-style:italic;padding:10px}
+
+.btn{background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:7px;padding:7px 16px;font-size:14px;font-weight:600}
+.btn:hover{background:var(--accent-hi)}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn.ghost:hover{background:rgba(249,106,0,.1)}
+.btn.danger{background:transparent;color:#ff8a80;border-color:rgba(229,83,75,.55)}
+.btn.danger:hover{background:rgba(229,83,75,.12)}
+.btn.sm{padding:4px 12px;font-size:13.5px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.linklike{background:none;border:none;color:#6ea8fe;padding:0;font-size:14px}
+.linklike:hover{text-decoration:underline}
+.danger-text{color:#ff8a80;background:none;border:none;padding:0;font-size:14px;cursor:pointer}
+.danger-text:hover{text-decoration:underline}
+
+label{display:block;font-size:14px;margin:12px 0 5px;color:#dcdce6}
+label:first-child{margin-top:0}
+input[type=text],input[type=email],input[type=password],input[type=number],select,textarea{
+  width:100%;background:var(--inset);border:1px solid var(--border2);border-radius:7px;color:var(--text);
+  padding:8px 11px;font:inherit;font-size:14.5px}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+.hint{color:var(--muted);font-size:12.5px;margin-top:6px;line-height:1.45}
+.check{display:flex;gap:9px;align-items:flex-start;margin:10px 0;font-size:14.5px}
+.check input{margin-top:3px;width:16px;height:16px;accent-color:var(--accent)}
+fieldset{border:none;padding:0;margin:0}
+
+.badge{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;font-weight:600;vertical-align:middle}
+.badge.green{background:var(--green-bg);color:#4ade80}
+.badge.grey{background:#2a2a38;color:var(--muted)}
+.badge.red{background:rgba(229,83,75,.16);color:#ff8a80}
+.badge.amber{background:var(--amber-bg);color:var(--amber)}
+.tagchip{display:inline-block;background:#2a2a38;border-radius:5px;padding:0 7px;font-size:12.5px;color:var(--muted)}
+
+.alert{border-radius:8px;padding:13px 16px;font-size:14px;margin:12px 0;line-height:1.5}
+.alert.red{background:rgba(229,83,75,.13);color:#ffb4ab}
+.alert.amber{background:var(--amber-bg);color:#ecd29a}
+.alert.green{background:var(--green-bg);color:#a7e8c0}
+.alert b{color:#fff}
+
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin:16px 0 6px}
+@media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 10px;text-align:center}
+.stat .n{font-size:27px;font-weight:700}
+.stat .l{color:var(--muted);font-size:12.5px;margin-top:2px}
+
+.statusbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;font-size:14.5px}
+.statusbar .sep{color:var(--faint)}
+
+.footer{text-align:center;color:var(--faint);font-size:12.5px;padding:26px 10px 34px}
+
+/* ---------- login ---------- */
+.loginwrap{min-height:calc(100vh - 46px);display:flex;align-items:flex-start;justify-content:center;padding:56px 16px}
+.logincard{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:34px 38px;width:430px;max-width:100%;text-align:center}
+.logincard .biglogo{font-size:30px;font-weight:800}
+.logincard .biglogo span{color:#60a5fa}
+.logincard .slogan{color:var(--accent);font-size:13px;margin-top:2px}
+.logincard p{color:var(--muted);font-size:14px}
+.logincard .btn{width:100%;margin-top:10px;padding:11px}
+.logincard .alt{margin-top:16px;font-size:13.5px;color:var(--muted)}
+
+/* ---------- modal / toast ---------- */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal .box{background:var(--panel);border:1px solid var(--border2);border-radius:12px;padding:24px 26px;width:360px;max-width:92vw}
+.modal h3{margin:0 0 6px}
+.modal p{color:var(--muted);font-size:14px}
+.modal .row{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#22222f;border:1px solid var(--border2);color:var(--text);padding:10px 18px;border-radius:8px;font-size:14px;z-index:60;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+
+/* ---------- portal bits ---------- */
+.subtabs{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px}
+.statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:14px 0}
+@media(max-width:900px){.statgrid{grid-template-columns:repeat(2,1fr)}}
+.msglist{display:grid;grid-template-columns:250px 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+@media(max-width:700px){.msglist{grid-template-columns:1fr}}
+.msglist .convs{background:var(--inset);border-right:1px solid var(--border);padding:10px}
+.msglist .conv{padding:9px 10px;border-radius:7px;cursor:pointer}
+.msglist .conv.active{background:#2a2a38}
+.msglist .thread{padding:16px}
+.bubble{background:#2a2a38;border-radius:10px;padding:9px 13px;display:inline-block;max-width:80%}
+.meter{height:6px;background:#2a2a38;border-radius:3px;overflow:hidden;vertical-align:middle;display:inline-block;width:110px}
+.meter i{display:block;height:100%;background:var(--accent)}
+.plancard .price{font-size:27px;font-weight:800}
+.plancard ul{margin:8px 0;padding-left:20px;color:#d3d3de;font-size:14.5px}
+code{background:var(--inset);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:13px}
+pre{background:var(--inset);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;font-size:13px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="mark"><span class="pin">◎</span><span>PBX<small>new phone, who dis?</small></span></div>
+  <div class="who" id="who"></div>
+</div>
+
+<div id="login" class="loginwrap">
+  <div class="logincard">
+    <div class="biglogo">🎧 PBX</div>
+    <div class="slogan">new phone, who dis?</div>
+    <h2 style="margin:18px 0 4px">LOGON</h2>
+    <p>contact support at ext 100 if you need login help</p>
+    <label style="text-align:left">Username</label>
+    <input type="text" id="lu" value="admin">
+    <label style="text-align:left">Password</label>
+    <input type="password" id="lp" value="demo">
+    <button class="btn" onclick="doLogin()">Sign in</button>
+    <div class="alt">This is a <b>live demo</b> with made-up data — nothing is real and nothing is saved.<br><br>
+    <button class="linklike" onclick="quickLogin('admin')">Look around as the admin →</button><br>
+    <button class="linklike" onclick="quickLogin('user')">Look around as a phone user →</button></div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="wrap">
+    <nav class="pills" id="mainnav"></nav>
+    <nav class="pills sub hidden" id="subnav"></nav>
+    <div id="pinbanner"></div>
+    <main class="panel" id="view"></main>
+  </div>
+  <div class="footer">own-pbx demo · all names, numbers and data on this page are fictional · GPL-2.0-or-later</div>
+</div>
+
+<div id="modal" class="hidden"></div>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+"use strict";
+/* ================= fictional demo data ================= */
+const DID1 = "(555) 019-2837", DID2 = "(555) 019-2841";
+const state = { role: null, unlocked: false, adminPage: "dashboard", userPage: "overview", msgConv: 0 };
+const USERS = [
+  { u: "admin", role: "admin", ext: "—",    name: "Administrator", on: true },
+  { u: "alex",  role: "user",  ext: "101",  name: "Alex Rivera",   on: true },
+  { u: "sam",   role: "user",  ext: "102",  name: "Sam Chen",      on: true },
+  { u: "front", role: "user",  ext: "100",  name: "Front Desk",    on: true },
+  { u: "esp",   role: "user",  ext: "103",  name: "ESP32 Box",     on: true },
+  { u: "guest", role: "user",  ext: "104",  name: "Guest Room",    on: false },
+];
+const CDR = [
+  { from: "101", to: "102", dir: "ptt",      st: "ANSWERED", dur: "41s", bill: "41s", when: "Today 10:51 AM" },
+  { from: "101", to: "102", dir: "ptt",      st: "ANSWERED", dur: "4s",  bill: "4s",  when: "Today 10:51 AM" },
+  { from: "101", to: "8002553700", dir: "outbound", st: "ANSWERED", dur: "9s", bill: "9s", when: "Today 10:47 AM" },
+  { from: DID1, to: "100", dir: "inbound",   st: "ANSWERED", dur: "2m 12s", bill: "2m 12s", when: "Today 9:15 AM" },
+  { from: "102", to: DID2, dir: "outbound",  st: "NO ANSWER", dur: "0s", bill: "0s", when: "Yesterday 6:02 PM" },
+];
+const ACTIVITY = [
+  { when: "4s ago",  ev: "signins.create",        by: "admin", det: "Signed in" },
+  { when: "33m ago", ev: "ucp.messages.delete",   by: "101",   det: "3 rows" },
+  { when: "36m ago", ev: "invites.delete",        by: "admin", det: "id=8" },
+  { when: "36m ago", ev: "cdr.delete",            by: "admin", det: "29 rows" },
+  { when: "38m ago", ev: "billing.access.save",   by: "admin", det: "5 users" },
+];
+const CONTACTS = [
+  { name: "Alex Rivera", num: "101", org: "Family", note: "" },
+  { name: "Sam Chen", num: "102", org: "Family", note: "Prefers texts" },
+  { name: "Front Desk", num: "100", org: "House", note: "" },
+  { name: "Pizza Place", num: "(555) 014-2288", org: "Food", note: "Friday nights" },
+  { name: "School Office", num: "(555) 011-9042", org: "", note: "" },
+];
+const CONVS = [
+  { with: "Sam · 102", msgs: [ { who: "Sam", text: "done got updated", when: "12:04 AM", mine: false } ] },
+  { with: "Alex · 101", msgs: [ { who: "Alex", text: "hi", when: "10:47 PM", mine: false }, { who: "Me", text: "sup", when: "10:48 PM", mine: true }, { who: "Alex", text: "test", when: "10:54 PM", mine: false } ] },
+];
+
+/* ================= helpers ================= */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.remove("hidden"); setTimeout(() => t.classList.add("hidden"), 2200); }
+function saved() { toast("Saved (demo — nothing is stored)"); }
+function tbl(cols, rows, emptyMsg) {
+  let h = "<table><tr>" + cols.map((c) => `<th>${c}</th>`).join("") + "</tr>";
+  if (!rows.length) h += `<tr><td colspan="${cols.length}" class="empty">${emptyMsg || "Nothing here yet."}</td></tr>`;
+  h += rows.join("") + "</table>";
+  return h;
+}
+const row = (cells) => "<tr>" + cells.map((c) => `<td>${c}</td>`).join("") + "</tr>";
+const ghost = (t, dis) => `<button class="btn ghost sm" ${dis ? "disabled" : ""} onclick="saved()">${t}</button>`;
+const btn = (t) => `<button class="btn sm" onclick="saved()">${t}</button>`;
+const danger = (t) => `<button class="btn danger sm" onclick="saved()">${t}</button>`;
+const badge = (t, k) => `<span class="badge ${k || "green"}">${t}</span>`;
+function modal(html) { $("modal").innerHTML = `<div class="modal"><div class="box">${html}</div></div>`; $("modal").classList.remove("hidden"); }
+function closeModal() { $("modal").classList.add("hidden"); $("modal").innerHTML = ""; }
+function pinModal() {
+  modal(`<h3>Unlock edits</h3><p>Enter the admin PIN to unlock saving and changes. In this demo, any 4+ digit PIN works — try <b>1234</b>.</p>
+  <label>PIN</label><input type="password" id="pininput" inputmode="numeric" placeholder="••••">
+  <div class="row"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" onclick="tryPin()">Unlock</button></div>`);
+  $("pininput").focus();
+}
+function tryPin() {
+  const v = $("pininput").value.trim();
+  if (!/^\d{4,12}$/.test(v)) { toast("PIN must be 4–12 digits (demo hint: 1234)"); return; }
+  state.unlocked = true; closeModal(); renderPin(); toast("Edits unlocked for this session");
+}
+function renderPin() {
+  $("pinbanner").innerHTML = state.role === "admin"
+    ? (state.unlocked
+      ? `<div class="banner ok">Edits unlocked — changes would save now. <button class="btn ghost sm" onclick="state.unlocked=false;renderPin()">Lock again</button></div>`
+      : `<div class="banner">Edits locked — a PIN is needed to save or change anything. <button class="btn sm" onclick="pinModal()">Unlock with PIN</button></div>`)
+    : "";
+}
+
+/* ================= shells / router ================= */
+const ADMIN_NAV = [
+  ["dashboard","Dashboard"],["logins","Logins"],["invites","Invites"],["trunks","Trunks"],["routes","Routes"],
+  ["ringgroups","Ring groups"],["cdr","CDR"],["voicemail","Voicemail"],["recordings","Recordings"],["messages","Messages"],
+  ["sms","SMS"],["features","Features"],["ivr","IVR"],["billing","Billing"],["store","Store"],["email","Email"],
+  ["network","Network"],["signon","Sign-on"],["e911","E911"],["reports","Reports"],["apikeys","API Keys"],
+  ["branding","Branding"],["myphone","My Phone"],
+];
+const USER_NAV = [
+  ["overview","Overview"],["calls","Calls"],["voicemail","Voicemail"],["recordings","Recordings"],["messages","Messages"],
+  ["ivr","IVR"],["billing","Billing"],["settings","Settings"],["app","App"],
+];
+const USER_SUB = [["overview","Overview"],["calls","Calls"],["voicemail","Voicemail"],["recordings","Recordings"],["messages","Messages"],["contacts","Contacts"],["ivr","IVR"],["billing","Billing"],["settings","Settings"],["app","App"]];
+
+function doLogin() { quickLogin($("lu").value.trim() === "alex" ? "user" : "admin"); }
+function quickLogin(role) {
+  state.role = role; state.unlocked = false;
+  $("login").classList.add("hidden"); $("app").classList.remove("hidden");
+  $("who").innerHTML = role === "admin"
+    ? `🌙 <span>admin (admin)</span><button onclick="logout()">Logout</button>`
+    : `🌙 <span>101 (user)</span><button onclick="logout()">Logout</button>`;
+  renderNav(); renderPin(); renderView();
+  window.scrollTo(0, 0);
+}
+function logout() {
+  state.role = null;
+  $("app").classList.add("hidden"); $("login").classList.remove("hidden");
+  $("who").innerHTML = "";
+}
+function renderNav() {
+  const nav = state.role === "admin" ? ADMIN_NAV : USER_NAV;
+  const cur = state.role === "admin" ? state.adminPage : state.userPage;
+  $("mainnav").innerHTML = nav.map(([k, t]) =>
+    `<button class="${k === cur ? "active" : ""}" onclick="go('${k}')">${t}</button>`).join("");
+  const sub = $("subnav");
+  if (state.role === "user") {
+    sub.classList.remove("hidden");
+    sub.innerHTML = USER_SUB.map(([k, t]) =>
+      `<button class="${k === state.userPage ? "active" : ""}" onclick="go('${k}')">${t}</button>`).join("");
+  } else sub.classList.add("hidden");
+}
+function go(page) {
+  if (state.role === "admin") state.adminPage = page; else state.userPage = page;
+  renderNav(); renderView(); window.scrollTo(0, 0);
+}
+function renderView() {
+  const fn = state.role === "admin" ? ADMIN_VIEWS[state.adminPage] : USER_VIEWS[state.userPage];
+  $("view").innerHTML = fn ? fn() : "<p>Coming soon.</p>";
+}
+</script>
+<script>
+/* ================= admin views (modeled on the real panel) ================= */
+let INVITES = [ { ext: "105", sip: "user105", mail: "—", created: "Today 5:21 AM", exp: "in 7 days", st: "used" } ];
+function genInvite() {
+  const ext = String(106 + INVITES.length);
+  INVITES.unshift({ ext, sip: "user" + ext, mail: $("invmail").value || "—", created: "just now", exp: "in 7 days", st: "waiting" });
+  renderView(); toast("Invite created — the link is shown once (demo)");
+}
+let APIKEYS = [
+  { key: "pbx_live_…a91f", name: "app", login: "101", created: "Oct 13, 1:24 AM", used: "—", active: true },
+  { key: "pbx_live_…c204", name: "ESP32-Box-MSG_TOKEN", login: "103", created: "Oct 7, 2:55 PM", used: "—", active: true },
+  { key: "pbx_live_…77bd", name: "edge", login: "admin", created: "Oct 6, 10:44 PM", used: "Oct 6, 10:52 PM", active: true },
+];
+function createKey() {
+  modal(`<h3>Your new API key</h3><p>This is the only time the full key is shown. Copy it now.</p>
+  <pre>pbx_live_demo_${Math.random().toString(36).slice(2, 10)}fictional</pre>
+  <div class="row"><button class="btn" onclick="closeModal()">Done</button></div>`);
+}
+
+const ADMIN_VIEWS = {
+/* ---- Dashboard ---- */
+dashboard: () => `
+  <h2 class="title">Dashboard</h2>
+  <div class="statusbar"><span><b>Status:</b> <span style="color:var(--green)">Active</span></span><span class="sep">·</span>
+  <span>Safety lock: <b>off</b></span> ${btn("Kill switch")} ${btn("Lock admin")} ${btn("Lock everything")}
+  <span class="sep">·</span><span>Edit PIN: <b>${state.unlocked ? "unlocked" : "locked"}</b></span>
+  ${state.unlocked ? ghost("Change PIN") : `<button class="btn sm" onclick="pinModal()">Unlock with PIN</button>`}</div>
+  <div class="stats">
+    <div class="stat"><div class="n">0</div><div class="l">live calls</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">devices online</div></div>
+    <div class="stat"><div class="n">1</div><div class="l">sign-ins, 24h</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">failed, 24h</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">IPs blocked, 24h</div></div>
+  </div>
+  <h2>Live calls</h2>
+  ${tbl(["From","To","Type","State","Duration"], [], "No calls right now")}
+  <h2>Signed in now <span class="lede">3 internal · 1 external</span></h2>
+  ${tbl(["Device","Ext","IP address","Where","Connection","Status","RTT"], [
+    row(["Alex's phone <span class='tagchip'>My Phone app</span>","101","198.51.100.23", badge("External","amber"),"internet, direct","<span style='color:var(--green)'>Online</span>","92.8 ms"]),
+    row(["Android Phone <span class='tagchip'>My Phone app</span>","101","192.168.1.54:35838", badge("Internal"),"office network, direct","<span style='color:var(--green)'>Online</span>","124.2 ms"]),
+    row(["Desk Phone","100","192.168.1.57:5060", badge("Internal"),"office network, direct","<span style='color:var(--green)'>Online</span>","28.5 ms"]),
+    row(["ESP32 Box <span class='tagchip'>My Phone app</span>","103","192.168.1.50:51218", badge("Internal"),"office network, direct","<span style='color:var(--green)'>Online</span>","37.9 ms"]),
+  ])}
+  <h2>Recent sign-ins <span class="lede">last 24 hours; older entries are removed automatically</span></h2>
+  <p>${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  ${tbl(["","Login","IP","Result","When"], [ row(["<input type='checkbox'>","admin","192.168.1.63","<span style='color:var(--green)'>Signed in</span>","4s ago"]) ])}
+  <h2>Activity <span class="lede">security events and changes, last 24 hours</span></h2>
+  ${tbl(["When","Event","IP","By","Details"], ACTIVITY.map(a => row([a.when, a.ev, "", a.by, a.det])))}`,
+
+/* ---- Logins ---- */
+logins: () => `
+  <h2 class="title">Logins / Extensions</h2>
+  ${tbl(["Username","Role","Ext","SIP user","Name","Enabled",""], USERS.map(u => row([
+    u.u, u.role, u.ext, u.role === "admin" ? "—" : "sip" + u.ext, u.name, u.on ? "yes" : "no",
+    ghost("Edit") + (u.role === "admin" ? "" : " " + danger("Delete")) ])))}
+  <p>${btn("Add login")}</p>`,
+
+/* ---- Invites ---- */
+invites: () => `
+  <h2 class="title">User invites</h2>
+  <div class="card"><h3>Generate invite</h3>
+    <label>Link expires in</label><select style="max-width:160px"><option>7 days</option><option>1 day</option><option>30 days</option></select>
+    <label>Email it to (optional)</label><input type="email" id="invmail" placeholder="newuser@example.com" style="max-width:340px">
+    <p class="hint">Leave email blank to just copy the link yourself. The extension, SIP username and SIP secret are auto-generated. The invite link is shown once, right after generation.</p>
+    <p><button class="btn" onclick="genInvite()">Generate invite</button></p>
+  </div>
+  <h2>Invites</h2>
+  ${tbl(["Ext","SIP user","Emailed to","Created","Expires","Status","Actions"], INVITES.map(i =>
+    row([i.ext, i.sip, i.mail, i.created, i.exp, badge(i.st, i.st === "used" ? "grey" : "amber"), danger("Delete")])))}`,
+
+/* ---- Trunks ---- */
+trunks: () => `
+  <h2 class="title">Trunks</h2>
+  ${tbl(["Name","Registrar","Username","Enabled",""], [
+    row(["voipms","newyork.voip.ms","demo_account","yes", ghost("Edit")]) ])}
+  <p>${btn("Add trunk")}</p>`,
+
+/* ---- Routes ---- */
+routes: () => `
+  <h2 class="title">Inbound Routes</h2>
+  ${tbl(["DID","Destination","Ring time","Enabled",""], [DID1, DID2, "(555) 019-2855", "(555) 019-2863"].map(d =>
+    row([d, "Ring group: MainLine", "30s", "yes", ghost("Edit")])))}
+  <p>${btn("Add DID route")}</p>
+  <h2>Outbound Routes</h2>
+  ${tbl(["Name","Patterns","Trunk","Priority","Enabled"], [
+    row(["voipms-out", '["1NXXNXXXXXX", "NXXNXXXXXX", "011."]', "voipms", "10", "yes"]) ])}
+  <h2>Outside line prefix</h2>
+  <p class="lede">For offices used to "dial 9 for an outside line". The prefix is removed before the call goes out, so call history and caller ID show the real number. <b>911 always works without a prefix</b> (9-911 also works, see E911). Desk phones may need their dial plan updated; softphones need no changes.</p>
+  <div class="card"><label>Mode</label>
+    <select style="max-width:420px"><option>Off — dial numbers directly (default)</option><option>Optional</option><option>Required</option></select>
+    <label>Prefix digit</label><select style="max-width:80px"><option>9</option><option>8</option></select>
+    <p>${btn("Save")}</p></div>
+  <p class="hint">"Required" means numbers dialed without the prefix won't connect. "Optional" is the safest way to introduce a prefix.</p>`,
+
+/* ---- Ring groups ---- */
+ringgroups: () => `
+  <h2 class="title">Ring groups</h2>
+  <p class="lede">Ring several phones at once — the first to answer gets the call. Point a phone number at a group on the <a href="#" onclick="go('routes');return false">Routes</a> page, or give the group an internal number so phones can dial it.</p>
+  ${tbl(["Name","Internal number","Members (in order)","Ring time","No answer","Phone numbers","Enabled",""], [
+    row(["<b>MainLine</b>","30","100, 101, 102","30s","Voicemail: one member's box (Android Phone)", DID1 + ", " + DID2, "yes", ghost("Edit")]) ])}
+  <p>${btn("Add ring group")}</p>`,
+
+/* ---- CDR ---- */
+cdr: () => `
+  <h2 class="title">Call Detail Records</h2>
+  <p class="lede">${CDR.length} records. &nbsp;${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  ${tbl(["","From","To","Dir","Status","Dur","Bill","Time"], CDR.map(c =>
+    row(["<input type='checkbox'>", esc(c.from), esc(c.to), c.dir, c.st, c.dur, c.bill, c.when])))}
+  <p class="hint">Records older than 90 days are removed automatically. Deleting records also removes them from users' call history. Recordings and voicemail are kept.</p>`,
+
+/* ---- Voicemail (admin) ---- */
+voicemail: () => `
+  <h2 class="title">Voicemail Messages</h2>
+  <p>${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  ${tbl(["","Box","Caller","Length","Folder","Received","Play"], [], "No messages")}`,
+
+/* ---- Recordings (admin) ---- */
+recordings: () => `
+  <h2 class="title">Recording settings</h2>
+  <div class="cols">
+    <div class="card"><h3>Admin call recording ${badge("On")}</h3>
+      <div class="alert amber">Recording phone calls without the consent of everyone on the call is illegal in some US states ("two-party" or all-party consent states, such as California) and in other countries, and may break workplace policies or union agreements. Admin recording is silent to the people on the call unless the announcement below is turned on. Check federal, state and local laws, and your employer's rules, before turning it on.</div>
+      <p class="hint">When on, calls of extensions with "Admin call recording" ticked on the Logins page are recorded. Users' own "Record my calls" is separate (their plan + their own acknowledgement).</p>
+      <p>${danger("Turn admin recording off")}</p></div>
+    <div class="card"><h3>"This call may be recorded" announcement ${badge("Off","grey")}</h3>
+      <p class="hint">Plays to both people when a call starts being recorded — the usual way to let callers know. Upload your own message (WAV or MP3, up to 30 seconds); without one, a short beep plays.</p>
+      <div class="check"><input type="checkbox" id="ann"><span>Play the announcement on recorded calls</span></div>
+      <p>${ghost("Save")}</p>
+      <label>Announcement file <span class="dim">(none — beep)</span></label>
+      <input type="file"><p>${ghost("Upload")}</p></div>
+  </div>
+  <h2>Call Recordings</h2>
+  <p>${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  ${tbl(["","System","Exten","Dir","Peer","Length","Time","Play"], [], "No recordings")}
+  <p class="hint">Deleting a recording keeps the call in the call history.</p>`,
+
+/* ---- Messages (admin) ---- */
+messages: () => `
+  <h2 class="title">Text Messages</h2>
+  <p>${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  ${tbl(["","From","To","Message","Sent"], [
+    row(["<input type='checkbox'>","102","101","done got updated","Today 12:04 AM"]),
+    row(["<input type='checkbox'>","101","102","test","Yesterday 10:54 PM"]),
+    row(["<input type='checkbox'>","101","102","hi","Yesterday 10:47 PM"]),
+    row(["<input type='checkbox'>","102","101","sup","Yesterday 10:42 PM"]) ])}
+  <p class="hint">Deleting here removes the message for both people.</p>`,
+
+/* ---- SMS ---- */
+sms: () => `
+  <h2 class="title">SMS / MMS (voip.ms)</h2>
+  <p class="lede">Inbound: voip.ms URL Callback → this PBX → softphone (SIP MESSAGE) + My Phone + ESP. Outbound: ext → external number → voip.ms API.</p>
+  <h3>DID routes (all 4 DIDs)</h3>
+  ${tbl(["DID","To extension","Label","",""], [DID1, DID2, "(555) 019-2855", "(555) 019-2863"].map((d, i) =>
+    row([d, ["101","101","100","103"][i], ["Main","Main","Fax line","Lobby box"][i], ghost("Edit"), danger("Delete")])))}
+  <p>${btn("Add DID route")}</p>
+  <h2>Webhook URL (paste into voip.ms per DID)</h2>
+  <pre>https://phone.example.com/hooks/voipms-sms?token=demo-token-fictional&amp;to={TO}&amp;from={FROM}&amp;message={MESSAGE}&amp;id={ID}&amp;date={TIMESTAMP}</pre>
+  <p class="hint">In voip.ms: DID Numbers &gt; Manage DIDs &gt; Edit &gt; Message Service (SMS/MMS) &gt; enable, paste URL, choose E.164, Apply.</p>
+  <h2>voip.ms API</h2>
+  <div class="card">
+    <label>API username (voip.ms login email)</label><input type="text" value="you@example.com" style="max-width:420px">
+    <label>API password</label><input type="password" placeholder="(set)" style="max-width:320px">
+    <label>Webhook token (random string in URL)</label><input type="text" value="demo-token-fictional" style="max-width:420px">
+    <label>Default DID for outbound (digits)</label><input type="text" value="5550192837" style="max-width:220px">
+    <p>${btn("Save")}</p>
+    <p class="hint">API password is the voip.ms <b>API Password</b> (Main Menu &gt; SOAP and REST/JSON API), not your login password.</p>
+  </div>`,
+};
+</script>
+<script>
+/* ================= admin views, part 2 ================= */
+Object.assign(ADMIN_VIEWS, {
+/* ---- Features ---- */
+features: () => `
+  <h2 class="title">Feature codes</h2>
+  <p class="lede">Star codes users can dial from their phones (e.g. *97 for voicemail). Turn each code on/off, set who may use it by default, and override per user. <b>By plan:</b> a user gets the code when their plan includes it, or, without a plan, when it's in the "no plan" star codes (Billing → User access). Admins always can.</p>
+  ${tbl(["Code","Name","Enabled","Default access","User overrides",""], [
+    ["*555","ChanSpy listen-in","Listen in on another extension's active call (*555&lt;ext&gt;)","Admins only","3"],
+    ["*60","Conference room","Join conference room 60","By plan","4"],
+    ["*70","DISA","Outside dial tone after entering a PIN","By plan","4"],
+    ["*86","Block caller (mid-call)","Press *86 during a call someone made to you: the call ends and the caller is added to your block list. Only works from your own phone.","By plan","4"],
+    ["*97","Voicemail check","Listen to your voicemail messages","By plan","4"],
+    ["*98","Record greeting","Record your voicemail greeting","By plan","4"],
+  ].map(r => row([`<b>${r[0]}</b>`, `<b>${r[1]}</b><br><span class="dim" style="color:var(--muted);font-size:13px">${r[2]}</span>`, "Yes", r[3], r[4], ghost("Edit")])))}`,
+
+/* ---- IVR (admin) ---- */
+ivr: () => `
+  <h2 class="title">IVR menus</h2>
+  <p class="lede">System menus are yours to point inbound numbers at. User menus are built by users in their control panel. No inbound numbers use a menu yet — set one under Routes.</p>
+  ${tbl(["Menu","Owner","Keys","State",""], [
+    row(["<b>test</b><br><span style='color:var(--muted);font-size:13px'>dial 7777</span>", "system", "1 → ext 101 · 2 → ring group MainLine · 0 → voicemail", badge("On"), ghost("Edit")]) ])}
+  <p>${btn("New system menu")}</p>
+  <h2>User access</h2>
+  <p class="lede">How many menus each user may create. 0 turns IVR off for that user; their menus are kept but stop answering.</p>
+  <p>Default for users without their own limit: <input type="text" value="1" style="width:70px;display:inline-block"> ${ghost("Save default")}</p>
+  ${tbl(["User","Ext","Menus","Limit (empty = default)",""], USERS.filter(u => u.role === "user").map(u =>
+    row([u.name, u.ext, "0", `<input type="text" value="${u.ext === "104" ? "1" : "5"}" style="width:70px">`, `<button class="linklike" onclick="saved()">Save</button>`])))}`,
+
+/* ---- Billing ---- */
+billing: () => `
+  <h2 class="title">Billing ${badge("LIVE")}</h2>
+  <div class="cols">
+    <div class="card"><h3>Stripe account</h3>
+      <label>Secret key</label><input type="password" value="sk_test_demo_fictional" >
+      <p class="hint">Stripe Dashboard → Developers → API keys. Use the <b>test</b> key (sk_test_…) until you're ready to take real payments. Leave empty to keep the current key.</p>
+      <label>Webhook signing secret</label><input type="password" value="whsec_demo_fictional">
+      <label>Public panel address (optional)</label><input type="text" value="https://myphone.example.com">
+      <p class="hint">Where users return after paying, and where Stripe sends webhooks.</p>
+      <p>${btn("Save")} ${ghost("Test connection")} ${ghost("Sync all from Stripe")}</p></div>
+    <div class="card"><h3>Webhook</h3>
+      <p>In Stripe → Developers → Webhooks, add an endpoint:</p>
+      <p><code>https://myphone.example.com/store/stripe/webhook</code></p>
+      <p class="hint">Events: checkout.session.completed, customer.subscription.created, customer.subscription.updated, customer.subscription.deleted, invoice.paid, invoice.payment_failed. Stripe must be able to reach that address over HTTPS. Also turn on the Customer Portal so users can update cards and see invoices.</p></div>
+  </div>
+  <h2>Plans</h2>
+  ${tbl(["Plan","Includes","Price","Users see it","Stripe","Subscribers",""], [
+    row(["<b>Mobile Plan</b><br><span style='color:var(--muted);font-size:13px'>The Mobile Phone Plan</span>", "3,000 outside call minutes / month, Voicemail, 30,000 texts / month, Call recording, 1 IVR menu, Star codes: *86, *97, *98", "$10.00/mo", badge("Offered"), badge("Published"), "0", ghost("Edit")]),
+    row(["<b>Home Phone</b><br><span style='color:var(--muted);font-size:13px'>we can mail you a home phone that connects to the network and your account</span>", "3,000 outside call minutes / month, Voicemail, 3,000 texts / month, 1 IVR menu, Star codes: *86, *97, *98", "$15.00/mo", badge("Offered"), badge("Published"), "0", ghost("Edit")]) ])}
+  <p>${btn("New plan")}</p>
+  <h2>Subscribers</h2>
+  ${tbl(["User","Plan","Status","Renews / ends"], [], "No subscribers yet.")}
+  <h2>User access</h2>
+  <p class="lede">What users get <b>without a plan</b>, and per-user exceptions. Calls between extensions are always free; admins are never limited. 0 = not included, "unlimited" = no limit. Empty = use the default.</p>
+  <div class="card">
+    <p><b>Defaults (no plan):</b> &nbsp;Outside minutes <input type="text" value="4" style="width:90px;display:inline-block"> &nbsp;Voicemail <select style="width:90px;display:inline-block"><option>on</option><option>off</option></select> &nbsp;Texts <input type="text" value="4" style="width:90px;display:inline-block"> &nbsp;Recording <select style="width:90px;display:inline-block"><option>off</option><option>on</option></select> &nbsp;IVR menus <input type="text" value="1" style="width:70px;display:inline-block"></p>
+    <p class="hint"><b>Star codes (no plan):</b> ☐ *555 ChanSpy ☐ *60 Conference ☐ *70 DISA ☐ *86 Block caller ☐ *97 Voicemail ☐ *98 Greeting — none ticked = new accounts get no star codes until they buy a plan.</p>
+    <p>${ghost("Save defaults")}</p>
+  </div>
+  ${tbl(["User","Outside min/mo","Voicemail","Texts/mo","Recording","IVR menus",""], USERS.filter(u => u.role === "user").map(u =>
+    row([u.name, `<input type="text" value="${u.ext === "104" ? "2" : "unlimited"}">`, `<select><option>on</option></select>`, `<input type="text" value="${u.ext === "104" ? "2" : "unlimited"}">`, `<select><option>${u.ext === "104" ? "off" : "on"}</option></select>`, `<input type="text" value="${u.ext === "104" ? "1" : "5"}">`, `<button class="linklike" onclick="saved()">Save</button>`])))}`,
+
+/* ---- Store ---- */
+store: () => `
+  <h2 class="title">Store ${badge("Closed","grey")}</h2>
+  <p class="lede">A public sign-up page: people pick a plan and a number, and enter their card on Stripe's page. <b>Nobody is charged and nothing is created until you approve.</b> Approve charges the first month, creates the login (extension from the Invites range, generated password) and routes the number to it, then emails the customer.</p>
+  <p>Page: <code>https://myphone.example.com/store</code></p>
+  <h2>Orders</h2>
+  ${tbl(["When","Who","Plan","Number","Status"], [], "No orders yet.")}
+  <h2>Settings</h2>
+  <div class="card">
+    <div class="check"><input type="checkbox" id="stopen"><span><b>Store open</b></span></div>
+    <label>Title</label><input type="text" value="PBX DEMO">
+    <label>Intro (optional)</label><input type="text" value="One-Time Demo Pass: Get temporary login access for a few minutes and 1 free message.">
+    <label>Phone numbers for sale</label><input type="text" value="5550192837">
+    <p class="hint">Your voip.ms numbers, separated by commas. A number is offered only while no extension, menu or group answers it.</p>
+    <label>Terms the customer must accept (optional)</label><input type="text" value="Terms of Service: You are purchasing a donation, NOT an account or phone service plan.">
+    <label>Email new orders to</label><input type="email" value="orders@example.com">
+    <p class="hint">Empty = the security alert address (Email page). Customer emails need SMTP set up there too.</p>
+    <p>${btn("Save")}</p>
+  </div>
+  <p class="hint">Plans offered are the ones marked "Offer to users" and published to Stripe. Extensions come from the Invites range. New accounts get star codes by plan (Features).</p>`,
+
+/* ---- Email ---- */
+email: () => `
+  <h2 class="title">Email ${badge("Set up")}</h2>
+  <p class="lede">Used to email users when they get a new voicemail. Each user sets their address in My Phone → Settings (or you can on the Logins page). 5 user(s) have an address set.</p>
+  <div class="cols3">
+    <div class="card"><h3>SMTP server</h3>
+      <label>Server</label><input type="text" value="192.0.2.25">
+      <label>Security</label><select><option>None (port 25, not recommended)</option><option>STARTTLS · 587</option><option>SSL/TLS · 465</option></select>
+      <label>Port</label><input type="text" value="25">
+      <label>Username</label><input type="text" placeholder="often your full email address">
+      <label>Password</label><input type="password">
+      <div class="check"><input type="checkbox"><span>Clear saved password</span></div>
+      <label>From address</label><input type="email" value="pbx@example.com">
+      <label>From name</label><input type="text" value="PBX">
+      <div class="check"><input type="checkbox" checked><span>Attach the voicemail recording (WAV)</span></div>
+      <label>Panel address for links in emails (optional)</label><input type="text" value="https://myphone.example.com">
+      <p>${btn("Save")}</p></div>
+    <div class="card"><h3>Send a test email</h3>
+      <label>To</label><input type="email" value="you@example.com">
+      <p>${ghost("Send test")}</p>
+      <h3 style="margin-top:22px">Last email</h3>
+      <p class="hint">Oct 18, 2:45 PM: voicemail for 101 sent to alex@example.com</p>
+      <h3 style="margin-top:22px">Common settings</h3>
+      ${tbl(["",""], [
+        row(["Gmail / Google Workspace","smtp.gmail.com · STARTTLS · 587 · an <i>app password</i>"]),
+        row(["Microsoft 365","smtp.office365.com · STARTTLS · 587"]),
+        row(["Amazon SES","email-smtp.&lt;region&gt;.amazonaws.com · STARTTLS · 587"]),
+        row(["SendGrid","smtp.sendgrid.net · STARTTLS · 587 · user <code>apikey</code>"]) ])}
+      <p class="hint">Many home internet providers block outgoing port 25; use 587 or 465.</p></div>
+    <div class="card"><h3>Security alerts</h3>
+      <p class="hint">Email when the edge box blocks an attacker, someone is locked out of the web panel for wrong passwords, or the kill switch / safety lock changes. At most one email per address per hour for the same event, and 20 per hour in total.</p>
+      <label>Send alerts to</label><input type="email" value="alerts@example.com">
+      <div class="check"><input type="checkbox" checked><span>Blocked IPs on the phone server (scanners, password guessing, floods)</span></div>
+      <div class="check"><input type="checkbox" checked><span>Web panel sign-in lockouts</span></div>
+      <div class="check"><input type="checkbox" checked><span>Kill switch, safety lock and E911 changes</span></div>
+      <div class="check"><input type="checkbox" checked><span>Calls and texts users report</span></div>
+      <p>${btn("Save")} ${ghost("Save & send test alert")}</p>
+      <p class="hint">Edge box alerts need a one-time setup on the edge box (an admin API key from the API keys page).</p></div>
+  </div>`,
+
+/* ---- Network ---- */
+network: () => `
+  <h2 class="title">Network</h2>
+  <div class="cols">
+    <div class="card"><h3>Remote access</h3>
+      <p class="hint">The address phones use outside the office. It points at your Kamailio edge proxy (router: forward TCP 5061 and UDP 20000–20099 to it).</p>
+      <label>SIP domain</label><input type="text" value="phone.example.com">
+      <label>TLS port</label><input type="text" value="5061" style="max-width:120px">
+      <label>In-office server address (optional)</label><input type="text" value="192.168.1.148">
+      <p class="hint">Shown to users for phones on the office network. Empty = the address the panel was opened with.</p>
+      <h3 style="margin-top:24px">Cloudflare dynamic DNS</h3>
+      <p class="hint">Checks your public IP every few minutes and updates the domain's A record when your ISP changes it. Create a token at Cloudflare → My Profile → API Tokens → "Edit zone DNS", limited to this domain's zone.</p>
+      <label>API token</label><input type="password" value="cf_demo_token_fictional">
+      <div class="check"><input type="checkbox"><span>Remove saved token</span></div>
+      <label>DNS record (if different from the SIP domain)</label><input type="text" value="phone.example.com">
+      <label>Check every</label><select style="max-width:160px"><option>2 minutes</option><option>5 minutes</option></select>
+      <label>Email me when the IP changes (optional)</label><input type="email" value="alerts@example.com">
+      <div class="check"><input type="checkbox" checked><span>Keep DNS updated automatically</span></div>
+      <p>${btn("Save")} ${ghost("Test token")} ${ghost("Check & update now")}</p>
+      <h3 style="margin-top:24px">Panel access from the internet</h3>
+      <p class="hint">When this panel is published through a Cloudflare Tunnel, visitors from the internet get My Phone only. Admin pages open only on the office network unless you allow them below.</p>
+      <div class="check"><input type="checkbox"><span>Allow admin pages from the internet (not recommended)</span></div>
+      <p>${ghost("Save")}</p></div>
+    <div>
+      <div class="card"><h3>Status ${badge("In sync")}</h3>
+      ${tbl(["",""], [ row(["Public IP","203.0.113.68"]), row(["DNS","phone.example.com → 203.0.113.68"]), row(["Last check","Today 12:05 AM"]) ])}
+      <h3 style="margin-top:20px">IP changes</h3>
+      ${tbl(["When","Old","New"], [ row(["Oct 16, 4:07 PM","203.0.113.10","203.0.113.68"]), row(["Oct 10, 8:18 PM","198.51.100.9","203.0.113.10"]) ])}
+      </div>
+      <div class="card" style="margin-top:16px"><h3>Checklist for a domain</h3>
+      <ul style="margin:6px 0;padding-left:20px;color:#d3d3de;font-size:14.5px;line-height:1.6">
+        <li>The Cloudflare record must be <b>DNS only</b> (grey cloud). Cloudflare can't proxy SIP or call audio, so this page always sets it that way.</li>
+        <li>The Kamailio edge box must learn new IPs too, or calls connect with no audio.</li>
+        <li>Give the edge box a certificate for <b>phone.example.com</b>, or phones will reject the TLS connection.</li>
+        <li>Ask users to set their phone's re-registration to 60–120 seconds so they reconnect quickly after an IP change.</li>
+      </ul></div>
+    </div>
+  </div>`,
+
+/* ---- Sign-on ---- */
+signon: () => `
+  <h2 class="title">Single sign-on ${badge("On")}</h2>
+  <div class="cols">
+    <div class="card">
+      <p class="hint">Let people sign in to the web panel through an OpenID Connect provider you already run: Authentik, Keycloak, Authelia and the like. The login page then shows a button above the password form, which stays. The My Phone app isn't affected: it still pairs with a code.</p>
+      <div class="check"><input type="checkbox" checked><span>Turn on single sign-on</span></div>
+      <label>Panel address from outside</label><input type="text" value="https://myphone.example.com">
+      <p class="hint">The address people open the panel with (where the provider sends them back). Empty = the address the login page was opened with.</p>
+      <label>Redirect URI</label><input type="text" value="https://myphone.example.com/login/oidc/callback" readonly>
+      <p class="hint">Register this at the provider as the redirect URI, exactly as shown.</p>
+      <label>Issuer</label><input type="text" value="https://auth.example.com/application/o/pbx/">
+      <label>Client ID</label><input type="text" value="demo-client-id-fictional">
+      <label>Client secret</label><input type="password" placeholder="Leave blank to keep the stored secret">
+      <label>Name on the button</label><input type="text" value="Authentik">
+      <label>Scopes</label><input type="text" value="email profile">
+      <label>Match a first sign-in to a login by</label>
+      <select><option>Username: the provider's username is the PBX login name</option><option>Email address</option></select>
+      <div class="check"><input type="checkbox" checked><span>Only link an email the provider has verified</span></div>
+      <div class="check"><input type="checkbox" checked><span>Admin logins may sign in this way</span></div>
+      <div class="check"><input type="checkbox"><span>Go straight to the sign-in provider</span></div>
+      <div class="check"><input type="checkbox"><span>Hide the username and password form</span></div>
+      <p>${btn("Save")} ${ghost("Test the issuer")}</p></div>
+    <div>
+      <div class="card"><h3>Linked logins</h3>
+      ${tbl(["Login","Ext","Provider account",""], [
+        row(["Alex Rivera","101","alex@example.com", danger("Unlink")]),
+        row(["Administrator","—","admin@example.com", danger("Unlink")]) ])}
+      </div>
+      <div class="card" style="margin-top:16px"><h3>Authentik in short</h3>
+      <ol style="margin:6px 0;padding-left:20px;color:#d3d3de;font-size:14.5px;line-height:1.65">
+        <li>Applications → Providers → <b>Create</b> → OAuth2/OpenID Provider. Client type <b>Confidential</b>.</li>
+        <li>Redirect URI: <code>https://myphone.example.com/login/oidc/callback</code> (strict).</li>
+        <li>Scopes: keep <b>openid</b>, <b>email</b> and <b>profile</b>.</li>
+        <li>Create an Application using that provider, and bind the users or group allowed in.</li>
+        <li>Copy the Client ID, Client Secret and the <b>OpenID Configuration Issuer</b> here.</li>
+      </ol></div>
+    </div>
+  </div>`,
+
+/* ---- E911 ---- */
+e911: () => `
+  <h2 class="title">E911 / 911</h2>
+  <div class="alert red"><b>Not tested:</b> own-pbx is a home/hobby project and its 911/E911 features have not been tested end to end. Don't rely on it for emergency calls — keep a mobile phone or landline available, and test with your provider (e.g. dial 933) before trusting any address.</div>
+  <div class="alert amber"><b>911 always connects.</b> US 911 rules don't allow a phone system to block 911, so every phone can dial 911 (and 933, the address test line at many providers) — including users without E911, users with no plan, phones on DND, and phones connected from outside the office. These settings decide which number and address the call is sent with. Every 911 call is logged on the dashboard and emailed to the security-alert address.</div>
+  <div class="cols">
+    <div class="card"><h3>E911 ${badge("Locked","red")}</h3>
+      <p class="hint">Enter the E911 code to make changes.</p>
+      <label>E911 code</label><input type="password">
+      <p>${btn("Unlock")}</p></div>
+    <div class="card"><h3>Office fallback &amp; routing</h3>
+      <div class="alert green">Users without their own E911 use the E911 address set up at your phone provider (the trunk's default caller ID). Check it with a 933 test call.</div>
+      <div class="check"><input type="checkbox" checked><span><b>Use my provider's E911</b> (the trunk's default caller ID already has an E911 address)</span></div>
+      <label>Office 911 caller ID number <span style="color:var(--muted)">(optional)</span></label><input type="text" placeholder="leave empty to use the trunk's default">
+      <label>Address to show users <span style="color:var(--muted)">(optional — the address on file at the provider)</span></label>
+      <textarea rows="2">123 Main St, Suite 4&#10;Los Angeles, CA 90001</textarea>
+      <label>Send 911 calls through</label><select style="max-width:240px"><option>First enabled trunk</option></select>
+      <div class="check"><input type="checkbox" checked><span>Also treat 9-911 as 911 (for people used to dialing 9 for an outside line)</span></div>
+      <p>${btn("Save")}</p></div>
+  </div>
+  <h2>Users</h2>
+  <p class="lede">Turn E911 on for a user and give their own 911 number (a DID whose address you registered with the provider) and that address. Users see the address in My Phone with a warning that 911 sends help there, wherever the phone actually is.</p>
+  ${tbl(["User","E911","911 number","Address on file","Last change",""], USERS.filter(u => u.role === "user").map(u =>
+    row([u.name, "<input type='checkbox'> Off (office fallback)", `<input type="text" placeholder="10-digit number">`, `<input type="text" placeholder="Street, city, state, ZIP">`, "", `<button class="linklike" onclick="saved()">Save</button>`])))}`,
+
+/* ---- Reports ---- */
+reports: () => `
+  <h2 class="title">Reports <span class="lede">0 open</span></h2>
+  <p class="lede">Calls and texts users reported from My Phone. To stop someone, disable their login on the <a href="#" onclick="go('logins');return false">Logins</a> page; users can also block numbers themselves.</p>
+  <p><button class="btn sm">Open</button> <button class="btn ghost sm">All</button></p>
+  ${tbl(["When","Type","Reported by","About","Note","Details","Status"], [], "No reports.")}`,
+
+/* ---- API keys ---- */
+apikeys: () => `
+  <h2 class="title">API Keys</h2>
+  <p class="lede">Bearer tokens for the <code>/api/v1</code> REST API. The full key is shown <b>once</b> at creation.</p>
+  <p>${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  ${tbl(["","Key","Name","Login","Created","Last used","Active",""], APIKEYS.map(k =>
+    row(["<input type='checkbox'>", k.key, k.name, k.login, k.created, k.used, "yes", danger("Revoke")])))}
+  <p class="hint">Only revoked keys can be deleted. Revoke a key first; it stops working immediately.</p>
+  <h2>Issue new key</h2>
+  <div class="card">
+    <label>Login</label><input type="text" value="admin" style="max-width:220px">
+    <label>Name</label><input type="text" placeholder="e.g. provisioning" style="max-width:320px">
+    <p><button class="btn" onclick="createKey()">Create key</button></p>
+  </div>`,
+
+/* ---- Branding ---- */
+branding: () => `
+  <h2 class="title">Branding</h2>
+  <p class="lede">White-label the panel: your name, logo, colors, login page and footer. Changes apply immediately.</p>
+  <div class="card">
+    <h3>Site identity</h3>
+    <label>Site name</label><input type="text" value="DOX BOX PBX" style="max-width:340px">
+    <label>Header shows</label><select style="max-width:200px"><option>Logo only</option><option>Logo + text</option><option>Text only</option></select>
+    <label>Logo image</label><input type="file">
+    <label>…or logo image URL</label><input type="text" placeholder="https://…">
+    <div class="check"><input type="checkbox"><span>Remove current logo</span></div>
+    <label>Dark mode logo (optional)</label><input type="file">
+    <h3 style="margin-top:26px">Colors</h3>
+    <label>Header background</label><input type="color" value="#ffd60a" style="width:70px;padding:2px">
+    <label>Buttons &amp; active tabs</label><input type="color" value="#f96a00" style="width:70px;padding:2px">
+    <label>Default theme</label><select style="max-width:160px"><option>Dark</option><option>Light</option></select>
+    <p class="hint">Visitors can switch with the 🌙 / ☀️ icon in the header; their choice is remembered in the browser.</p>
+    <label>Time zone</label><select style="max-width:240px"><option>Los Angeles (PT)</option><option>New York (ET)</option><option>UTC</option></select>
+    <p class="hint">Call/message times show in 12-hour format in this zone.</p>
+    <div class="check"><input type="checkbox" checked><span>Animated gradient header <span style="color:var(--muted)">(flows between the header and accent colors)</span></span></div>
+    <h3 style="margin-top:26px">Login page</h3>
+    <label>Shows</label><select style="max-width:200px"><option>Logo + text</option><option>Logo only</option></select>
+    <label>Login page logo (blank = use header logo)</label><input type="file">
+    <label>Heading (blank = site name)</label><input type="text" value="LOGON" style="max-width:340px">
+    <label>Subheading</label><input type="text" value="contact support at ext 100 if you need login help">
+    <h3 style="margin-top:26px">Favicon</h3>
+    <label>Icon image</label><input type="file">
+    <h3 style="margin-top:26px">Footer</h3>
+    <div class="check"><input type="checkbox" checked><span>Show footer on every page</span></div>
+    <label>Footer text</label><input type="text" value="2026 DOX BOX PBX — Call you later.">
+    <p>${btn("Save branding")}</p>
+    <h3 style="margin-top:26px">Preview</h3>
+    <div style="background:linear-gradient(90deg,#ffd60a,#ff8a00);border-radius:6px;padding:10px 14px;color:#fff;font-weight:800">🎧 PBX <span style="float:right;font-weight:400;font-size:12px;opacity:.85">preview</span></div>
+    <p class="hint">Logos are stored in the database (max 500 KB: PNG, JPEG, GIF, SVG, WebP). They ride along with database backups.</p>
+  </div>`,
+
+/* ---- My Phone (admin) ---- */
+myphone: () => `
+  <h2 class="title">My Phone</h2>
+  <p class="lede">The Android app and web portal your users sign in to. The app keeps a phone signed in for 60 days after it was last used; changing a user's password signs out every phone.</p>
+  <div class="cols">
+    <div class="card"><h3>Pairing</h3>
+      <p class="hint">Users pair the app from their portal App tab with a one-time code or the phone-login QR. Codes are single-use and expire in 10 minutes.</p>
+      <p>${btn("Get a pairing code")} ${ghost("Show phone login QR")}</p></div>
+    <div class="card"><h3>Signed-in phones</h3>
+      ${tbl(["Phone","User","Signed in","Last used",""], [
+        row(["motorola moto g stylus — 2026","Alex · 101","Today 5:36 AM","Today 7:07 AM", danger("Sign out")]),
+        row(["Chromebook browser","Sam · 102","Yesterday","Today 6:41 AM", danger("Sign out")]) ])}
+    </div>
+  </div>`,
+});
+</script>
+<script>
+/* ================= user portal views ================= */
+const PLAN_ROWS = `
+  <table>
+  <tr><td style="width:170px;color:var(--muted)">Outside call minutes</td><td>0 min used · unlimited</td></tr>
+  <tr><td style="color:var(--muted)">Voicemail</td><td><span style="color:var(--green)">Included</span></td></tr>
+  <tr><td style="color:var(--muted)">Text messages</td><td>2 used · unlimited</td></tr>
+  <tr><td style="color:var(--muted)">Call recording</td><td><span style="color:var(--green)">Included</span></td></tr>
+  <tr><td style="color:var(--muted)">IVR menus</td><td>0 of 5 <span class="meter"><i style="width:4%"></i></span></td></tr>
+  </table>`;
+const E911_BOX = `
+  <div class="alert amber"><b>911:</b> 911 calls connect and use the office address registered with our phone provider.
+  If you use this phone anywhere else — another building, at home, on mobile data or Wi-Fi away from that address — 911 still sends help to the address above, <b>not to where you are</b>. Always tell the 911 operator where you actually are.
+  <br><b>Note:</b> 911 on this home phone system has not been tested. For emergencies, use a mobile phone or landline if you can.</div>`;
+
+const USER_VIEWS = {
+/* ---- Overview ---- */
+overview: () => `
+  <h2 class="title">My Phone</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <div class="statgrid">
+    <div class="stat" style="text-align:left"><div class="l">MY PHONE</div>
+      <div style="margin-top:8px">${badge("Online")} <b>My Phone app</b> ·<br>192.168.1.54:35838 · 161 ms</div></div>
+    <div class="stat" style="text-align:left"><div class="l">STATUS</div>
+      <div style="margin-top:8px">${badge("Available")} <span style="color:var(--muted)">Rings 30s.</span><br>
+      <button class="btn ghost sm" style="margin-top:8px" onclick="toast('Do not disturb on (demo)')">Turn on do not disturb</button></div></div>
+    <div class="stat" style="text-align:left"><div class="l">NEW VOICEMAIL</div><div class="n" style="text-align:left">0</div></div>
+    <div class="stat" style="text-align:left"><div class="l">MISSED CALLS (RECENT)</div><div class="n" style="text-align:left">0</div></div>
+    <div class="stat" style="text-align:left"><div class="l">CONTACTS</div><div class="n" style="text-align:left">${CONTACTS.length + 23}</div></div>
+  </div>
+  <h2>911</h2>${E911_BOX}
+  <h2>Your plan this month</h2>
+  <p class="lede">This month (resets on the 1st)</p>${PLAN_ROWS}
+  <h2>Recent calls</h2>
+  ${tbl(["Type","Number","Length","When"], [
+    row([badge("Incoming"), "102", "0:41", "Today 10:51 AM"]),
+    row([badge("Incoming"), "102", "0:04", "Today 10:51 AM"]) ])}
+  <p><button class="linklike" onclick="go('calls')">All calls →</button></p>`,
+
+/* ---- Calls ---- */
+calls: () => `
+  <h2 class="title">Call history</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <p><button class="btn sm">All</button> <button class="btn ghost sm">Missed</button></p>
+  ${tbl(["Type","Number","Length","When","",""], [
+    row([badge("Incoming"), "102", "0:41", "Today 10:51 AM", "", `<button class="linklike" onclick="toast('102 blocked (demo)')">Block</button> <button class="danger-text" onclick="toast('Reported (demo)')">Report</button>`]),
+    row([badge("Incoming"), "102", "0:04", "Today 10:51 AM", "", `<button class="linklike" onclick="toast('102 blocked (demo)')">Block</button> <button class="danger-text" onclick="toast('Reported (demo)')">Report</button>`]) ])}
+  <p class="hint">Call history is kept for 90 days and then removed automatically. You can delete call recordings you made, but not the call history itself.</p>`,
+
+/* ---- Voicemail ---- */
+voicemail: () => `
+  <h2 class="title">Voicemail</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <div class="card"><h3>Your greeting</h3>
+    <p class="hint">Using the standard greeting: "Please leave your message after the tone."</p>
+    <input type="file" style="max-width:340px;display:inline-block"> <button class="btn sm" onclick="saved()">Upload greeting</button>
+    <p class="hint">WAV or MP3, up to 2 minutes. Or record it from your phone: dial <b>*98</b>, speak after the tone, then press #. Something like: "Hi, you've reached Alex. Please leave a message."</p>
+  </div>
+  <p style="margin-top:18px"><button class="btn sm">Inbox (0)</button> <button class="btn ghost sm">Archived (0)</button></p>
+  <p>${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  ${tbl(["","From","Length","Received","Listen"], [], "No messages")}
+  <p class="hint">From your phone: dial <b>*97</b> to hear new messages (press 7 to delete, # for the next one, 0 to record your greeting). Callers can press any key to skip your greeting, and # to finish their message.</p>`,
+
+/* ---- Recordings ---- */
+recordings: () => `
+  <h2 class="title">Recordings</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <p class="lede">Recording laws vary; some states require everyone on the call to agree. Make sure you have consent where required.</p>
+  ${tbl(["With","Direction","Length","When","Listen"], [], "No recordings. Turn on “Record my calls” in Settings to start recording.")}
+  <p class="hint">Only recordings you started are shown here.</p>`,
+
+/* ---- Messages ---- */
+messages: () => `
+  <h2 class="title">Messages</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <div class="card"><h3>New message <span style="color:var(--muted);font-size:13px">· Unlimited texts</span></h3>
+    <input type="text" placeholder="Number or extension">
+    <textarea rows="2" placeholder="Type a message" style="margin-top:10px"></textarea>
+    <p><button class="btn" onclick="toast('Message sent (demo)')">Send</button></p>
+  </div>
+  <p style="margin-top:16px">${ghost("Delete selected", true)} ${danger("Delete all")} &nbsp;<label style="display:inline"><input type="checkbox"> Select everything shown</label></p>
+  <div class="msglist">
+    <div class="convs">${CONVS.map((c, i) => `<div class="conv ${i === state.msgConv ? "active" : ""}" onclick="state.msgConv=${i};renderView()"><b>${esc(c.with.split(" · ")[1] || "")}</b><br><span style="color:var(--muted);font-size:13px">${esc(c.msgs[c.msgs.length - 1].text)} · ${c.msgs.length}</span></div>`).join("")}</div>
+    <div class="thread">
+      <p style="margin-top:0;color:var(--muted);font-size:13.5px">Conversation with <b style="color:var(--text)">${esc(CONVS[state.msgConv].with.split(" · ")[0])}</b> · <button class="linklike" onclick="toast('Blocked (demo)')">Block</button></p>
+      ${CONVS[state.msgConv].msgs.map(m => `<p style="text-align:${m.mine ? "right" : "left"}"><span class="bubble">☐ ${esc(m.text)}</span><br><span style="color:var(--muted);font-size:12px">${m.when} · <button class="danger-text" style="font-size:12px" onclick="toast('Reported (demo)')">Report</button></span></p>`).join("")}
+    </div>
+  </div>
+  <p class="hint">Tick a conversation on the left to delete all of it, or tick single messages. Deleting only removes messages from your view; the other person keeps their copy. You can also text from your phone app; both count toward your plan's monthly texts.</p>`,
+
+/* ---- Contacts ---- */
+contacts: () => `
+  <h2 class="title">Contacts</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <p><input type="text" placeholder="Search contacts" style="max-width:260px;display:inline-block"> <button class="btn ghost sm" onclick="saved()">Search</button></p>
+  ${tbl(["","Name","Number","Organization","Notes",""], CONTACTS.map(c =>
+    row(["<input type='checkbox'>", esc(c.name), esc(c.num), esc(c.org), esc(c.note), danger("Delete")])))}
+  <p>${ghost("Delete selected", true)} ${danger("Delete all")}</p>
+  <h2>Add contact</h2>
+  <div class="card">
+    <label>Name</label><input type="text" style="max-width:300px">
+    <label>Number</label><input type="text" style="max-width:300px">
+    <label>Organization</label><input type="text" style="max-width:300px">
+    <label>Email</label><input type="email" style="max-width:300px">
+    <p><button class="btn" onclick="saved()">Add contact</button></p>
+  </div>
+  <h2>Import / export</h2>
+  <p>vCard (.vcf) or CSV file <input type="file" style="display:inline-block;width:auto"> <button class="btn ghost sm" onclick="saved()">Import</button></p>
+  <p class="hint"><button class="linklike" onclick="toast('vCard download (demo)')">Download all contacts as vCard</button> — names you set here show up next to numbers in your call history, texts, voicemail and recordings — and on your phone's screen while it rings.</p>`,
+
+/* ---- IVR ---- */
+ivr: () => `
+  <h2 class="title">IVR menus</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <p>An IVR menu answers your calls with a greeting and lets callers press keys ("press 1 for…") or dial an extension. Using 0 of 5 allowed.</p>
+  <p class="lede">None of your menus is answering your calls. Pick one under Settings → Call handling.</p>
+  ${tbl(["Menu","Keys","State"], [], "No menus yet.")}
+  <p>${btn("New menu")}</p>`,
+
+/* ---- Billing ---- */
+billing: () => `
+  <h2 class="title">Billing</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <div class="card"><div class="l" style="color:var(--muted);font-size:12.5px">YOUR PLAN</div>
+    <h3 style="font-size:21px;margin:4px 0">No plan</h3>
+    <p class="hint">Without a plan you can call other extensions on this system. Pick a plan below for outside calls, voicemail, texts, call recording and IVR menus.</p>
+    <p class="lede" style="margin-top:12px">This month (resets on the 1st)</p>${PLAN_ROWS}
+  </div>
+  <h2>Plans</h2>
+  <div class="cols">
+    <div class="card plancard"><h3>Mobile Plan</h3><div class="price">$10.00<span style="font-size:14px;color:var(--muted)">/month</span></div>
+      <ul><li>Internal calls</li><li>3,000 outside call minutes / month</li><li>Voicemail</li><li>30,000 texts / month</li><li>Call recording</li><li>1 IVR menu</li><li>Star codes: *86, *97, *98</li></ul>
+      <p class="hint">The Mobile Phone Plan</p><p><button class="btn" onclick="toast('Stripe checkout (demo)')">Subscribe</button></p></div>
+    <div class="card plancard"><h3>Home Phone</h3><div class="price">$15.00<span style="font-size:14px;color:var(--muted)">/month</span></div>
+      <ul><li>Internal calls</li><li>3,000 outside call minutes / month</li><li>Voicemail</li><li>3,000 texts / month</li><li>1 IVR menu</li><li>Star codes: *86, *97, *98</li></ul>
+      <p class="hint">we can mail you a home phone that connects to the network and your account</p><p><button class="btn" onclick="toast('Stripe checkout (demo)')">Subscribe</button></p></div>
+  </div>
+  <p class="hint">Payments are handled securely by Stripe. Card details never touch this server.</p>`,
+
+/* ---- Settings ---- */
+settings: () => `
+  <h2 class="title">Settings</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <div class="cols3">
+    <div class="card"><h3>Call handling</h3>
+      <div class="check"><input type="checkbox"><span><b>Do not disturb</b></span></div>
+      <p class="hint">Every call goes straight to your voicemail.</p>
+      <label>Forward all calls to</label><input type="text" placeholder="extension or number — leave empty for off">
+      <label>Ring my phone for</label><select><option>30 seconds (default)</option><option>15 seconds</option><option>60 seconds</option></select>
+      <label>If I don't answer, forward to</label><input type="text" placeholder="leave empty to go to voicemail">
+      <label>Answer my calls with</label><select><option>My phone (no menu)</option></select>
+      <p class="hint">Pick one of your IVR menus to greet callers before your phone rings. Build menus on the IVR tab.</p>
+      <label>My cell number</label><input type="text" value="(555) 019-2900">
+      <div class="check"><input type="checkbox"><span>Also ring my cell on shared numbers</span></div>
+      <p class="hint">When an inbound number rings a group you're in, your cell rings too. Your cell's voicemail can't grab the call; press 1 to accept. Uses your outside-call minutes.</p>
+      <label>Start ringing my cell after</label><select><option>15 seconds</option><option>Immediately</option></select>
+      <h3 style="margin-top:22px">Push-to-talk</h3>
+      <div class="alert green" style="margin:8px 0">✓ <b>Push-to-talk is on</b> — people your admin has allowed can reach you instantly by dialing *88 followed by your extension; your phone answers automatically.</div>
+      <div class="check"><input type="checkbox" checked><span>Enable push-to-talk</span></div>
+      <p class="hint">To talk to someone instantly, dial *88 followed by their extension (for example *88102). Your phone must be allowed by your admin, and theirs must be allowed and switched on here.</p>
+      <p><button class="btn" onclick="saved()">Save call handling</button></p>
+      <h3 style="margin-top:22px">911</h3>${E911_BOX}
+      <h3 style="margin-top:22px">Phone setup</h3>
+      <p><b>In the office</b></p>
+      ${tbl(["",""], [ row(["Server","192.168.1.148"]), row(["Port","5060"]), row(["Transport","UDP"]) ])}
+      <p><b>Away from the office</b></p>
+      ${tbl(["",""], [ row(["Domain","phone.example.com"]), row(["Port","5061"]), row(["Transport","TLS"]), row(["Outbound proxy","phone.example.com:5061"]), row(["Encryption","SRTP on (encrypts call audio)"]), row(["Re-register","every 60–120 seconds"]) ])}
+      <p class="hint">Use the same username and password. The short re-register time lets your phone reconnect quickly if the office internet address changes.</p>
+      ${tbl(["",""], [ row(["Username","101"]), row(["Extension","101"]), row(["Password","Hidden. Generate a new one below if you need to set up a phone."]) ])}
+      <p>${danger("Generate new SIP password")}</p></div>
+    <div class="card"><h3>Recording, voicemail &amp; email</h3>
+      <div class="alert amber" style="margin:8px 0">⚠ <b>Recording is turned off by your admin</b> for this extension. Your preference below is saved, but calls will not be recorded until your admin allows it.</div>
+      <div class="check"><input type="checkbox"><span>Record my calls</span></div>
+      <p class="hint">Answered calls are recorded and appear under Recordings.</p>
+      <div class="alert" style="background:var(--inset);border-left:3px solid var(--amber);margin:10px 0"><b>Before you record calls:</b> call-recording laws vary by country, state and city. Some US states require the consent of everyone on the call before it is recorded. You are responsible for knowing and following the laws that apply to you. This is not legal advice.</div>
+      <p style="color:var(--green);font-size:13px">You accepted the notice on Oct 7, 11:41 AM.</p>
+      <label>Email for notifications</label><input type="email" value="alex@example.com">
+      <p class="hint">New voicemails are emailed here. Leave it empty for no emails.</p>
+      <div class="check"><input type="checkbox" checked><span>Also email me when I get a text message</span></div>
+      <p><button class="btn" onclick="saved()">Save</button></p>
+      <h3 style="margin-top:24px">Texts &amp; blocking</h3>
+      <div class="check"><input type="checkbox" checked><span>Receive text messages</span></div>
+      <div class="check"><input type="checkbox" checked><span>Send text messages</span></div>
+      <p><button class="btn" onclick="saved()">Save</button></p>
+      <h3 style="margin-top:20px">Call filtering (blocked numbers)</h3>
+      <p class="hint">Blocked extensions or numbers can't ring your phone or text you. For each one, choose what happens when they call: they hear "the number you have dialed is not in service", go straight to your voicemail, or are forwarded to another extension or number. Only you can see your list.</p>
+      <p class="hint">During a call someone made to you, press *86 on your phone to hang up on them and block them right away. Only your own phone can do this.</p>
+      <input type="text" placeholder="Extension or phone number">
+      <select style="margin-top:8px"><option>Number disconnected ("not in service")</option><option>Straight to voicemail</option><option>Forward</option></select>
+      <p><button class="btn ghost sm" onclick="toast('Blocked (demo)')">Block</button></p>
+      <p class="hint">Nobody blocked.</p></div>
+    <div class="card"><h3>Change password</h3>
+      <label>Current password</label><input type="password">
+      <label>New password</label><input type="password">
+      <label>Confirm new password</label><input type="password">
+      <p><button class="btn" onclick="toast('Password changed (demo) — phones signed out')">Change password</button></p>
+      <p class="hint">Changing your password signs out every signed-in phone.</p></div>
+  </div>`,
+
+/* ---- App ---- */
+app: () => `
+  <h2 class="title">App</h2>
+  <p class="lede">Alex Rivera · ext 101</p>
+  <p>The My Phone app for Android keeps you signed in for 60 days after you last used it. Changing your password signs out every phone.</p>
+  <p>${btn("Get a pairing code")} ${ghost("Show phone login QR")}</p>
+  <h2>Signed-in phones</h2>
+  ${tbl(["Phone","Signed in","Last used",""], [
+    row(["motorola moto g stylus — 2026","Today 5:36 AM","Today 7:07 AM", danger("Sign out")]) ])}`,
+};
+</script>
+</body>
+</html>

@@ -2,7 +2,9 @@
 """User safety tools: block list, reporting calls/texts, text on/off switches.
 
 User side (My Phone):
-  POST /ucp/block            add / remove a blocked extension or number
+  POST /ucp/block            add / remove a blocked extension or number, or
+                             change what it gets (call filtering: "not in
+                             service", straight to voicemail, or forward)
   POST /ucp/settings/messaging  receive texts on/off, send texts on/off
   POST /ucp/report           report a call or a text to the admin
 Admin side:
@@ -11,8 +13,10 @@ Admin side:
 
 Blocking and reporting keep working while the safety lock is on (they
 protect users); the on/off switches are settings and follow the lock.
-Enforcement for calls and phone texts is in pbx-brain (blocked_by,
-agi_server msg-route); texts sent from My Phone are checked in ucp.msg_send.
+Enforcement for calls and phone texts is in pbx-brain (block_rule /
+apply_block, agi_server msg-route); texts sent from My Phone are checked in
+ucp.msg_send. Users can also block a caller mid-call with *86 (pbx-brain
+midcall_block); it adds a row here with the default "not in service".
 """
 import time
 import urllib.parse
@@ -24,6 +28,10 @@ import security
 
 M = None
 MAX_BLOCKS = 200
+# Call filtering: what a blocked caller gets (pbx-brain apply_block).
+BLOCK_ACTIONS = (("disconnected", "Number disconnected (\"not in service\")"),
+                 ("voicemail", "Straight to my voicemail"),
+                 ("forward", "Forward to another number"))
 _report_times: dict[int, list[float]] = {}
 
 
@@ -31,15 +39,28 @@ def esc(x):
     return M.esc(x)
 
 
-def num_norm(v):
-    d = "".join(ch for ch in str(v or "") if ch.isdigit())
-    return d[1:] if len(d) == 11 and d.startswith("1") else d
+try:
+    from phone import norm_number as num_norm
+except ImportError:  # app.py puts ../shared on sys.path; standalone tests may not
+    def num_norm(v):
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        return d[1:] if len(d) == 11 and d.startswith("1") else d
 
 
 def blocked_list(login_id):
     with M.db() as c:
         return [r[0] for r in c.execute("SELECT number FROM blocked_numbers WHERE login_id=? ORDER BY created_at DESC",
                                         (login_id,))]
+
+
+def block_rules(login_id):
+    """[{number, action, target, created_at}] for this user's block list."""
+    with M.db() as c:
+        rows = c.execute("SELECT * FROM blocked_numbers WHERE login_id=? ORDER BY created_at DESC",
+                         (login_id,)).fetchall()
+    return [{"number": r["number"], "created_at": r["created_at"],
+             "action": (dict(r).get("action") or "disconnected"),
+             "target": (dict(r).get("target") or "")} for r in rows]
 
 
 def is_blocked(login_id, number):
@@ -67,26 +88,48 @@ def _names():
 
 # ---------------------------------------------------------------- UI pieces (used by ucp.py)
 
+def _mode_fields(mode, target):
+    """The "what they get" select + forward-to box for one filter rule."""
+    opts = "".join(f'<option value="{v}" {"selected" if v == mode else ""}>{esc(label)}</option>'
+                   for v, label in BLOCK_ACTIONS)
+    hide = "" if mode == "forward" else ' style="display:none"'
+    return (f'<select name="mode" onchange="this.nextElementSibling.style.display='
+            f'this.value==\'forward\'?\'\':\'none\'">{opts}</select>'
+            f'<input name="target" value="{esc(target)}" placeholder="Extension or phone number"'
+            f' inputmode="tel" maxlength="20"{hide}>')
+
+
 def settings_section(me, csrf):
     p = msg_prefs(me["id"])
     names = _names()
-    blocked = blocked_list(me["id"])
+    rules = block_rules(me["id"])
     rows = "".join(
-        f'<tr><td>{esc(n)}{(" <span class=muted>" + esc(names[n]) + "</span>") if n in names else ""}</td>'
-        f'<td><form method="post" action="/ucp/block" class="inline">{csrf}<input type="hidden" name="number" value="{esc(n)}">'
+        f'<tr><td>{esc(r["number"])}{(" <span class=muted>" + esc(names[r["number"]]) + "</span>") if r["number"] in names else ""}'
+        f'<br><span class="muted">since {esc(r["created_at"])}</span></td>'
+        f'<td><form method="post" action="/ucp/block" class="inline">{csrf}<input type="hidden" name="number" value="{esc(r["number"])}">'
+        f'<input type="hidden" name="action" value="update"><input type="hidden" name="back" value="settings">'
+        f'{_mode_fields(r["action"], r["target"])} <button class="btn ghost">Save</button></form></td>'
+        f'<td><form method="post" action="/ucp/block" class="inline">{csrf}<input type="hidden" name="number" value="{esc(r["number"])}">'
         f'<input type="hidden" name="action" value="remove"><input type="hidden" name="back" value="settings">'
-        f'<button class="link-btn">Unblock</button></form></td></tr>' for n in blocked) \
-        or '<tr><td colspan="2" class="muted">Nobody blocked.</td></tr>'
+        f'<button class="link-btn">Unblock</button></form></td></tr>' for r in rules) \
+        or '<tr><td colspan="3" class="muted">Nobody blocked.</td></tr>'
     return f"""<section class="panel">
 <h3>Texts &amp; blocking</h3>
 <form method="post" action="/ucp/settings/messaging">{csrf}
 <label class="switch"><input type="checkbox" name="msg_in" value="1" {"checked" if p["msg_in"] else ""}> <span>Receive text messages</span></label>
 <label class="switch"><input type="checkbox" name="msg_out" value="1" {"checked" if p["msg_out"] else ""}> <span>Send text messages</span></label>
 <button class="btn">Save</button></form>
-<h3 style="margin-top:16px">Blocked</h3>
-<p class="muted">Blocked extensions or numbers can't call or text you.</p>
+<h3 style="margin-top:16px">Call filtering (blocked numbers)</h3>
+<p class="muted">Blocked extensions or numbers can't ring your phone or text you. For each one, choose what
+happens when they call: they hear <b>"the number you have dialed is not in service"</b>, go
+<b>straight to your voicemail</b>, or are <b>forwarded</b> to another extension or number.
+Only you can see your list.</p>
+<p class="muted">During a call someone made to you, press <b>*86</b> on your phone to hang up on them
+and block them right away (they hear "not in service"). Only your own phone can do this; the caller
+pressing the same keys does nothing.</p>
 <form method="post" action="/ucp/block">{csrf}<input type="hidden" name="action" value="add"><input type="hidden" name="back" value="settings">
-<input name="number" placeholder="Extension or phone number" inputmode="tel" required> <button class="btn ghost">Block</button></form>
+<input name="number" placeholder="Extension or phone number" inputmode="tel" required>
+{_mode_fields("disconnected", "")} <button class="btn ghost">Block</button></form>
 <table>{rows}</table>
 </section>"""
 
@@ -146,17 +189,39 @@ async def block(request: Request):
         return _go(back, "blockbad")
     if n == num_norm(me["exten"]):
         return _go(back, "blockself")
+    act = f.get("action")
+    mode = f.get("mode") or "disconnected"
+    if mode not in {v for v, _ in BLOCK_ACTIONS}:
+        mode = "disconnected"
+    target = ""
+    if mode == "forward" and act != "remove":
+        target = num_norm(f.get("target"))
+        if not target or len(target) > 15:
+            return _go(back, "blockfwdbad")
+        if target == n:
+            return _go(back, "blockfwdloop")
     with M.db() as c:
-        if f.get("action") == "remove":
+        if act == "remove":
             c.execute("DELETE FROM blocked_numbers WHERE login_id=? AND number=?", (me["id"], n))
             key = "unblocked"
+        elif act == "update":
+            cur = c.execute("UPDATE blocked_numbers SET action=?, target=? WHERE login_id=? AND number=?",
+                            (mode, target, me["id"], n))
+            if not cur.rowcount:
+                return _go(back, "blockbad")
+            key = "blockupdated"
         else:
-            if c.execute("SELECT COUNT(*) FROM blocked_numbers WHERE login_id=?", (me["id"],)).fetchone()[0] >= MAX_BLOCKS:
+            exists = c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?", (me["id"], n)).fetchone()
+            if not exists and c.execute("SELECT COUNT(*) FROM blocked_numbers WHERE login_id=?",
+                                        (me["id"],)).fetchone()[0] >= MAX_BLOCKS:
                 return _go(back, "blockmax")
-            c.execute("INSERT OR IGNORE INTO blocked_numbers (login_id, number) VALUES (?,?)", (me["id"], n))
+            c.execute("INSERT INTO blocked_numbers (login_id, number, action, target) VALUES (?,?,?,?)"
+                      " ON CONFLICT(login_id, number) DO UPDATE SET action=excluded.action, target=excluded.target",
+                      (me["id"], n, mode, target))
             key = "blocked"
         c.commit()
-    M.ucp._audit(me, "ucp.block." + ("remove" if key == "unblocked" else "add"), n)
+    M.ucp._audit(me, "ucp.block." + {"unblocked": "remove", "blockupdated": "update"}.get(key, "add"),
+                 n + ("" if act == "remove" else f" {mode}{(' ' + target) if target else ''}"))
     return _go(back, key)
 
 

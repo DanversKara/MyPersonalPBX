@@ -21,6 +21,20 @@ from ari_client import ARIClient
 import e911
 import voipms_sms
 
+# One canonical number normalizer, shared with pbx-api (shared/phone.py,
+# deployed flat into this dir by scripts/deploy.sh).
+import sys as _sys_path
+_shared = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
+if _shared not in _sys_path.path:
+    _sys_path.path.insert(0, _shared)
+try:
+    from phone import norm_number as num_norm
+except ImportError:  # pragma: no cover - deploy always ships phone.py
+    def num_norm(v):
+        """Digits only; US/Canada numbers as 10 digits (for block-list matching)."""
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        return d[1:] if len(d) == 11 and d.startswith("1") else d
+
 ARI_URL = os.environ.get("ARI_URL", "http://127.0.0.1:8088/ari")
 ARI_USER = os.environ.get("ARI_USER", "pbxbrain")
 ARI_PASS = os.environ.get("ARI_PASS", "")
@@ -50,6 +64,20 @@ def qall(sql, args=()):
         return c.execute(sql, args).fetchall()
 
 
+def plan_codes(login_id):
+    """Star codes from the user's active plan, else the "no plan" set."""
+    split = lambda s: {x.strip() for x in str(s or "").split(",") if x.strip()}
+    try:
+        r = q1("SELECT p.feature_codes FROM billing_customers b JOIN billing_plans p ON p.id = b.plan_id"
+               " WHERE b.login_id=? AND b.status IN ('active','trialing','past_due')", (login_id,))
+        if r:
+            return split(r["feature_codes"])
+        d = q1("SELECT value FROM kv_settings WHERE key='default_feature_codes'")
+        return split(d["value"] if d else "")
+    except sqlite3.OperationalError:
+        return set()
+
+
 def feature_allowed(code, login):
     """Can this login use a feature code (e.g. '*97', '*555')?
 
@@ -65,10 +93,15 @@ def feature_allowed(code, login):
         if o is not None:
             return bool(o["allowed"])
         da = (f["default_access"] or "all")
+        is_admin = (login.get("role") or "") == "admin"
         if da == "admin":
-            return (login.get("role") or "") == "admin"
+            return is_admin
         if da == "none":
             return False
+        if da == "plan":
+            # Mirrors pbx-api entitlements.code_access(): the active plan's
+            # codes, else the "no plan" set (empty by default).
+            return is_admin or code in plan_codes(login["id"])
         return True
     except Exception:
         # tables missing (migration not run yet): historical behavior
@@ -85,6 +118,8 @@ def feature_allowed(code, login):
 
 PENDING = {}   # b_channel_id -> a_channel_id (B ringing, not yet bridged)
 B_LOGIN = {}   # b_channel_id -> login id being rung (who answered -> minutes)
+B_SCREEN = {}  # b_channel_id -> True: cell leg, needs "press 1" before bridging
+SCREENING = {}  # b_channel_id -> {"timer": Timer} (answered cell leg awaiting 1)
 BRIDGED = {}   # channel_id -> bridge_id
 CALLS = {}     # a_channel_id -> {caller, callee, start, b_id, ...}
 
@@ -185,6 +220,10 @@ def handle_internal(channel, dialed):
             return
         handle_voicemail_check(channel)
         return
+    if dialed == "*86":
+        # Mid-call only (press it during a call); dialing it alone does nothing.
+        deny_and_hangup(channel, DENIED_PROMPT, "*86 dialed outside a call")
+        return
     if dialed == "*98":
         if not feature_allowed("*98", me):
             deny_and_hangup(channel, DENIED_PROMPT, "*98 not allowed")
@@ -212,6 +251,12 @@ def handle_internal(channel, dialed):
             deny_and_hangup(channel, DENIED_PROMPT, "*70 not allowed")
             return
         handle_disa(channel, me)
+        return
+    if dialed.startswith("*88"):
+        # *88<exten>: push-to-talk (instant intercom) to that extension.
+        # Gated by the PTT flags themselves (handle_ptt), not feature_codes:
+        # the caller's admin allow-flag is what authorises placing one.
+        handle_ptt(channel, me, dialed[3:])
         return
     # IVR menus with an internal number (e.g. 7000) can be dialed directly.
     try:
@@ -305,6 +350,22 @@ def ring_seconds_for(login_id, default=DEFAULT_RING):
     return v if 5 <= v <= 300 else default
 
 
+def phone_endpoints(callee):
+    """Dial strings that ring this user: their phone line as always, plus
+    the My Phone app's own line (<sip_username>-app) when the app is signed
+    in. Asking Asterisk first keeps an offline app from adding a leg that
+    fails instantly."""
+    eps = ["PJSIP/%s" % callee["sip_username"]]
+    app_ep = "%s-app" % callee["sip_username"]
+    try:
+        st = (CLIENT.get("endpoints/PJSIP/%s" % app_ep) or {}).get("state", "")
+        if st and st != "offline":
+            eps.append("PJSIP/%s" % app_ep)
+    except Exception:
+        pass    # no app line configured (older pjsip.conf) or ARI hiccup
+    return eps
+
+
 def end_unanswered_leg(b_id):
     """Ring time is up (or the phone is gone): hang up the ringing B leg and
     run no-answer handling (forward / voicemail).
@@ -363,21 +424,83 @@ def forward_to(channel, me, callee, target, hops, **ring_kw):
     return False
 
 
-def num_norm(v):
-    """Digits only; US/Canada numbers as 10 digits (for block-list matching)."""
-    d = "".join(ch for ch in str(v or "") if ch.isdigit())
-    return d[1:] if len(d) == 11 and d.startswith("1") else d
+BLOCK_ACTIONS = ("disconnected", "voicemail", "forward")
+
+
+def contact_name_for(login_id, number):
+    """This user's private display name for `number`, or "".
+
+    Numbers match on the shared canonical form (digits, 11-digit NANP -> 10),
+    the same form the block list uses. Read-only: the display name never
+    lands in CDR/voicemail columns.
+    """
+    n = num_norm(number)
+    if not login_id or not n:
+        return ""
+    try:
+        r = q1("SELECT name FROM contacts WHERE login_id=? AND number_norm=?",
+               (login_id, n))
+    except Exception:
+        return ""  # old DB without the contacts table yet
+    return (r["name"] or "") if r else ""
+
+
+def contact_caller_id(login_id, number, fallback):
+    """Per-callee ring caller ID: 'Name <digits>' when the callee named them."""
+    name = contact_name_for(login_id, number)
+    if name:
+        digits = num_norm(number) or number
+        return "%s <%s>" % (name, digits)
+    return fallback
+
+
+def block_rule(login_id, number):
+    """User `login_id`'s call-filtering rule for `number`, or None if not
+    blocked: {"action": disconnected|voicemail|forward, "target": ...}."""
+    n = num_norm(number)
+    if not login_id or not n:
+        return None
+    try:
+        r = q1("SELECT * FROM blocked_numbers WHERE login_id=? AND number=?", (login_id, n))
+    except sqlite3.OperationalError:
+        return None
+    if not r:
+        return None
+    r = dict(r)
+    action = r.get("action") or "disconnected"
+    return {"action": action if action in BLOCK_ACTIONS else "disconnected",
+            "target": (r.get("target") or "").strip()}
 
 
 def blocked_by(login_id, number):
     """True if user `login_id` blocked calls/texts from `number`."""
-    n = num_norm(number)
-    if not login_id or not n:
-        return False
-    try:
-        return q1("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?", (login_id, n)) is not None
-    except sqlite3.OperationalError:
-        return False
+    return block_rule(login_id, number) is not None
+
+
+def apply_block(channel, me, callee, rule, caller_label, hops=0, **ring_kw):
+    """A caller `callee` blocked is calling them: do what the user chose in
+    Call filtering. 'forward' sends the call on (falls back to voicemail if
+    that fails), 'voicemail' goes straight to their box, 'disconnected'
+    plays "not in service" and hangs up. me / ring_kw as for forward_to."""
+    action = rule["action"]
+    log.info("%s filters %s: %s %s", callee["exten"], caller_label, action, rule.get("target") or "")
+    if action == "forward":
+        if rule.get("target") and forward_to(channel, me, callee, rule["target"], hops,
+                                             caller_label=caller_label, **ring_kw):
+            return
+        action = "voicemail"
+    if action == "voicemail":
+        CALLS[channel.id] = {
+            "caller": caller_label, "callee": callee["exten"],
+            "start": CALLS.get(channel.id, {}).get("start", time.time()),
+            "direction": ring_kw.get("direction") or "inbound",
+            "login_id": None if ring_kw.get("direction", "inbound") == "inbound" else me["id"],
+            "callee_id": callee["id"], "hops": hops,
+            "did": (ring_kw.get("extra") or {}).get("did", ""),
+        }
+        route_to_voicemail(channel.id, callee["exten"])
+        return
+    deny_and_hangup(channel, DISCONNECTED_PROMPT, "caller %s blocked by %s" % (caller_label, callee["exten"]))
 
 
 def ring_local(channel, me, callee, hops=0, caller_label=None,
@@ -389,9 +512,10 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
 
     For a forwarded inbound call, `me` is the forwarding user and
     caller_label / caller_id carry the outside caller's number."""
-    if blocked_by(callee["id"], caller_label or me["exten"]):
-        log.info("%s blocked calls from %s", callee["exten"], caller_label or me["exten"])
-        deny_and_hangup(channel, why="caller blocked by %s" % callee["exten"])
+    rule = block_rule(callee["id"], caller_label or me["exten"])
+    if rule:
+        apply_block(channel, me, callee, rule, caller_label or me["exten"], hops,
+                    caller_id=caller_id, direction=direction, extra=extra)
         return
     prev = CALLS.get(channel.id, {})
     info = {"caller": caller_label or me["exten"], "callee": callee["exten"],
@@ -428,27 +552,37 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
                   direction=direction, extra=extra):
         return
     ring_secs = ring_seconds_for(callee["id"])
-    try:
-        leg_b = CLIENT.channels.originate(
-            endpoint="PJSIP/%s" % callee["sip_username"],
-            app=APP,
-            app_args="legb,%s" % channel.id,
-            caller_id=caller_id or "%s <%s>" % (me["display_name"] or me["exten"],
-                                                me["exten"]),
-            timeout=ring_secs + 5)  # our timer fires first -> voicemail
-    except Exception:
-        log.exception("originate to %s failed", callee["username"])
+    # One leg per phone line (desk phone / Zoiper, and the app when online);
+    # the first to answer wins (on_legb_answer hangs up the others).
+    # The callee's own contacts name the caller on their phones.
+    leg_cid = (caller_id or "%s <%s>" % (me["display_name"] or me["exten"], me["exten"]))
+    leg_cid = contact_caller_id(callee["id"], caller_label or me["exten"], leg_cid)
+    legs = []
+    for ep in phone_endpoints(callee):
+        try:
+            legs.append(CLIENT.channels.originate(
+                endpoint=ep,
+                app=APP,
+                app_args="legb,%s" % channel.id,
+                caller_id=leg_cid,
+                timeout=ring_secs + 5))  # our timer fires first -> voicemail
+        except Exception:
+            log.exception("originate to %s (%s) failed", callee["username"], ep)
+    if not legs:
         channel.hangup()
         return
-    PENDING[leg_b.id] = channel.id
-    B_LOGIN[leg_b.id] = callee["id"]
+    leg_b = legs[0]
+    for leg in legs:
+        PENDING[leg.id] = channel.id
+        B_LOGIN[leg.id] = callee["id"]
     info["b_id"] = leg_b.id
     CALLS[channel.id] = info
-    # Ring timeout: if B doesn't answer in time, end B -> forward/voicemail
-    def _ring_timeout(b_id=leg_b.id):
-        if b_id in PENDING:
-            log.info("ring timeout for b leg %s", b_id)
-            end_unanswered_leg(b_id)
+    # Ring timeout: if nobody answers in time, end every leg -> forward/voicemail
+    def _ring_timeout(b_ids=[l.id for l in legs]):
+        for b_id in b_ids:
+            if b_id in PENDING:
+                log.info("ring timeout for b leg %s", b_id)
+                end_unanswered_leg(b_id)
     t = threading.Timer(float(ring_secs), _ring_timeout)
     t.daemon = True
     t.start()
@@ -458,8 +592,108 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
         channel.ring()  # 180 Ringing to A while B rings
     except Exception:
         log.exception("ring failed")
-    log.info("ringing %s -> %s for %ss (b leg %s)",
-             info["caller"], callee["exten"], ring_secs, leg_b.id)
+    log.info("ringing %s -> %s for %ss (b legs %s)",
+             info["caller"], callee["exten"], ring_secs, ",".join(l.id for l in legs))
+
+
+# ---------------------------------------------------------------- push-to-talk
+# *88<exten>: an instant intercom call. The callee's phone auto-answers on
+# speaker (SIP Call-Info answer-after=0 + X-PTT header) and the two sides are
+# bridged at once — no ringing, no ring timeout, no voicemail, ever. The
+# flags mirror the recording split exactly (see start_call_recordings):
+# logins.ptt_allowed is the admin allow-flag, logins.ptt_enabled is the
+# user's own wish. Placing a PTT call needs the CALLER's ptt_allowed;
+# receiving one needs the callee to be effective (allowed AND enabled).
+# Anything else fast-fails with the standard denied announcement: a PTT
+# attempt must never fall through to the normal ring / voicemail path.
+
+PTT_BEEP = "sound:beep"   # Asterisk core sound; already used for cell-leg
+                          # screening fallback and the *555 spy beep.
+
+
+def _ptt_flag(login, col):
+    """One PTT flag of a login row; False on pre-migration DBs (mirrors
+    _party_wants_record's tolerance for a missing column)."""
+    try:
+        return bool(login[col])
+    except (IndexError, KeyError, TypeError):
+        return False
+
+
+def ptt_can_receive(login):
+    """Effective receive-PTT for a login: admin allow AND user wish."""
+    return _ptt_flag(login, "ptt_allowed") and _ptt_flag(login, "ptt_enabled")
+
+
+def handle_ptt(channel, me, target):
+    """Push-to-talk from `me` to extension `target` (the part after *88)."""
+    target = (target or "").strip()
+    callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1",
+                (target,)) if target else None
+    if not _ptt_flag(me, "ptt_allowed"):
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT not allowed for caller %s" % me["exten"])
+        return
+    if not callee or callee["id"] == me["id"]:
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT target %s unavailable" % (target or "?"))
+        return
+    if not ptt_can_receive(callee):
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT not enabled for %s" % callee["exten"])
+        return
+    # Headers ride on the B leg as ARI originate variables: on a PJSIP
+    # channel, setting "PJSIP_HEADER(add,<Header>)" is the one mechanism
+    # Asterisk offers for adding a header to the outgoing INVITE, and the
+    # originate variables are set before that INVITE is sent (a Local
+    # channel + pre-dial snippet would need new dialplan, which this
+    # codebase deliberately keeps empty — everything lives here).
+    # X-PTT marks the call for the My Phone app; Call-Info answer-after=0
+    # asks any SIP phone to auto-answer. The caller ID NAME carries a
+    # "PTT " prefix as a fallback signal for clients that ignore both.
+    leg_cid = "PTT %s <%s>" % (me["display_name"] or me["exten"], me["exten"])
+    variables = {"PJSIP_HEADER(add,X-PTT)": "1",
+                 "PJSIP_HEADER(add,Call-Info)": "<sip:x>;answer-after=0"}
+    legs = []
+    for ep in phone_endpoints(callee):
+        try:
+            legs.append(CLIENT.channels.originate(
+                endpoint=ep,
+                app=APP,
+                app_args="legb,%s" % channel.id,
+                caller_id=leg_cid,
+                timeout=30,
+                variables=variables))
+        except Exception:
+            log.exception("PTT originate to %s failed", ep)
+    if not legs:
+        # Callee offline / unreachable: same fast-fail, never voicemail.
+        deny_and_hangup(channel, DENIED_PROMPT,
+                        "PTT target %s unreachable" % callee["exten"])
+        return
+    for leg in legs:
+        PENDING[leg.id] = channel.id
+        B_LOGIN[leg.id] = callee["id"]
+    # direction "ptt" is the CDR marker: cdr.direction is the call-type
+    # field every other flow uses (inbound / outbound / internal /
+    # forwarded / emergency), so PTT needs no schema change. It also keeps
+    # PTT out of the minute quotas and, in hangup_other_leg, out of the
+    # internal/inbound no-answer branches that lead to voicemail.
+    # Deliberately no DND / forward / block / IVR handling and no ring
+    # timer: PTT is a direct intercom, and on_legb_answer bridges the
+    # first leg that answers (auto-answer should make that immediate).
+    CALLS[channel.id] = {
+        "caller": me["exten"], "callee": callee["exten"],
+        "start": time.time(), "b_id": legs[0].id,
+        "direction": "ptt", "login_id": me["id"],
+        "callee_id": callee["id"], "ptt": True,
+    }
+    try:
+        channel.ring()  # 180 Ringing to A while B (auto-)answers
+    except Exception:
+        pass
+    log.info("PTT %s -> %s (b legs %s)", me["exten"], callee["exten"],
+             ",".join(l.id for l in legs))
 
 
 def try_forward_noanswer(a_id, info):
@@ -505,6 +739,103 @@ def try_forward_noanswer_inbound(a_id, info):
                       extra={"did": info.get("did", "")})
 
 
+# ---------------------------------------------------------------- press-1 screening
+# Ring-group-to-cell legs don't bridge on answer: the far end might be the
+# user's voicemail, which would win the race against the desk phones. Instead
+# the leg is answered, hears "press 1 to accept", and only bridges when a
+# human presses 1. Silence / anything else -> the leg is hung up and the
+# other legs keep ringing.
+
+SCREEN_PROMPT = "sound:pbx-screen-intro"  # shipped in pbx-brain/sounds/, installed by deploy.sh
+SCREEN_TIMEOUT = 12                    # seconds to wait for the 1
+
+
+def trunk_endpoint_for(number):
+    """PJSIP endpoint string to dial an outside `number`, or None.
+
+    Reuses the outbound routes (first match wins, same as handle_outbound),
+    so the cell leg leaves through the trunk the admin configured.
+    """
+    import json
+    digits = num_norm(number)
+    if len(digits) < 7:
+        return None
+    routes = qall("SELECT * FROM outbound_routes WHERE enabled=1"
+                  " ORDER BY priority ASC")
+    for route in routes:
+        try:
+            patterns = json.loads(route["patterns"] or "[]")
+        except Exception:
+            continue
+        if any(match_pattern(pat, digits) for pat in patterns):
+            trunk = q1("SELECT * FROM trunks WHERE id=? AND enabled=1",
+                       (route["trunk_id"],))
+            if trunk:
+                return "PJSIP/%s@ep-trunk-%s" % (digits, trunk["name"])
+    return None
+
+
+def _screen_timeout(b_id):
+    sess = SCREENING.pop(b_id, None)
+    if sess is None:
+        return
+    log.info("cell leg %s: no 1 pressed, hanging up", b_id)
+    B_LOGIN.pop(b_id, None)
+    B_SCREEN.pop(b_id, None)
+    # Stay in PENDING: ChannelDestroyed -> hangup_other_leg then runs the
+    # normal no-answer handling (other legs may still be ringing).
+    try:
+        CLIENT.channels.get(b_id).hangup()
+    except Exception:
+        pass
+
+
+def _start_screening(b_channel):
+    """A cell leg answered: prompt for 1 instead of bridging right away."""
+    b_id = b_channel.id
+    log.info("cell leg %s answered, screening for 1", b_id)
+    t = threading.Timer(SCREEN_TIMEOUT, _screen_timeout, args=(b_id,))
+    t.daemon = True
+    t.start()
+    SCREENING[b_id] = {"timer": t}
+    try:
+        b_channel.play(SCREEN_PROMPT)
+    except Exception:
+        # Never screen in silence: the prompt also opens the RTP path, which
+        # is what lets the "1" back through NAT. Beep always exists.
+        log.info("cell leg %s: screen prompt failed, falling back to beep", b_id)
+        try:
+            b_channel.play("sound:beep")
+        except Exception:
+            pass
+
+
+def screen_dtmf(b_id, digit):
+    """A key press on a screening cell leg."""
+    sess = SCREENING.get(b_id)
+    if not sess:
+        return
+    if digit != "1":
+        return  # ignore anything else; the timeout ends the screening
+    sess["timer"].cancel()
+    SCREENING.pop(b_id, None)
+    B_SCREEN.pop(b_id, None)
+    log.info("cell leg %s: 1 pressed, bridging", b_id)
+    try:
+        on_legb_answer(CLIENT.channels.get(b_id))
+    except Exception:
+        log.exception("screened legb answer failed")
+
+
+def _cancel_cell_timers(a_id):
+    info = CALLS.get(a_id) or {}
+    for t in info.pop("cell_timers", []):
+        try:
+            t.cancel()
+        except Exception:
+            pass
+
+
 def on_legb_answer(b_channel):
     """B answered: hang up other B legs, bridge the winner with A."""
     a_id = PENDING.pop(b_channel.id, None)
@@ -512,6 +843,9 @@ def on_legb_answer(b_channel):
         b_channel.hangup()
         return
     info = CALLS[a_id]
+    # Someone picked up: no more cell legs may start.
+    info["ringing"] = False
+    _cancel_cell_timers(a_id)
     # Cancel the ring timeout timer
     timer = info.pop("ring_timer", None)
     if timer:
@@ -521,7 +855,9 @@ def on_legb_answer(b_channel):
         if PENDING.get(other_b_id) == a_id and other_b_id != b_channel.id:
             del PENDING[other_b_id]
             try:
-                CLIENT.channels.get(other_b_id).hangup()
+                # "Call completed elsewhere": the other phones (and the
+                # My Phone app) don't count it as a missed call.
+                CLIENT.channels.get(other_b_id).hangup(reason="answered_elsewhere")
             except Exception:
                 pass
     try:
@@ -535,13 +871,22 @@ def on_legb_answer(b_channel):
             CLIENT.channels.get(a_id).answer()
         except Exception:
             log.info("answer A %s: already up", a_id)
-        bridge = CLIENT.bridges.create(type="mixing")
+        # dtmf_events: keep Asterisk from natively bridging the RTP, so the
+        # phones' key presses still reach us (mid-call *86 block).
+        bridge = CLIENT.bridges.create(type="mixing,dtmf_events")
         # Add one channel at a time: ARI only honors the last id
         # when several are passed in a single addChannel call.
         bridge.add_channel(a_id)
         bridge.add_channel(b_channel.id)
         # Start call recordings per admin/user flags (Phase 2b)
-        start_call_recordings(bridge, a_id)
+        start_call_recordings(bridge, a_id, B_LOGIN.get(b_channel.id))
+        if info.get("ptt"):
+            # Push-to-talk: a short beep on the bridge tells both sides the
+            # intercom is live (start_call_recordings above no-ops for PTT).
+            try:
+                bridge.play(PTT_BEEP)
+            except Exception:
+                pass
     except Exception:
         log.exception("bridge failed")
         b_channel.hangup()
@@ -563,33 +908,59 @@ def on_legb_answer(b_channel):
 REC_RECORDINGS = {}  # rec_name -> {system, call_id, exten, login_id, ...}
 
 
-def start_call_recordings(bridge, a_id):
-    """Start MixMonitor-equivalent recordings per admin/user flags."""
+def start_call_recordings(bridge, a_id, answered_id=None):
+    """Start MixMonitor-equivalent recordings per admin/user flags.
+
+    Both sides count, whichever way the call goes: the extension that
+    called (outbound/internal) and the one that answered (inbound from
+    outside, from another extension, or via a ring group). Each user who
+    records their calls gets their own copy, filed under them."""
     info = CALLS.get(a_id)
     if not info:
         return
-    # Look up both extensions' recording flags
-    caller = q1("SELECT * FROM logins WHERE exten=?", (info["caller"],))
-    callee = q1("SELECT * FROM logins WHERE exten=?", (info["callee"],))
-    systems = set()
-    login_id = info.get("login_id")
-    exten = info["caller"]
+    if info.get("ptt"):
+        # Push-to-talk is a live intercom, never a recorded call: skip the
+        # whole admin/user gate below even when both parties record calls.
+        return
+    # Caller: the extension that placed the call (none for calls from outside).
+    caller = None
+    if info.get("login_id"):
+        caller = q1("SELECT * FROM logins WHERE id=?", (info["login_id"],))
+    if not caller:
+        caller = q1("SELECT * FROM logins WHERE exten=? AND exten != ''", (info["caller"],))
+    # Callee: whoever actually answered (a ring group's winner), else the
+    # extension that was dialled.
+    callee = None
+    for lid in (answered_id, info.get("callee_id")):
+        if lid:
+            callee = q1("SELECT * FROM logins WHERE id=?", (lid,))
+            if callee:
+                break
+    if not callee:
+        callee = q1("SELECT * FROM logins WHERE exten=? AND exten != ''", (info["callee"],))
+    if caller and callee and caller["id"] == callee["id"]:
+        callee = None
+    callee_exten = (callee["exten"] if callee else "") or info["callee"]
+    jobs = []   # (system, owner login id, exten, direction, peer)
     # Admin recording needs the system-wide switch (Recordings page, turned on
     # only after the admin acknowledged recording laws) AND the extension's box.
     admin_on = (q1("SELECT value FROM kv_settings WHERE key='admin_rec_enabled'") or {"value": "0"})["value"] == "1"
-    if admin_on and caller and caller["record_admin"]:
-        systems.add("admin")
-    if admin_on and callee and callee["record_admin"]:
-        systems.add("admin")
+    if admin_on and any(p and p["record_admin"] for p in (caller, callee)):
+        jobs.append(("admin", info.get("login_id"), info["caller"],
+                     info.get("direction", "internal"), callee_exten))
     # "Record my calls" needs the admin allow-flag AND the user's own wish
     # (so a user's opt-out sticks), plus the feature in their plan AND the
     # user's acknowledgement of recording laws (two-party consent states).
-    for party in (caller, callee):
+    for party, other, direction in (
+            (caller, callee_exten, "outbound" if info.get("direction") == "outbound" else "internal"),
+            (callee, info["caller"], "inbound" if info.get("direction") == "inbound" else "internal")):
         if (party and party["user_record"] and _party_wants_record(party)
                 and has_feature(party["id"], "recording")
                 and recording_consented(party["id"])):
-            systems.add("user")
-    if systems and (q1("SELECT value FROM kv_settings WHERE key='rec_announce'") or {"value": "0"})["value"] == "1":
+            jobs.append(("user", party["id"], party["exten"], direction, other))
+    if not jobs:
+        return
+    if (q1("SELECT value FROM kv_settings WHERE key='rec_announce'") or {"value": "0"})["value"] == "1":
         # "This call may be recorded": both parties hear it as the call starts.
         p = (q1("SELECT value FROM kv_settings WHERE key='rec_announce_path'") or {"value": ""})["value"]
         media = _media_for(p) if p and os.path.isfile(p) else "sound:beep"
@@ -597,25 +968,23 @@ def start_call_recordings(bridge, a_id):
             bridge.play(media)
         except Exception:
             log.exception("recording announcement failed")
-    for system in systems:
+    for n, (system, owner, exten, direction, peer) in enumerate(jobs):
         rec_dir = REC_ADMIN_DIR if system == "admin" else REC_USER_DIR
-        import os
         os.makedirs(rec_dir, exist_ok=True)
-        name = "rec-%s-%s-%d" % (system, a_id.replace(".", "-"),
-                                 int(time.time()))
+        name = "rec-%s-%s-%d-%d" % (system, a_id.replace(".", "-"), int(time.time()), n)
         try:
-            rec = bridge.record(name=name, format="wav", max_duration=0)
+            bridge.record(name=name, format="wav", max_duration=0)
             REC_RECORDINGS[name] = {
                 "system": system,
                 "call_id": a_id,
                 "exten": exten,
-                "login_id": login_id,
-                "direction": info.get("direction", "internal"),
-                "peer": info["callee"],
+                "login_id": owner,
+                "direction": direction,
+                "peer": peer,
                 "started": time.time(),
                 "bridge_id": bridge.id,
             }
-            log.info("started %s recording: %s", system, name)
+            log.info("started %s recording for %s: %s", system, exten, name)
         except Exception:
             log.exception("failed to start %s recording", system)
 
@@ -894,6 +1263,59 @@ CONFERENCES = {}  # room -> bridge_id
 DISA_SESSIONS = {}  # channel_id -> {stage, digits, me}
 
 
+DISA_PIN_PROMPT = "sound:agent-pass"     # "...password, followed by the pound key"
+DISA_BAD_PIN = "sound:auth-incorrect"     # "Password incorrect"
+DISA_IDLE_SEC = 20                        # no key for this long -> hang up
+
+
+def _disa_play(sess, media):
+    """Replace whatever DISA is playing (prompt / dial tone) with media."""
+    _disa_stop(sess)
+    try:
+        sess["pb"] = (sess["chan"].play(media) or {}).get("id")
+    except Exception:
+        log.info("DISA: playing %s failed", media)
+
+
+def _disa_stop(sess):
+    pid = sess.pop("pb", None)
+    if pid:
+        try:
+            CLIENT.delete("playbacks/%s" % pid)
+        except Exception:
+            pass
+
+
+def _disa_end(chan_id, prompt=None):
+    """Drop the DISA session and hang up (after `prompt`, if given)."""
+    sess = DISA_SESSIONS.pop(chan_id, None)
+    if not sess:
+        return
+    t = sess.pop("timer", None)
+    if t:
+        t.cancel()
+    _disa_stop(sess)
+    if prompt:
+        play_then(sess["chan"], prompt, lambda: _hangup(chan_id))
+    else:
+        _hangup(chan_id)
+
+
+def _disa_idle(sess):
+    """(Re)start the no-key timer: an abandoned *70 call doesn't stay up."""
+    t = sess.get("timer")
+    if t:
+        t.cancel()
+    cid = sess["chan"].id
+    def _timeout():
+        if DISA_SESSIONS.get(cid) is sess:
+            log.info("DISA: no keys for %ss on %s, hanging up", DISA_IDLE_SEC, cid)
+            _disa_end(cid)
+    sess["timer"] = threading.Timer(float(DISA_IDLE_SEC), _timeout)
+    sess["timer"].daemon = True
+    sess["timer"].start()
+
+
 def handle_disa(channel, me):
     """*70: DISA - PIN entry then dial tone for outbound/internal."""
     import bcrypt
@@ -907,12 +1329,15 @@ def handle_disa(channel, me):
         return
     try:
         channel.answer()
-        # Play beep to prompt for PIN
-        channel.play("tone:beep")
-        DISA_SESSIONS[channel.id] = {
+        sess = DISA_SESSIONS[channel.id] = {
             "stage": "pin", "digits": "", "me": me,
-            "pin_hash": pin_hash_row["value"],
+            "pin_hash": pin_hash_row["value"], "chan": channel,
         }
+        # "Please enter your password followed by the pound key."
+        # (There is no "beep" tone in indications.conf: the old tone:beep
+        # played nothing, so callers heard silence.)
+        _disa_play(sess, DISA_PIN_PROMPT)
+        _disa_idle(sess)
         log.info("DISA: %s prompted for PIN", me["exten"])
     except Exception:
         log.exception("DISA failed")
@@ -922,8 +1347,109 @@ def handle_disa(channel, me):
             pass
 
 
+# ---------------------------------------------------------------- mid-call block
+# During a call someone made to them, a user presses *86 on their own phone:
+# the call ends, the caller hears "not in service" and lands on the user's
+# block list (they can change what that caller gets later in My Phone ->
+# Settings -> Call filtering). Only key presses from the answering user's
+# own leg count: the caller's keys arrive on the other channel and are
+# ignored, so a caller can never block themselves into (or out of) anything.
+
+MIDCALL_BLOCK_CODE = "*86"
+MIDCALL_WINDOW = 3.0     # seconds allowed between the code's keys
+MIDCALL_DIGITS = {}      # b_channel_id -> (digits so far, time of last key)
+MAX_BLOCKS = 200         # same limit as My Phone (pbx-api/safety_ui.py)
+
+
+def _call_answered_by(b_id):
+    """The A-leg id of the bridged call whose answering leg is `b_id`,
+    if that leg is a local user's phone (not a trunk). Else None."""
+    for a_id, info in list(CALLS.items()):
+        if info.get("b_id") == b_id and info.get("bridged_at") and info.get("answered_id"):
+            return a_id
+    return None
+
+
+def midcall_dtmf(chan_id, digit):
+    """Collect keys pressed on an answered user leg. Returns True if the key
+    belonged to such a leg (whether or not it completed the code)."""
+    a_id = _call_answered_by(chan_id)
+    if not a_id:
+        MIDCALL_DIGITS.pop(chan_id, None)
+        return False
+    now = time.time()
+    buf, last = MIDCALL_DIGITS.get(chan_id, ("", 0.0))
+    if now - last > MIDCALL_WINDOW:
+        buf = ""
+    buf = (buf + digit)[-len(MIDCALL_BLOCK_CODE):]
+    MIDCALL_DIGITS[chan_id] = (buf, now)
+    if buf == MIDCALL_BLOCK_CODE:
+        MIDCALL_DIGITS.pop(chan_id, None)
+        try:
+            midcall_block(a_id, chan_id)
+        except Exception:
+            log.exception("mid-call block failed")
+    return True
+
+
+def midcall_block(a_id, b_id):
+    """The user on leg b_id pressed the block code: block the caller on a_id,
+    play them "not in service", and end the call."""
+    info = CALLS.get(a_id) or {}
+    user = q1("SELECT * FROM logins WHERE id=? AND enabled=1", (info.get("answered_id"),))
+    if not user:
+        return
+    user = dict(user)
+    if not feature_allowed(MIDCALL_BLOCK_CODE, user):
+        log.info("%s pressed %s but may not use it", user["exten"], MIDCALL_BLOCK_CODE)
+        return
+    caller = info.get("caller") or ""
+    n = num_norm(caller)
+    if n and n != num_norm(user["exten"]):
+        try:
+            with db() as c:
+                full = c.execute("SELECT COUNT(*) FROM blocked_numbers WHERE login_id=?",
+                                 (user["id"],)).fetchone()[0] >= MAX_BLOCKS
+                if full:
+                    log.warning("%s block list full: %s not added", user["exten"], n)
+                else:
+                    # An existing rule (e.g. "forward") is kept as the user set it.
+                    c.execute("INSERT OR IGNORE INTO blocked_numbers (login_id, number) VALUES (?,?)",
+                              (user["id"], n))
+                    c.execute("INSERT INTO audit (actor, action, detail) VALUES (?,?,?)",
+                              (user["username"], "ucp.block.midcall", n))
+        except sqlite3.Error:
+            log.exception("mid-call block: saving %s for %s failed", n, user["exten"])
+        log.info("%s blocked %s mid-call", user["exten"], n)
+    else:
+        # Withheld / unknown number: nothing to block, but still end the call.
+        log.info("%s pressed %s on a caller with no number (%r): call ended",
+                 user["exten"], MIDCALL_BLOCK_CODE, caller)
+    with LEG_LOCK:
+        bridge_id = BRIDGED.pop(a_id, None)
+        if bridge_id:
+            try:
+                CLIENT.bridges.get(bridge_id).remove_channel(a_id)
+            except Exception:
+                pass
+    # The user hears a beep (done), then their leg ends; the caller is told
+    # the number is not in service and hung up.
+    try:
+        play_then(CLIENT.channels.get(b_id), "sound:beep", lambda: _hangup(b_id))
+    except Exception:
+        _hangup(b_id)
+    try:
+        deny_and_hangup(CLIENT.channels.get(a_id), DISCONNECTED_PROMPT,
+                        "mid-call block by %s" % user["exten"])
+    except Exception:
+        _hangup(a_id)
+
+
 def on_dtmf(channel, event):
     """Handle DTMF for IVR menus, DISA PIN entry and dialing."""
+    if channel.id in SCREENING:
+        screen_dtmf(channel.id, event.get("digit", ""))
+        return
     if channel.id in SPY_MONITORS:
         spy_dtmf(channel.id, event.get("digit", ""))
         return
@@ -936,57 +1462,50 @@ def on_dtmf(channel, event):
     if channel.id in VMS:
         vms_dtmf(channel.id, event.get("digit", ""))
         return
-    import bcrypt
+    if channel.id in BRIDGED and midcall_dtmf(channel.id, event.get("digit", "")):
+        return
     chan_id = channel.id
     sess = DISA_SESSIONS.get(chan_id)
     if not sess:
         return
+    import bcrypt
     digit = event.get("digit", "")
+    _disa_idle(sess)
     if sess["stage"] == "pin":
         if digit == "#":
             # Validate PIN
             pin = sess["digits"]
-            if bcrypt.checkpw(pin.encode(), sess["pin_hash"].encode()):
+            if pin and bcrypt.checkpw(pin.encode(), sess["pin_hash"].encode()):
                 sess["stage"] = "dial"
                 sess["digits"] = ""
-                try:
-                    channel.play("tone:dial")
-                    log.info("DISA: PIN accepted for %s", sess["me"]["exten"])
-                except Exception:
-                    pass
+                _disa_play(sess, "tone:dial")   # until the first digit
+                log.info("DISA: PIN accepted for %s", sess["me"]["exten"])
             else:
                 log.info("DISA: wrong PIN from %s", sess["me"]["exten"])
-                try:
-                    channel.hangup()
-                except Exception:
-                    pass
-                DISA_SESSIONS.pop(chan_id, None)
+                _disa_end(chan_id, DISA_BAD_PIN)
         elif digit.isdigit():
+            _disa_stop(sess)   # typing over the prompt
             sess["digits"] += digit
             if len(sess["digits"]) > 12:
-                try:
-                    channel.hangup()
-                except Exception:
-                    pass
-                DISA_SESSIONS.pop(chan_id, None)
+                _disa_end(chan_id, DISA_BAD_PIN)
     elif sess["stage"] == "dial":
         if digit == "#":
-            # Dial the collected digits as an internal call
+            # Dial the collected digits as if the phone had dialed them.
             dest = sess["digits"]
             me = sess["me"]
             DISA_SESSIONS.pop(chan_id, None)
+            sess["timer"].cancel()
+            _disa_stop(sess)
+            if not dest:
+                _hangup(chan_id)
+                return
             log.info("DISA: %s dialing %s", me["exten"], dest)
-            # Reuse handle_internal logic by faking the dialed number
-            # We need to route this channel as if they dialed dest
             handle_internal(channel, dest)
         elif digit.isdigit() or digit == "*":
+            _disa_stop(sess)   # dial tone off at the first digit
             sess["digits"] += digit
             if len(sess["digits"]) > 15:
-                try:
-                    channel.hangup()
-                except Exception:
-                    pass
-                DISA_SESSIONS.pop(chan_id, None)
+                _disa_end(chan_id)
 
 
 def handle_conference(channel, me, room):
@@ -1519,6 +2038,20 @@ def hangup_other_leg(ended_id):
             log.info("B leg %s ended, %d still ringing for %s",
                      ended_id, len(remaining), a_id)
             return
+        # Ring timeout: hang up all B legs after timeout to trigger voicemail.
+        # Reads the live b_ids so delayed cell legs are covered too.
+        _cancel_cell_timers(a_id)
+        info["ringing"] = False
+        if info.get("ptt"):
+            # Push-to-talk has no no-answer path: the callee didn't
+            # (auto-)answer, so fast-fail the caller — never voicemail,
+            # never a forward.
+            try:
+                deny_and_hangup(CLIENT.channels.get(a_id), DENIED_PROMPT,
+                                "PTT %s did not answer" % info.get("callee"))
+            except Exception:
+                _hangup(a_id)
+            return
         # All B legs done (no answer/timeout)
         if info.get("direction") in ("inbound", "group"):
             # Inbound no-answer: the single rung user's forward-on-no-answer,
@@ -1765,15 +2298,17 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
             return
     # Who actually rings: skip users on DND, follow forward-always.
     targets, first_login = [], None
-    blocked_n = 0
+    first_block = None   # (callee, rule) of the first user who blocked the caller
     for exten in ring_extens:
         callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1",
                     (exten,))
         if not callee:
             continue
-        if blocked_by(callee["id"], caller_num):
+        rule = block_rule(callee["id"], caller_num)
+        if rule:
             log.info("%s blocked %s: not rung", exten, caller_num)
-            blocked_n += 1
+            if first_block is None:
+                first_block = (callee, rule)
             continue
         if first_login is None:
             first_login = callee
@@ -1811,9 +2346,12 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
         if all(t["id"] != callee["id"] for t in targets):
             targets.append(callee)
     vm_login, vm_copies = _group_vm(group, first_login)
-    if not targets and blocked_n:
-        # Everyone this call would ring has blocked the caller.
-        deny_and_hangup(channel, why="caller %s blocked by everyone rung" % caller_num)
+    if not targets and first_block and first_login is None:
+        # Everyone this call would ring has blocked the caller: the first
+        # one's Call filtering choice (not in service / voicemail / forward).
+        callee, rule = first_block
+        apply_block(channel, callee, callee, rule, caller_num, caller_id=caller_id,
+                    direction="internal" if internal else "inbound", extra={"did": did})
         return
     if not targets:
         # Everyone on DND (or no valid users): the group's no-answer choice,
@@ -1824,27 +2362,9 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
     # A number that rings one person uses that person's ring time, if set.
     if len(targets) == 1 and not group:
         timeout = ring_seconds_for(targets[0]["id"], default=timeout)
-    # Originate to all targets in parallel; first to answer wins
+    # Track this as an inbound call with multiple B legs. Assigned before any
+    # originate so delayed cell legs (below) can append to the same b_ids.
     b_ids = []
-    for callee in targets:
-        try:
-            leg_b = CLIENT.channels.originate(
-                endpoint="PJSIP/%s" % callee["sip_username"],
-                app=APP,
-                app_args="legb,%s" % channel.id,
-                caller_id=caller_id,
-                timeout=timeout + 5)  # our timer fires first -> voicemail
-            b_ids.append(leg_b.id)
-            PENDING[leg_b.id] = channel.id
-            B_LOGIN[leg_b.id] = callee["id"]
-        except Exception:
-            log.exception("inbound originate to %s failed", callee["exten"])
-    if not b_ids:
-        # All originates failed: the group's no-answer choice / voicemail
-        _group_fallback(channel, group, first_login, vm_login, vm_copies, did, caller_num,
-                        caller_id, internal, hops)
-        return
-    # Track this as an inbound call with multiple B legs
     CALLS[channel.id] = {
         "caller": caller_num,
         "callee": ",".join(t["exten"] for t in targets),
@@ -1863,11 +2383,107 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
         "caller_id": caller_id, "internal": internal, "group_hops": hops,
         "ring_ids": [t["id"] for t in targets],
         "hops": 0,
+        "ringing": True,  # cleared on answer or no-answer handling
     }
-    # Ring timeout: hang up all B legs after timeout to trigger voicemail
+    # Originate to all targets in parallel; first to answer wins.
+    # Caller ID is resolved per callee: each user's own contacts name the
+    # caller on their own phones (desk phone + app ring screen).
+    for callee in targets:
+        leg_cid = contact_caller_id(callee["id"], caller_num, caller_id)
+        for ep in phone_endpoints(callee):      # desk phone + app line
+            try:
+                leg_b = CLIENT.channels.originate(
+                    endpoint=ep,
+                    app=APP,
+                    app_args="legb,%s" % channel.id,
+                    caller_id=leg_cid,
+                    timeout=timeout + 5)  # our timer fires first -> voicemail
+                b_ids.append(leg_b.id)
+                PENDING[leg_b.id] = channel.id
+                B_LOGIN[leg_b.id] = callee["id"]
+            except Exception:
+                log.exception("inbound originate to %s (%s) failed", callee["exten"], ep)
+    # --- ring-group-to-cell ----------------------------------------------
+    # Each member's own cell rings too (opt-in per user in /ucp/settings).
+    # The leg leaves over the outbound routes, optionally after a delay so
+    # the desk phone and app ring first, and it never bridges without the
+    # "press 1" screening (else the cell's voicemail wins the race).
+    def _start_cell_leg(callee, ep, leg_cid, a_id=channel.id):
+        info = CALLS.get(a_id)
+        if not info:
+            return
+        info["cell_pending"] = max(0, info.get("cell_pending", 1) - 1)
+        if a_id in BRIDGED or not info.get("ringing"):
+            return  # answered / hung up / already in no-answer handling
+        try:
+            leg_b = CLIENT.channels.originate(
+                endpoint=ep,
+                app=APP,
+                app_args="legb,%s" % a_id,
+                caller_id=leg_cid,
+                timeout=timeout + 5)
+        except Exception:
+            log.exception("inbound cell originate to %s failed", callee["exten"])
+            leg_b = None
+        if leg_b is not None:
+            with LEG_LOCK:
+                info["b_ids"].append(leg_b.id)
+                PENDING[leg_b.id] = a_id
+                B_LOGIN[leg_b.id] = callee["id"]
+                B_SCREEN[leg_b.id] = True
+            log.info("inbound %s: cell leg ringing for %s", did, callee["exten"])
+        elif not info["b_ids"] and info.get("cell_pending", 0) <= 0:
+            # The cell was the only hope and it failed: no-answer handling now.
+            log.warning("inbound %s: cell leg failed, nothing ringing", did)
+            _group_fallback(channel, group, first_login, vm_login, vm_copies,
+                            did, caller_num, caller_id, internal, hops)
+
+    cell_timers = []
+    for callee in targets:
+        prefs = get_prefs(callee["id"])
+        if not prefs.get("ring_cell"):
+            continue
+        digits = num_norm(prefs.get("cell_number") or "")
+        if len(digits) < 7:
+            continue
+        if block_rule(callee["id"], digits):
+            log.info("inbound %s: %s's own cell is on their block list, skipped",
+                     did, callee["exten"])
+            continue
+        if not can_call_outside(callee["id"]):
+            log.info("inbound %s: %s has no outside minutes for the cell leg, skipped",
+                     did, callee["exten"])
+            continue
+        ep = trunk_endpoint_for(digits)
+        if not ep:
+            log.warning("inbound %s: no outbound route for %s's cell, skipped",
+                        did, callee["exten"])
+            continue
+        delay = prefs.get("cell_delay")
+        delay = int(delay) if str(delay).isdigit() else 15
+        delay = max(0, min(delay, timeout))
+        leg_cid = contact_caller_id(callee["id"], caller_num, caller_id)
+        if delay <= 0:
+            _start_cell_leg(callee, ep, leg_cid)
+        else:
+            CALLS[channel.id]["cell_pending"] = \
+                CALLS[channel.id].get("cell_pending", 0) + 1
+            t = threading.Timer(delay, _start_cell_leg, args=(callee, ep, leg_cid))
+            t.daemon = True
+            t.start()
+            cell_timers.append(t)
+    CALLS[channel.id]["cell_timers"] = cell_timers
+    if not b_ids and not cell_timers:
+        # All originates failed: the group's no-answer choice / voicemail
+        _group_fallback(channel, group, first_login, vm_login, vm_copies, did, caller_num,
+                        caller_id, internal, hops)
+        return
+    # Ring timeout: hang up all B legs after timeout to trigger voicemail.
+    # Reads the live b_ids so delayed cell legs are covered too.
     a_id = channel.id
-    def _inbound_timeout(b_ids=list(b_ids), a_id=a_id):
-        for b_id in b_ids:
+    def _inbound_timeout(a_id=a_id):
+        _cancel_cell_timers(a_id)
+        for b_id in list(CALLS.get(a_id, {}).get("b_ids", [])):
             log.info("inbound ring timeout for b leg %s", b_id)
             end_unanswered_leg(b_id)
     t = threading.Timer(float(timeout), _inbound_timeout)
@@ -1924,6 +2540,8 @@ def quota(login_id, feature):
 UNLIMITED = -1
 RECORDING_CONSENT_VERSION = 1
 DENIED_PROMPT = "sound:cannot-complete-as-dialed"
+# What a blocked caller hears: "The number you have dialed is not in service."
+DISCONNECTED_PROMPT = "sound:ss-noservice"
 UNAVAILABLE_PROMPT = "sound:vm-nobodyavail"
 
 
@@ -2378,11 +2996,16 @@ def on_stasis_start(channel, event):
 
 
 def on_channel_state_change(channel, event):
-    # Bridge A+B the moment the B leg answers.
+    # Bridge A+B the moment the B leg answers - unless it's a cell leg,
+    # which must pass the "press 1" screening first (else the cell's
+    # voicemail would win the race against the desk phones).
     if (channel.id in PENDING
             and event.get("channel", {}).get("state") == "Up"):
         try:
-            on_legb_answer(channel)
+            if channel.id in B_SCREEN:
+                _start_screening(channel)
+            else:
+                on_legb_answer(channel)
         except Exception:
             log.exception("legb answer handling failed")
 
@@ -2403,7 +3026,14 @@ def on_stasis_end(channel, event):
         vm_cleanup(channel.id)
         with LEG_LOCK:
             hangup_other_leg(channel.id)
-        DISA_SESSIONS.pop(channel.id, None)
+        _disa_sess = DISA_SESSIONS.pop(channel.id, None)
+        if _disa_sess and _disa_sess.get("timer"):
+            _disa_sess["timer"].cancel()
+        _screen = SCREENING.pop(channel.id, None)
+        if _screen:
+            _screen["timer"].cancel()
+        B_SCREEN.pop(channel.id, None)
+        MIDCALL_DIGITS.pop(channel.id, None)
         mon = SPY_MONITORS.pop(channel.id, None)
         if mon is not None:
             _spy_stop_monitor(mon)

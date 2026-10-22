@@ -7,4 +7,4 @@
 - send SMS thru HA
 - place a call from HA to PBX - voip_stack im sure.
 
-3. Android App?
+3. Android App - see docs/ANDROID_APP_PLAN.md

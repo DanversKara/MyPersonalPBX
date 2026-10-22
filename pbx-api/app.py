@@ -18,22 +18,41 @@ from typing import Literal
 
 log = logging.getLogger("pbx-api")
 
+# shared/phone.py holds the one canonical number normalizer used by every
+# service (contacts, block list, caller-ID matching). In production deploy.sh
+# copies it flat into this dir; from a repo checkout it lives in ../shared.
+import sys as _sys_path
+_shared = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
+if _shared not in _sys_path.path:
+    _sys_path.path.insert(0, _shared)
+try:
+    from phone import norm_number as _norm_number
+except ImportError:  # pragma: no cover - deploy always ships phone.py
+    def _norm_number(v):
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        return d[1:] if len(d) == 11 and d.startswith("1") else d
+
 import bcrypt
 from fastapi import FastAPI, HTTPException, Request, Form, File, UploadFile
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse
 from pydantic import BaseModel
-from panel_templates import page, LOGIN_HTML, HIDE_ADMIN, BRANDING, BRAND_DEFAULTS, login_html, fmt_ts
+from panel_templates import page, LOGIN_HTML, HIDE_ADMIN, BRANDING, BRAND_DEFAULTS, login_html, fmt_ts, get_brand
 import ucp
 import ivr_ui
 import billing
 import email_ui
 import mailer
 import network_ui
+import sso_ui
+import store_ui
+import entitlements
 import security
 import e911_ui
 import ring_groups_ui
 import safety_ui
 import voipms_sms
+import contacts
+import app_api
 
 
 def esc(x):
@@ -74,6 +93,11 @@ def _migrate(c):
         return {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
     if "ivr_id" not in cols("inbound_routes"):
         c.execute("ALTER TABLE inbound_routes ADD COLUMN ivr_id INTEGER DEFAULT NULL")
+    # Call filtering: what a blocked caller gets (see schema.sql).
+    if "action" not in cols("blocked_numbers"):
+        c.execute("ALTER TABLE blocked_numbers ADD COLUMN action TEXT NOT NULL DEFAULT 'disconnected'")
+    if "target" not in cols("blocked_numbers"):
+        c.execute("ALTER TABLE blocked_numbers ADD COLUMN target TEXT NOT NULL DEFAULT ''")
     if "ring_seconds" not in cols("user_prefs"):
         c.execute("ALTER TABLE user_prefs ADD COLUMN ring_seconds INTEGER NOT NULL DEFAULT 0")
     if "answer_ivr_id" not in cols("user_prefs"):
@@ -92,6 +116,37 @@ def _migrate(c):
     for col in ("text_email", "msg_in", "msg_out"):
         if col not in cols("user_prefs"):
             c.execute(f"ALTER TABLE user_prefs ADD COLUMN {col} INTEGER NOT NULL DEFAULT 1")
+    # Ring-group-to-cell: ring the user's own cell phone alongside desk/app.
+    if "cell_number" not in cols("user_prefs"):
+        c.execute("ALTER TABLE user_prefs ADD COLUMN cell_number TEXT NOT NULL DEFAULT ''")
+    if "ring_cell" not in cols("user_prefs"):
+        c.execute("ALTER TABLE user_prefs ADD COLUMN ring_cell INTEGER NOT NULL DEFAULT 0")
+    if "cell_delay" not in cols("user_prefs"):
+        c.execute("ALTER TABLE user_prefs ADD COLUMN cell_delay INTEGER NOT NULL DEFAULT 15")
+    # Contacts + notes (private per login; see pbx-api/contacts.py).
+    c.execute("""CREATE TABLE IF NOT EXISTS contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+      name TEXT NOT NULL DEFAULT '',
+      number TEXT NOT NULL DEFAULT '',
+      number_norm TEXT NOT NULL DEFAULT '',
+      org TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_login_norm ON contacts(login_id, number_norm)")
+    c.execute("""CREATE TABLE IF NOT EXISTS contact_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+      contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+      item_type TEXT NOT NULL DEFAULT '',
+      item_id INTEGER DEFAULT NULL,
+      item_at TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(login_id, contact_id)")
     if "group_id" not in cols("inbound_routes"):
         c.execute("ALTER TABLE inbound_routes ADD COLUMN group_id INTEGER DEFAULT NULL")
     if "exten_since" not in cols("logins"):
@@ -101,6 +156,8 @@ def _migrate(c):
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_logins_exten_change AFTER UPDATE OF exten ON logins
                  WHEN NEW.exten IS NOT OLD.exten
                  BEGIN UPDATE logins SET exten_since = datetime('now') WHERE id = NEW.id; END""")
+    if "calls_seen_id" not in cols("app_devices"):
+        c.execute("ALTER TABLE app_devices ADD COLUMN calls_seen_id INTEGER NOT NULL DEFAULT 0")
     if "answered_login_id" not in cols("cdr"):
         c.execute("ALTER TABLE cdr ADD COLUMN answered_login_id INTEGER DEFAULT NULL")
     # Split user recording into admin allow-flag + user wish-flag, so a
@@ -108,6 +165,15 @@ def _migrate(c):
     # Backfill wish=0: every user (re-)opts in via Settings -> "Record my calls".
     if "user_wants_record" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN user_wants_record INTEGER NOT NULL DEFAULT 0")
+    # Push-to-talk, split the same way: admin allow-flag + user wish-flag,
+    # so an admin can never force PTT on for a user who hasn't opted in.
+    if "ptt_allowed" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN ptt_allowed INTEGER NOT NULL DEFAULT 0")
+    if "ptt_enabled" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN ptt_enabled INTEGER NOT NULL DEFAULT 0")
+    # Single sign-on: "<issuer>|<subject>" of the provider account linked to this login.
+    if "sso_subject" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN sso_subject TEXT NOT NULL DEFAULT ''")
     # One-time: the previous build seeded 3 free IVR menus per user; paid
     # plans replace that (no free menus). Only touches the untouched seed.
     done = c.execute("SELECT value FROM kv_settings WHERE key='mig_ivr_free_0'").fetchone()
@@ -153,9 +219,27 @@ def _migrate(c):
         ("*555", "ChanSpy monitor", "Stay on the line and listen to calls: *555<ext> monitors one extension (auto-follows new calls), bare *555 scans any active call; * / # hops between calls", "admin"),
         ("*60", "Conference room", "Join conference room 60", "all"),
         ("*70", "DISA", "Outside dial tone after entering a PIN", "all"),
+        ("*86", "Block caller (mid-call)", "Press *86 during a call someone made to you: the call ends, the caller"
+         " hears \"not in service\" and is added to your block list (change what they get in My Phone"
+         " -> Settings -> Call filtering). Only works from your own phone, never from the caller's side", "all"),
     ):
         c.execute("INSERT OR IGNORE INTO feature_codes (code, name, description, default_access)"
                   " VALUES (?,?,?,?)", (code, name, desc, access))
+    # Star codes by plan: a plan lists the codes it includes; users without
+    # a plan get the "no plan" set (Billing -> User access), empty by default.
+    if "feature_codes" not in cols("billing_plans"):
+        c.execute("ALTER TABLE billing_plans ADD COLUMN feature_codes TEXT NOT NULL DEFAULT ''")
+    c.execute("INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_feature_codes', '')")
+    store_ui.ensure_tables(c)
+    # One-time: codes open to "All users" become "By plan", so new accounts
+    # start with none. Users who exist now keep exactly what they had (an
+    # Allow override each), so nothing changes for them.
+    if not c.execute("SELECT 1 FROM kv_settings WHERE key='mig_codes_by_plan'").fetchone():
+        for (code,) in c.execute("SELECT code FROM feature_codes WHERE default_access='all'").fetchall():
+            c.execute("INSERT OR IGNORE INTO login_feature_access (login_id, code, allowed)"
+                      " SELECT id, ?, 1 FROM logins WHERE role != 'admin'", (code,))
+            c.execute("UPDATE feature_codes SET default_access='plan' WHERE code=?", (code,))
+        c.execute("INSERT INTO kv_settings (key, value) VALUES ('mig_codes_by_plan', '1')")
     c.execute("""CREATE TABLE IF NOT EXISTS invites (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       token_hash TEXT NOT NULL UNIQUE,
@@ -331,7 +415,7 @@ REMOTE_ALLOWED_PREFIXES = (
     "/ucp", "/login", "/logout", "/auth/login", "/auth/logout", "/auth/me",
     "/stripe/webhook", "/healthz", "/api/vm-greeting", "/api/voicemail-audio/",
     "/api/recording-audio/", "/api/ivr-greeting/", "/api/v1/me", "/favicon",
-    "/hooks/voipms-sms", "/invite/",
+    "/hooks/voipms-sms", "/invite/", "/api/v1/app/", "/store",
 )
 
 
@@ -571,15 +655,19 @@ def _check_csrf_v1(request: Request):
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page():
-    return page("Login", login_html())
+def login_page(request: Request):
+    if sso_ui.should_auto_redirect(request):
+        nxt = sso_ui.next_param(request.query_params.get("next"))
+        return RedirectResponse("/login/oidc" + ("?" + urllib.parse.urlencode({"next": nxt}) if nxt else ""),
+                                status_code=302)
+    return HTMLResponse(page("Login", sso_ui.login_box(request)))
 
 
 @app.post("/login")
-def login_post(request: Request, username: str = Form(...), password: str = Form(...)):
+def login_post(request: Request, username: str = Form(...), password: str = Form(...), next: str = Form("")):
     ip = client_ip(request)
     if not _login_allowed(ip, username):
-        return HTMLResponse(page("Login", login_html() + "<p style='color:red'>Too many attempts — try again in 15 minutes.</p>"), status_code=429)
+        return HTMLResponse(page("Login", sso_ui.login_box(request, "Too many attempts — try again in 15 minutes.", True, next)), status_code=429)
     with db() as c:
         u = c.execute("SELECT * FROM logins WHERE username=?",
                       (username,)).fetchone()
@@ -587,10 +675,10 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
     if not u or not pw_ok or not u["enabled"]:
         _log_signin(request, username, False)
         _login_failed(ip, username)
-        return HTMLResponse(page("Login", login_html() + "<p style='color:red'>Invalid credentials</p>"), status_code=401)
+        return HTMLResponse(page("Login", sso_ui.login_box(request, "Invalid credentials", True, next)), status_code=401)
     _log_signin(request, username, True)
     tok = _new_session(u)
-    dest = "/" if u["role"] == "admin" else "/ucp"
+    dest = sso_ui.next_param(next) or ("/" if u["role"] == "admin" else "/ucp")
     resp = RedirectResponse(dest, status_code=302)
     _set_session_cookie(request, resp, tok)
     return resp
@@ -599,7 +687,8 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
 @app.get("/logout")
 def logout_page(request: Request):
     _sessions.pop(request.cookies.get("pbx_session") or "", None)
-    return RedirectResponse("/login")
+    # ?out=1: don't bounce straight back into single sign-on.
+    return RedirectResponse("/login?out=1")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -782,7 +871,8 @@ async function loadDevices() {
       (cnt.internal || 0) + ' internal · ' + (cnt.external || 0) + ' external' : '';
     document.getElementById('devices').innerHTML = devices.length ? devices.map(d =>
       '<tr><td>' + esc(d.display_name || d.username) +
-      ' <span class="muted">' + esc(d.username) + '</span></td>' +
+      (d.kind === 'app' ? ' <span class="pill">My Phone app</span>' : '') +
+      ' <span class="muted">' + esc(d.sip_username || d.username) + '</span></td>' +
       '<td>' + esc(d.exten) + '</td>' +
       '<td>' + esc(d.ip) + (d.port ? '<span class="muted">:' + esc(d.port) + '</span>' : '') + '</td>' +
       '<td><span class="pill ' + (d.location === 'external' ? 'warn' : 'ok') + '">' +
@@ -961,6 +1051,8 @@ def login_edit_page(request: Request, lid: str):
 <span class="muted">{'(on system-wide)' if _get_setting("admin_rec_enabled") == "1" else '(off system-wide - nothing is recorded until it is turned on under <a href="/recordings">Recordings</a>)'}</span><br>
 <label><input type="checkbox" name="user_record" {'checked' if t and t['user_record'] else ''}> User call recording (allow)</label>
 <span class="muted">Lets the user record their own calls. They must still turn on "Record my calls" in Settings themselves — this cannot enable it for them. Uncheck to disable user recording entirely.</span><br>
+<label><input type="checkbox" name="ptt_allowed" {'checked' if t and t['ptt_allowed'] else ''}> Allow push-to-talk</label>
+<span class="muted">Lets the user place push-to-talk calls (dial *88 + extension) and receive them. They must still turn on push-to-talk in their own Settings themselves — this cannot enable it for them. Uncheck to disable push-to-talk entirely.</span><br>
 <p class="muted" style="max-width:560px">Recording laws vary; some US states (e.g. California, Florida, Illinois, Maryland,
 Massachusetts, Pennsylvania, Washington) require every party's consent. "User call recording" only records once the user has
 accepted the recording notice in their control panel and their plan includes recording. Admin recording is your responsibility
@@ -988,6 +1080,7 @@ async def login_edit_save(request: Request, lid: str,
                     sip_username: str = Form(""), sip_secret: str = Form(""),
                     display_name: str = Form(""), vm_email: str = Form(""),
                     record_admin: str = Form(None), user_record: str = Form(None),
+                    ptt_allowed: str = Form(None),
                     enabled: str = Form(None)):
     s = _sess(request)
     if not s or s["role"] != "admin":
@@ -1006,11 +1099,12 @@ async def login_edit_save(request: Request, lid: str,
             if exten and not sip_secret:
                 raise HTTPException(400, "SIP secret is required when an extension is set")
             cur = c.execute("""INSERT INTO logins (username, pwhash, role, exten, sip_username, sip_secret,
-                       display_name, vm_email, record_admin, user_record, enabled)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                       display_name, vm_email, record_admin, user_record, ptt_allowed, enabled)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (username, pwh, role, exten or "", sip_u, sip_secret or "",
                        display_name or "", vm_email or "",
                        1 if record_admin else 0, 1 if user_record else 0,
+                       1 if ptt_allowed else 0,
                        1 if enabled else 0))
             new_id = cur.lastrowid
             # Create their voicemail box
@@ -1028,11 +1122,15 @@ async def login_edit_save(request: Request, lid: str,
                 sets.append(f"{k}=?"); vals.append(val)
             sets.append("record_admin=?"); vals.append(1 if record_admin else 0)
             sets.append("user_record=?"); vals.append(1 if user_record else 0)
+            sets.append("ptt_allowed=?"); vals.append(1 if ptt_allowed else 0)
             sets.append("enabled=?"); vals.append(1 if enabled else 0)
             if password:
                 sets.append("pwhash=?"); vals.append(bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode())
             if sip_secret:
                 sets.append("sip_secret=?"); vals.append(sip_secret)
+            renamed = c.execute("SELECT 1 FROM logins WHERE id=? AND username != ?", (lid, username)).fetchone()
+            if renamed:
+                sets.append("sso_subject=?"); vals.append("")   # a renamed login is a different person
             vals.append(lid)
             c.execute(f"UPDATE logins SET {', '.join(sets)} WHERE id=?", vals)
         c.commit()
@@ -1112,7 +1210,8 @@ async def login_delete(request: Request, lid: str):
                          ("user_prefs", "login_id"), ("ivr_menus", "owner_login_id"),
                          ("user_entitlements", "login_id"), ("billing_customers", "login_id"),
                          ("api_keys", "login_id"), ("e911_users", "login_id"),
-                         ("blocked_numbers", "login_id")]:
+                         ("blocked_numbers", "login_id"),
+                         ("contacts", "login_id"), ("contact_notes", "login_id")]:
             c.execute(f"DELETE FROM {tbl} WHERE {col}=?", (lid_i,))
         c.execute("DELETE FROM logins WHERE id=?", (lid_i,))
         c.commit()
@@ -1281,7 +1380,7 @@ async def invite_new(request: Request):
             with db() as c:
                 cfg = mailer.settings(c)
             mailer.send(cfg, email,
-                        f"Your {_get_setting('brand_site_name') or 'PBX'} phone account invite",
+                        f"Your {(get_brand().get('site_name') or 'PBX')} phone account invite",
                         f"Hi,\n\nYou've been invited to set up your phone account.\n\n"
                         f"Open this link within {days} day{'s' if days != 1 else ''} to choose your password "
                         f"and finish setup:\n\n{link}\n\n"
@@ -1613,8 +1712,7 @@ group's own ring time and voicemail setting apply (<a href="/ring-groups">Ring g
 
 def _did_norm(v: str) -> str:
     """Digits only; US/Canada numbers stored as 10 digits (matches +1 / 1 / 10-digit)."""
-    d = "".join(ch for ch in str(v or "") if ch.isdigit())
-    return d[1:] if len(d) == 11 and d.startswith("1") else d
+    return _norm_number(v)
 
 
 @app.post("/routes/prefix")
@@ -2130,6 +2228,7 @@ def _handle_voipms_inbound(params: dict) -> tuple[bool, str]:
         c.commit()
     # Deliver to Zoiper/softphones via pbx-brain (best effort; stored anyway)
     for d in valid:
+        app_api.push_exten(d, "message")
         try:
             import json as _json, urllib.request as _ur
             brain_url = os.environ.get("PBX_BRAIN_STATUS", "http://127.0.0.1:8099") + "/messages/send"
@@ -2423,7 +2522,7 @@ def features_page(request: Request):
         exc = {r["code"]: r["n"] for r in c.execute(
             "SELECT code, COUNT(*) n FROM login_feature_access GROUP BY code")}
     def access_label(a):
-        return {"all": "All users", "admin": "Admins only", "none": "No one"}.get(a, a)
+        return {"all": "All users", "plan": "By plan", "admin": "Admins only", "none": "No one"}.get(a, a)
     tr = "".join(
         f"<tr><td><code>{esc(f['code'])}</code></td><td>{esc(f['name'])}"
         f"<br><span class='muted'>{esc(f['description'])}</span></td>"
@@ -2434,7 +2533,9 @@ def features_page(request: Request):
         for f in feats)
     body = f"""<h2>Feature codes</h2>
 <p class="muted">Star codes users can dial from their phones (e.g. <code>*97</code> for voicemail).
-Turn each code on/off, set who may use it by default, and override per user below.</p>
+Turn each code on/off, set who may use it by default, and override per user.
+<b>By plan</b>: a user gets the code when their plan includes it (Billing → plan → Star codes included), or,
+without a plan, when it's in the "no plan" star codes (Billing → User access). Admins always can.</p>
 <table><tr><th>Code</th><th>Name</th><th>Enabled</th><th>Default access</th><th>User overrides</th><th></th></tr>
 {tr or '<tr><td colspan=6 class=muted>No feature codes.</td></tr>'}</table>
 """
@@ -2452,6 +2553,7 @@ def feature_edit_page(request: Request, code: str):
             return RedirectResponse("/features")
         logins = c.execute("SELECT id, exten, display_name, role FROM logins"
                            " WHERE enabled=1 ORDER BY exten").fetchall()
+        now = {u["id"]: entitlements.code_access(c, u, code) for u in logins}
         overrides = {r["login_id"]: r["allowed"] for r in c.execute(
             "SELECT login_id, allowed FROM login_feature_access WHERE code=?", (code,))}
     def acc_opt(val, label):
@@ -2464,8 +2566,11 @@ def feature_edit_page(request: Request, code: str):
         sel_a = "selected" if ov == 1 else ""
         sel_n = "selected" if ov == 0 else ""
         nm = esc(u["display_name"] or u["exten"])
+        ok, why = now[u["id"]]
         urows.append(
             f"<tr><td>{esc(u['exten'])}</td><td>{nm}</td><td>{esc(u['role'])}</td>"
+            f"<td><span class='pill {'ok' if ok else 'bad'}'>{'Can use' if ok else 'Off'}</span>"
+            f" <span class='muted'>{esc(why)}</span></td>"
             f"<td><select name='u_{u['id']}'>"
             f"<option value='' {sel_d}>Default</option>"
             f"<option value='1' {sel_a}>Allow</option>"
@@ -2477,13 +2582,14 @@ def feature_edit_page(request: Request, code: str):
 {_csrf_field(s)}
 <label><input type="checkbox" name="enabled" value="1" {'checked' if f['enabled'] else ''}> Enabled</label><br><br>
 <label>Default access<br><select name="default_access">
+{acc_opt('plan', 'By plan (users whose plan includes it; admins always)')}
 {acc_opt('all', 'All users')}
 {acc_opt('admin', 'Admins only')}
 {acc_opt('none', 'No one (allow specific users below)')}
 </select></label><br><br>
 <h3>Per-user overrides</h3>
-<p class="muted">Leave on Default to follow the setting above, or force Allow/Deny per user.</p>
-<table><tr><th>Ext</th><th>Name</th><th>Role</th><th>Access</th></tr>
+<p class="muted">Leave on Default to follow the setting above, or force Allow/Deny per user. "Now" is what applies today and why.</p>
+<table><tr><th>Ext</th><th>Name</th><th>Role</th><th>Now</th><th>Access</th></tr>
 {''.join(urows)}
 </table><br>
 <button class="btn" type="submit">Save</button> <a class="btn ghost" href="/features">Cancel</a>
@@ -2502,9 +2608,9 @@ async def feature_edit_save(request: Request, code: str):
     await _check_csrf(request, s)
     f = await request.form()
     enabled = 1 if f.get("enabled") else 0
-    default_access = (f.get("default_access") or "all").strip()
-    if default_access not in ("all", "admin", "none"):
-        default_access = "all"
+    default_access = (f.get("default_access") or "plan").strip()
+    if default_access not in ("all", "plan", "admin", "none"):
+        default_access = "plan"
     with db() as c:
         c.execute("UPDATE feature_codes SET enabled=?, default_access=? WHERE code=?",
                   (enabled, default_access, code))
@@ -3393,18 +3499,23 @@ def v1_devices(request: Request):
     seen = set()
     devices = []
     for ct in status.get("contacts", []):
-        login = logins.get(ct["aor"])
+        aor = ct["aor"]
+        # The My Phone app signs in on its own line, "<sip_username>-app".
+        is_app = aor.endswith("-app") and aor not in logins
+        login = logins.get(aor[:-4] if is_app else aor)
         if not login:
             continue
         if actor["role"] != "admin" and login["id"] != actor["id"]:
             continue
-        key = (login["username"], ct["ip"], ct["port"])
+        key = (aor, ct["ip"], ct["port"])
         if key in seen:
             continue
         seen.add(key)
         where, via = _device_location(ct["ip"], ct["transport"])
         devices.append({
             "username": login["username"],
+            "sip_username": aor,
+            "kind": "app" if is_app else "phone",
             "exten": login["exten"],
             "display_name": login["display_name"],
             "ip": ct["ip"], "port": ct["port"],
@@ -3546,6 +3657,7 @@ def _purge_cdr():
     try:
         with db() as c:
             c.execute("DELETE FROM cdr WHERE started_at < datetime('now', 'localtime', ?)", (CDR_RETENTION,))
+            c.execute("DELETE FROM call_hidden WHERE cdr_id NOT IN (SELECT id FROM cdr)")
             c.commit()
     except Exception:
         pass
@@ -3821,7 +3933,10 @@ def _pin_valid_format(pin: str) -> bool:
 def v1_pin_status(request: Request):
     _v1_admin(request)
     s = _sess(request)
-    return {"pin_set": _pin_is_set(), "unlocked": _pin_unlocked(s)}
+    # The page's CSRF token, for pages with no form on them: the PIN prompt
+    # needs it to unlock (same-origin JSON, like the dashboard's own copy).
+    return {"pin_set": _pin_is_set(), "unlocked": _pin_unlocked(s),
+            "csrf": _csrf_token(s) if s else ""}
 
 
 @app.post("/api/v1/safety/pin/unlock")
@@ -3885,7 +4000,7 @@ _PIN_EXEMPT_EXACT = frozenset({
     "/api/v1/safety/pin/status", "/api/v1/safety/pin/lock",
     "/login", "/logout", "/auth/login", "/auth/logout",
 })
-_PIN_EXEMPT_PREFIX = ("/ucp", "/hooks/", "/invite/", "/stripe/webhook")
+_PIN_EXEMPT_PREFIX = ("/ucp", "/hooks/", "/invite/", "/stripe/webhook", "/login/", "/store/")
 
 
 def _pin_required_html(s: dict) -> str:
@@ -3960,7 +4075,11 @@ ivr_ui.install(_sys.modules[__name__])
 billing.install(_sys.modules[__name__])
 email_ui.install(_sys.modules[__name__])
 network_ui.install(_sys.modules[__name__])
+sso_ui.install(_sys.modules[__name__])
+store_ui.install(_sys.modules[__name__], billing)
 security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])
 safety_ui.install(_sys.modules[__name__])
+contacts.install(_sys.modules[__name__])
+app_api.install(_sys.modules[__name__])

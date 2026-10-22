@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS logins (
   record_admin INTEGER NOT NULL DEFAULT 0, -- admin-only recording flag
   user_record INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for user recording
   user_wants_record INTEGER NOT NULL DEFAULT 0, -- user's own "record my calls" wish
+  ptt_allowed INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for push-to-talk
+  ptt_enabled INTEGER NOT NULL DEFAULT 0,  -- user's own "receive push-to-talk" wish
   vm_email TEXT NOT NULL DEFAULT '',
+  sso_subject TEXT NOT NULL DEFAULT '',     -- single sign-on: "<issuer>|<subject>" linked to this login
   max_messages INTEGER NOT NULL DEFAULT 500,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -134,6 +137,14 @@ CREATE TABLE IF NOT EXISTS message_hidden (
   PRIMARY KEY (message_id, login_id)
 );
 
+-- Calls a user hid from their own history. Hiding never deletes: the call
+-- stays in the CDR and is purged with it after 90 days (rows here go too).
+CREATE TABLE IF NOT EXISTS call_hidden (
+  cdr_id INTEGER NOT NULL REFERENCES cdr(id) ON DELETE CASCADE,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  PRIMARY KEY (cdr_id, login_id)
+);
+
 -- voip.ms SMS/MMS routing: which DID goes to which extension.
 -- did is stored normalized (e.g. 15551234567 for +1 555-123-4567).
 -- dest_exten is the internal extension (e.g. 8801) that receives inbound
@@ -191,6 +202,9 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   text_email INTEGER NOT NULL DEFAULT 1,     -- email me when I get a text
   msg_in INTEGER NOT NULL DEFAULT 1,         -- accept text messages
   msg_out INTEGER NOT NULL DEFAULT 1,        -- allow sending text messages
+  cell_number TEXT NOT NULL DEFAULT '',      -- ring my cell too (outside number)
+  ring_cell INTEGER NOT NULL DEFAULT 0,       -- 1 = ring the cell in ring groups
+  cell_delay INTEGER NOT NULL DEFAULT 15,    -- seconds before the cell leg starts
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -366,12 +380,50 @@ CREATE TABLE IF NOT EXISTS ring_groups (
 
 -- Numbers a user blocked (extensions or outside numbers, digits only; US
 -- numbers as 10 digits). Blocked callers can't ring or text that user.
+-- What a blocked caller gets (call filtering, chosen per number in My Phone):
+-- 'disconnected' = "the number you have dialed is not in service" + hang up,
+-- 'voicemail' = straight to the user's voicemail, 'forward' = sent on to
+-- `target` (an extension or outside number).
 CREATE TABLE IF NOT EXISTS blocked_numbers (
   login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
   number TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  action TEXT NOT NULL DEFAULT 'disconnected',
+  target TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (login_id, number)
 );
+
+-- Private address book: one row per (name, number), keyed by login so two
+-- users can name the same number differently. number_norm is the shared
+-- canonical form (shared/phone.py) used for caller-ID matching.
+CREATE TABLE IF NOT EXISTS contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  number TEXT NOT NULL DEFAULT '',       -- as typed
+  number_norm TEXT NOT NULL DEFAULT '',  -- digits, 11-digit NANP -> 10
+  org TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_login_norm ON contacts(login_id, number_norm);
+
+-- Private notes. Attached to the contact (not the cdr row) so they survive
+-- the 90-day CDR purge; item_type/item_id/item_at snapshot what the note was
+-- written about. Deleted with the contact (cascade), or with the voicemail /
+-- recording they point at (delete hooks in the panel).
+CREATE TABLE IF NOT EXISTS contact_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  item_type TEXT NOT NULL DEFAULT '',    -- call | message | voicemail | recording
+  item_id INTEGER DEFAULT NULL,          -- cdr.id / messages.id / voicemail_messages.id / recordings.id
+  item_at TEXT NOT NULL DEFAULT '',      -- snapshot of the item's date
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(login_id, contact_id);
 
 -- Calls / texts a user reported to the admin (admin Reports page).
 CREATE TABLE IF NOT EXISTS reports (
@@ -403,3 +455,20 @@ CREATE TABLE IF NOT EXISTS invites (
   created_by TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Android app (My Phone app): one row per signed-in phone. Long sign-in with
+-- a sliding expiry; only the sha256 of the bearer token is stored. A password
+-- change (pwsig mismatch) or "Sign out" in My Phone > App ends it.
+CREATE TABLE IF NOT EXISTS app_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL UNIQUE,
+  pwsig TEXT NOT NULL,
+  push_endpoint TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  expires_at TEXT NOT NULL,
+  calls_seen_id INTEGER NOT NULL DEFAULT 0   -- newest call shown in the app (missed-call badge)
+);
+CREATE INDEX IF NOT EXISTS idx_app_devices_hash ON app_devices(token_hash);

@@ -216,7 +216,30 @@ def _sub_fields(sub):
 
 def plan_features(plan):
     """['500 outside call minutes / month', 'Voicemail', ...] for a plan."""
-    return [d for d in (ent.describe(f, plan.get(f) or 0) for f in PLAN_FEATURES) if d]
+    out = [d for d in (ent.describe(f, plan.get(f) or 0) for f in PLAN_FEATURES) if d]
+    codes = ent.split_codes(plan.get("feature_codes"))
+    if codes:
+        out.append("Star codes: " + ", ".join(codes))
+    return out
+
+
+def _all_codes():
+    """[(code, name)] of every star code, for the plan and access forms."""
+    with M.db() as c:
+        return [(r[0], r[1]) for r in c.execute("SELECT code, name FROM feature_codes ORDER BY code")]
+
+
+def _codes_checkboxes(prefix, chosen, block=False):
+    style = "display:block;margin:6px 0" if block else "display:inline-block;margin:4px 18px 4px 0"
+    return "".join(
+        f'<label class="inline-chk" style="{style}"><input type="checkbox" name="{prefix}" value="{esc(code)}" '
+        f'{"checked" if code in chosen else ""}> <code>{esc(code)}</code> {esc(name)}</label>'
+        for code, name in _all_codes())
+
+
+def _picked_codes(f, prefix):
+    valid = {code for code, _ in _all_codes()}
+    return ",".join(sorted({v for v in f.getlist(prefix) if v in valid}))
 
 
 def _grant_plan(c, login_id, plan):
@@ -293,7 +316,10 @@ async def webhook(request: Request):
             return {"ok": True, "duplicate": True}
     obj = (event.get("data") or {}).get("object") or {}
     try:
-        if etype == "checkout.session.completed":
+        if (obj.get("metadata") or {}).get("pbx_store_order") and etype == "checkout.session.completed":
+            import store_ui            # storefront sign-up: card saved, order awaits approval
+            store_ui.on_webhook(etype, obj)
+        elif etype == "checkout.session.completed":
             login_id = int(obj.get("client_reference_id") or (obj.get("metadata") or {}).get("pbx_login_id") or 0)
             if login_id and obj.get("customer"):
                 with M.db() as c:
@@ -648,6 +674,7 @@ def access_section(s):
     csrf = M._csrf_field(s)
     with M.db() as c:
         d = {f: ent.default_quota(c, f) for f in PLAN_FEATURES}
+        dcodes = ent.default_codes(c)
         users = [dict(r) for r in c.execute("SELECT id, username, exten FROM logins WHERE role='user' ORDER BY exten, username")]
         rows = []
         for u in users:
@@ -686,6 +713,8 @@ Empty = use the default. While a user has an active plan, the plan decides.</p>
 <label>Texts {_lim_input("messages", d["messages"], "0")}</label>
 <label>Recording <select name="recording"><option value="1" {"selected" if d["recording"] else ""}>on</option><option value="0" {"" if d["recording"] else "selected"}>off</option></select></label>
 <label>IVR menus {_lim_input("ivr_menus", d["ivr_menus"], "0")}</label>
+<div style="flex-basis:100%"><b>Star codes (no plan):</b> <span class="muted">for codes set to "By plan" on the Features page; none ticked = new accounts get no star codes until they buy a plan that includes them.</span><br>
+{_codes_checkboxes("codes", dcodes)}</div>
 <button class="btn ghost">Save defaults</button>
 </form>
 <div class="scrollbox"><table class="access"><tr><th>User</th><th>Outside min/mo</th><th>Voicemail</th><th>Texts/mo</th><th>Recording</th><th>IVR menus</th><th></th></tr>
@@ -721,10 +750,13 @@ async def admin_access_defaults(request: Request):
                 "recording": 1 if f.get("recording") == "1" else 0}
     except ValueError as e:
         return _admin_back(err=str(e))
+    codes = _picked_codes(f, "codes")
     with M.db() as c:
         for k, v in vals.items():
             ent.set_default_quota(c, k, v)
-    _audit(s["username"], "billing.access.defaults", str(vals))
+        c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('default_feature_codes', ?)", (codes,))
+        c.commit()
+    _audit(s["username"], "billing.access.defaults", str(vals) + f" codes={codes or '-'}")
     return _admin_back(msg="Defaults saved.")
 
 
@@ -840,6 +872,10 @@ def _plan_form(s, p, err=""):
 {chk("voicemail", "Voicemail")}
 {chk("recording", "Call recording (users must accept the recording-law notice)")}
 <label>IVR menus<br><input name="ivr_menus" value="{int(p.get('ivr_menus') or 0)}" inputmode="numeric" style="width:120px"></label>
+<h3>Star codes included</h3>
+<p class="muted">Codes set to "By plan" on the Features page are on for subscribers of this plan and off otherwise.
+Codes set to All users / Admins only / No one ignore this. Per-user Allow/Deny on the Features page always wins.</p>
+<div class="codes-list">{_codes_checkboxes("codes", set(ent.split_codes(p.get("feature_codes"))), block=True)}</div>
 <h3>Price</h3>
 <label>Price per month<br><input name="price" value="{p['price_cents'] / 100:.2f}" inputmode="decimal" required>
 <select name="currency">{''.join(f'<option value="{c}" {"selected" if c == p["currency"] else ""}>{c.upper()}</option>' for c in ("usd", "cad", "eur", "gbp", "aud"))}</select></label>
@@ -886,7 +922,8 @@ async def admin_plan_save(request: Request, plan_id: str):
     feats = {"call_minutes": lim("call_minutes"), "messages": lim("messages"),
              "voicemail": 1 if f.get("voicemail") else 0, "recording": 1 if f.get("recording") else 0,
              "ivr_menus": menus}
-    draft = dict({"id": old["id"] if old else None, "name": name, "description": desc,
+    codes = _picked_codes(f, "codes")
+    draft = dict({"id": old["id"] if old else None, "name": name, "description": desc, "feature_codes": codes,
                   "price_cents": max(cents, 0), "currency": cur, "active": 1 if f.get("active") else 0,
                   "sort_order": sort}, **{k: max(v, -1) for k, v in feats.items()})
     err = ""
@@ -899,7 +936,7 @@ async def admin_plan_save(request: Request, plan_id: str):
     elif not 0 <= menus <= 100:
         err = "IVR menus must be between 0 and 100."
     elif not plan_features(draft):
-        err = "Include at least one feature (minutes, texts, voicemail, recording or IVR menus)."
+        err = "Include at least one feature (minutes, texts, voicemail, recording, IVR menus or star codes)."
     elif cents < 50:
         err = "Price must be at least 0.50 (Stripe's minimum)."
     if err:
@@ -908,16 +945,16 @@ async def admin_plan_save(request: Request, plan_id: str):
     with M.db() as c:
         if old:
             c.execute("UPDATE billing_plans SET name=?, description=?, ivr_menus=?, call_minutes=?, voicemail=?,"
-                      " messages=?, recording=?, price_cents=?, currency=?, active=?, sort_order=? WHERE id=?",
+                      " messages=?, recording=?, price_cents=?, currency=?, active=?, sort_order=?, feature_codes=? WHERE id=?",
                       (name, desc, menus, feats["call_minutes"], feats["voicemail"], feats["messages"],
-                       feats["recording"], cents, cur, draft["active"], sort, old["id"]))
+                       feats["recording"], cents, cur, draft["active"], sort, codes, old["id"]))
             pid = old["id"]
         else:
             pid = c.execute("INSERT INTO billing_plans (name, description, ivr_menus, call_minutes, voicemail,"
-                            " messages, recording, price_cents, currency, active, sort_order)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            " messages, recording, price_cents, currency, active, sort_order, feature_codes)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                             (name, desc, menus, feats["call_minutes"], feats["voicemail"], feats["messages"],
-                             feats["recording"], cents, cur, draft["active"], sort)).lastrowid
+                             feats["recording"], cents, cur, draft["active"], sort, codes)).lastrowid
         c.commit()
         # Current subscribers get the new allowances right away.
         if old and any(old.get(k) != v for k, v in feats.items()):

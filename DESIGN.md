@@ -95,3 +95,37 @@ Reload strategy: endpoint/trunk changes -> `asterisk -rx "pjsip reload"` (non-di
 - SQLite vs Postgres on day 1: SQLite (single node, zero ops).
 - Bootable ISO installer: phase 5+.
 - WebRTC clients: later.
+
+## 11. Contacts, timeline, notes & ring-group-to-cell (2026-10-16)
+
+Private per-login address book (`contacts`, `contact_notes` tables, `pbx-api/contacts.py`).
+Numbers match on one canonical form (`shared/phone.py`: digits-only, 11-digit
+NANP -> 10 digits) shared by pbx-brain and pbx-api — the same form the block
+list uses, so contacts and call filtering agree. Deployed flat into both
+service dirs by `scripts/deploy.sh`.
+
+- Caller names resolve at **read time** only (`contact_name_for` / `names_for`):
+  call history, texts, voicemail, recordings, and the per-callee ring caller ID
+  (`Name <digits>` on each originated leg, so desk phones and the app's ring
+  screen show the name). Display names never land in CDR/voicemail columns.
+- Notes attach to the **contact**, not the CDR row, with a snapshot
+  (`item_type`/`item_id`/`item_at`) of what they were written about, so they
+  survive the 90-day CDR purge. Notes pointing at a deleted voicemail or
+  recording are deleted with it; deleting a contact deletes its notes
+  (FK cascades are not enforced in SQLite — cleanup is explicit, like the
+  login-delete path). Contacts are keyed by login, so extension reassignment
+  (`purge_extension_data`) intentionally leaves them alone.
+- Unified timeline (`GET /api/v1/me/timeline`, per-contact detail) merges
+  calls/texts/voicemails/recordings newest-first through the same accessors
+  the lists use, so plan/ownership rules apply.
+- Ring-group-to-cell: `user_prefs` gains `cell_number`, `ring_cell`,
+  `cell_delay`. Opted-in members get an extra leg originated over the
+  outbound routes (`PJSIP/<digits>@ep-trunk-<name>`), optionally delayed so
+  desk/app ring first. Answered cell legs are **screened**: they hear
+  "press 1 to accept" (`sound:privacy-intro`) and only bridge on DTMF 1;
+  anything else hangs the leg up while the other legs keep ringing. Minutes
+  come from the member's plan (`can_call_outside`); DND and the member's own
+  block list are honored.
+- Tests: `dev/test-addons.py` (fake ARI: normalizer, per-login names,
+  screening accept/timeout, delayed-leg cancellation); existing
+  `dev/test-brain-ring.py` still passes.

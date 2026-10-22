@@ -57,9 +57,9 @@ fi
 
 # --- Python venvs ---
 python3 -m venv /opt/pbx/brain-venv
-/opt/pbx/brain-venv/bin/pip install -q requests websocket-client  # ari_client.py is our own (ari-py is py2-only)
+/opt/pbx/brain-venv/bin/pip install -q requests websocket-client bcrypt  # bcrypt: *70 PIN check; ari_client.py is our own (ari-py is py2-only)
 python3 -m venv /opt/pbx/api-venv
-/opt/pbx/api-venv/bin/pip install -q fastapi uvicorn bcrypt jinja2 python-multipart
+/opt/pbx/api-venv/bin/pip install -q fastapi uvicorn bcrypt jinja2 python-multipart segno  # segno: pairing QR codes
 
 # --- Configs ---
 # TODO: copy config-gen/static/*.conf to /etc/asterisk/, run config-gen/gen.py

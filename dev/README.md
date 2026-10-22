@@ -15,3 +15,4 @@ and testing:
 | `test-vm97.py` | test the `*97` voicemail flow |
 
 Run them on a test machine, not on a PBX you rely on.
+| `test-app-api.py` | exercise the Android app API (sign-in, messages, settings, pairing) in-process |

@@ -113,3 +113,56 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' \
 Both are also on the dashboard: a status banner with Kill switch,
 Lock admin / Lock everything, and Unlock buttons.
 
+
+## My Phone app API (Android)
+
+Long sign-in for the Android app; see `pbx-api/app_api.py` and
+`docs/ANDROID_APP_PLAN.md`. Device tokens (`pbxd_...`) only work for the
+signed-in user's own My Phone data, never for admin pages.
+
+```bash
+# sign in (or: POST /api/v1/app/pair {"code":"ABCD2345"} with a code from My Phone > App)
+curl -s -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"...","device_name":"Pixel 8"}' \
+  https://pbx.example/api/v1/app/login        # -> {"token":"pbxd_...","ttl_days":60,...}
+AUTH="Authorization: Bearer pbxd_..."
+
+curl -s -H "$AUTH" https://pbx.example/api/v1/me/overview
+curl -s -H "$AUTH" https://pbx.example/api/v1/me/threads
+curl -s -H "$AUTH" https://pbx.example/api/v1/me/threads/8801
+curl -s -H "$AUTH" -d to=8801 -d body=hello https://pbx.example/api/v1/me/messages/send
+curl -s -H "$AUTH" -d ids=12 -d ids=13 -d convs=8801 https://pbx.example/api/v1/me/messages/delete
+```
+
+| Reads (GET) | Changes (POST, form fields like the web forms) |
+|---|---|
+| `/me/overview`, `/me/threads`, `/me/threads/{peer}?before=&limit=`, `/me/messages/since?after=` | `/me/messages/send`, `/me/messages/delete` (`ids`, `convs`, or `mode=all`) |
+| `/me/calls?view=all\|missed\|hidden`, `/me/voicemail?folder=Old`, `/me/voicemail/{id}/audio` | `/me/calls/hide` (`ids`; `unhide=1` to show again), `/me/calls/seen`, `/me/voicemail/delete`, `/me/voicemail/{id}/heard`, `/me/voicemail/{id}/move` |
+| `/me/recordings`, `/me/recordings/{id}/audio` | `/me/recordings/delete` |
+| `/me/settings`, `/me/devices` | `/me/settings/calls`, `/me/settings/prefs`, `/me/settings/messaging`, `/me/settings/password`, `/me/dnd`, `/me/block`, `/me/report` |
+
+Changes answer `{"ok": bool, "code": "<key>", "message": "<text>"}` (HTTP 400
+on a refused change, 423 when the safety lock is on). Also:
+`DELETE /me/devices/{id}`, `PUT /me/push {"endpoint":"https://..."}`
+(UnifiedPush), `POST /api/v1/app/logout`. Tokens expire 60 days after last
+use; a password change signs out every other phone.
+
+Calls can't be deleted by users, only hidden (per user, `call_hidden`): hidden
+calls drop out of `all`/`missed` and are listed under `view=hidden` until the
+90-day call-history purge removes them. `/me/overview` returns `missed_new`,
+the missed calls this phone hasn't seen and the user hasn't hidden; `POST
+/me/calls/seen` (the app calls it when Calls is opened) resets it to 0. The
+Android app signs in with pairing codes only; `/app/login` stays for other
+API clients. `GET /me/wait?msg=&call=&vm=&timeout=50` is a long poll for the app's
+Instant notifications: it answers as soon as there is a text, unhidden missed
+call or Inbox voicemail newer than the ids given (checked every 2 s), or after
+`timeout` seconds (max 55, under Cloudflare's 100 s limit), with the newest
+ids and `changed`. `GET /me/sip` gives the app's built-in phone what it needs to call as the
+user's own extension through the edge, on the extension's **app line**
+(`username` = `<sip_username>-app`, a second pjsip endpoint/AOR with the same
+password and caller ID that pbx-brain rings alongside the main line;
+`main_username` is the desk-phone login, `register` = true): `enabled` (false with a `reason` when
+the extension, its phone password or Admin > Network domain is missing; the
+password is then left out), `username`, `password`, `domain`, `port`,
+`transport` (tls), `srtp` (sdes), `codecs`. My Phone > App shows each code as a QR code (needs the `segno`
+package; deploy.sh installs it) holding `myphone://pair?s=<server>&c=<code>`.

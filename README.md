@@ -76,7 +76,7 @@ It’s a work in progress, and I’m looking forward to seeing where it goes.
 7. [First-time setup in the panel](#7-first-time-setup-in-the-panel)
 8. [Setting up phones](#8-setting-up-phones)
 9. [The admin panel, page by page](#9-the-admin-panel-page-by-page)
-10. [My Phone: the user panel](#10-my-phone-the-user-panel)
+10. [My Phone: the user panel](#10-my-phone-the-user-panel) (and the [Android app](#the-my-phone-app-for-android))
 11. [Phone feature codes](#11-phone-feature-codes)
 12. [911 / E911](#12-911--e911)
 13. [Call recording and the law](#13-call-recording-and-the-law)
@@ -111,12 +111,17 @@ It’s a work in progress, and I’m looking forward to seeing where it goes.
   signalling (TLS)** and **encrypted audio (SRTP)**. The PBX itself is never
   reachable from the internet.
 - Works with a changing home/office internet address (Cloudflare dynamic DNS).
+- **My Phone app for Android** (free, open source, no Google services): makes
+  and receives calls itself, ringing together with the desk phone or Zoiper
+  (see [the Android app](#the-my-phone-app-for-android)).
 
 **Panels**
 - **Admin panel**: users, trunks, routes, ring groups, IVR, call records,
   recordings, voicemail, , billing, email, network, E911, reports, API keys.
 - **My Phone** for every user: calls, voicemail, recordings, texts, IVR,
   billing and settings, also on a phone screen.
+- **My Phone app for Android**: texts, calls, voicemail and settings with
+  instant notifications, a PIN lock and QR-code pairing.
 
 **Messaging**
 - Extension-to-extension texts from phones and from My Phone, emailed to the
@@ -217,9 +222,26 @@ cd /root/own-pbx
 #    creates the pbx service user, folders and Python environments.
 ./scripts/install.sh
 
-# 2. Deploy: database, Asterisk configs, services. Run this again after every update.
+# 2. Deploy: database, Asterisk configs, services.
 ./scripts/deploy.sh
 ```
+
+**Updating later:** one command, as root on the PBX:
+
+```bash
+pbx-update
+```
+
+It downloads the latest code (the project folder must be a `git clone`),
+re-deploys the PBX, and, only if the edge files changed, copies `kamailio/`
+to the edge box and runs `update-edge.sh` there. The first time the edge needs
+updating it asks for the edge's address and remembers it. `pbx-update --edge`
+updates the edge even when nothing in it changed.
+
+When you log in to the PBX as root (SSH or console), it checks GitHub (at
+most once an hour) and tells you if there is an update to install. It never
+installs anything by itself: an update restarts the phone services and would
+drop calls in progress, so you choose when to run `pbx-update`.
 
 At the end of the first deploy you are asked to **create the admin login**
 (at least 12 characters). Then open the panel from a computer on your network:
@@ -385,6 +407,12 @@ outside line", update the phone's dial plan (e.g. `9xxxxxxxxxx`).
 **Check it:** the phone appears under **Dashboard → Signed in now** as
 *Online*, showing whether it's internal or external.
 
+**Android:** instead of (or as well as) Zoiper, users can use the
+[My Phone app](#the-my-phone-app-for-android). It sets up its own phone login
+with one tap and signs in on the extension's separate app line
+(`<username>-app`), so it rings together with the desk phone or Zoiper
+without replacing them.
+
 ---
 
 ## 9. The admin panel, page by page
@@ -473,10 +501,32 @@ text, with select / delete all.
 ![Recordings](docs/screenshots/12-recordings.png)
 The **Recordings** page also holds the **recording settings** (see section 13).
 
+### Store
+A public sign-up page at `https://<your panel>/store`: new customers pick a
+plan (and, optionally, a phone number from the ones you list for sale), then
+enter their card on **Stripe's own checkout page**. **Nobody is charged and
+nothing is created until you approve** the order on **Admin → Store**:
+
+- **Approve** charges the first month on the saved card (a declined card stops
+  there, nothing is created), creates the login on the next free extension in
+  the Invites range with a generated password and SIP secret, routes the
+  number's calls and texts to it, switches on the plan, and emails the
+  customer their login.
+- **Reject** (with an optional reason, emailed) just closes the order: the
+  card was never charged.
+
+New orders are emailed to you (or the security alert address). The form has
+a bot trap, a time-limited signed token and the same per-address rate limits
+as sign-in; only one order per email can wait at a time. A number is offered
+only while nothing else answers it. The admin page is office-network only;
+the public page works through your tunnel. Needs Stripe keys and published
+plans (Billing) and SMTP (Email) for the customer emails.
+
 ### Billing
 ![Billing](docs/screenshots/14-billing.png)
 Stripe keys, plans and **User access** (defaults for users without a plan,
-plus per-user exceptions). See section 14.
+plus per-user exceptions). A plan also lists the **star codes** it includes
+(see section 11). See section 14.
 
 ### Email
 ![Email](docs/screenshots/15-email.png)
@@ -488,6 +538,25 @@ lockouts, kill switch / lock / E911 / recording changes, user reports). Every
 ### Network
 Remote-access domain and TLS port, office server address, Cloudflare dynamic
 DNS (status, IP history), and panel access from the internet.
+
+### Sign-on
+Single sign-on for the **web panel** through an OpenID Connect provider you
+already run (Authentik, Keycloak, Authelia…). The login page gets a
+**Sign in with …** button above the password form. Options: go straight to
+the provider, or hide the password form (`/login?password=1` always brings it
+back, so a provider that is down never locks you out).
+
+Accounts aren't created by sign-on: add the login (with its extension) first.
+The first sign-in links it by **username** (the provider's username is the
+PBX login name) or by **email** (the login's notification email, optionally
+only if the provider verified it); after that it stays linked to that
+provider account until you unlink it. Admin pages stay office-network only,
+and admins can be kept to password sign-in. The My Phone app is not affected.
+
+In Authentik: create an OAuth2/OpenID provider (Confidential), set the
+redirect URI shown on the page (`https://<your panel>/login/oidc/callback`),
+create an application for it, then copy the client ID, client secret and
+**OpenID Configuration Issuer** into **Admin → Sign-on**.
 
 ### E911
 ![E911](docs/screenshots/17-e911.png)
@@ -533,7 +602,8 @@ see section 16) with their panel username and password.
 | **Messages** | conversations, send a text to any extension (including Zoiper and other SIP apps), **Block**, **Report**; updates by itself. ESP32 devices can make calls too, see the [ESP32-S3-Box-3 project](https://github.com/DanversKara/ESP32-S3-Box-3) |
 | **IVR** | personal menus (if their plan allows) |
 | **Billing** | choose, switch or cancel a plan (Stripe) |
-| **Settings** | DND, forwarding, ring time, answer with IVR, "Record my calls" (with legal acknowledgement), notification email, text emails on/off, receive/send texts on/off, block list, 911 notice, phone setup, SIP password, panel password |
+| **App** | pair the Android app: **Get a pairing code** shows a QR code, tap-to-copy code and server, and an *Open in the My Phone app* button; **Show phone login QR** gives the app its phone login; see and sign out signed-in phones |
+| **Settings** | DND, forwarding, ring time, answer with IVR, "Record my calls" (with legal acknowledgement), notification email, text emails on/off, receive/send texts on/off, call filtering (block list: per number choose "not in service", straight to voicemail, or forward to another number), 911 notice, phone setup, SIP password, panel password |
 
 ![Overview](docs/screenshots/20-myphone-overview.png)
 ![Calls](docs/screenshots/21-myphone-calls.png)
@@ -544,6 +614,92 @@ see section 16) with their panel username and password.
 ![Billing](docs/screenshots/26-myphone-billing.png)
 ![Settings](docs/screenshots/27-myphone-settings.png)
 <img src="docs/screenshots/28-myphone-mobile.png" width="300" alt="My Phone on a phone">
+
+### The My Phone app for Android
+
+A free, open-source Android app (GPL-2.0-or-later; the built-in phone engine,
+Linphone, is GPL-3.0) for every user. No ads, no tracking, **no Google Play
+Services or Firebase**. Android 8.0 or newer.
+
+<p>
+<a href="docs/screenshots/android/01-messages.png"><img src="docs/screenshots/android/01-messages.png" width="120" alt="Messages"></a>
+<a href="docs/screenshots/android/02-new-message.png"><img src="docs/screenshots/android/02-new-message.png" width="120" alt="Start a new text"></a>
+<a href="docs/screenshots/android/03-calls.png"><img src="docs/screenshots/android/03-calls.png" width="120" alt="Calls: All, Missed, Hidden"></a>
+<a href="docs/screenshots/android/04-calls-hidden.png"><img src="docs/screenshots/android/04-calls-hidden.png" width="120" alt="Hidden calls, with Undo"></a>
+</p>
+
+<p>
+<a href="docs/screenshots/android/05-voicemail.png"><img src="docs/screenshots/android/05-voicemail.png" width="120" alt="Voicemail"></a>
+<a href="docs/screenshots/android/06-settings.png"><img src="docs/screenshots/android/06-settings.png" width="120" alt="Settings: do not disturb, forwarding, texts"></a>
+<a href="docs/screenshots/android/07-settings-notifications.png"><img src="docs/screenshots/android/07-settings-notifications.png" width="120" alt="Settings: notifications"></a>
+<a href="docs/screenshots/android/08-settings-calling.png"><img src="docs/screenshots/android/08-settings-calling.png" width="120" alt="Settings: incoming calls, phone login, account"></a>
+</p>
+
+<p>
+<a href="docs/screenshots/android/09-dial-pad.png"><img src="docs/screenshots/android/09-dial-pad.png" width="120" alt="Dial pad"></a>
+<a href="docs/screenshots/android/10-in-call.png"><img src="docs/screenshots/android/10-in-call.png" width="120" alt="On a call: mute, keypad, speaker"></a>
+<a href="docs/screenshots/android/11-incoming-notification.png"><img src="docs/screenshots/android/11-incoming-notification.png" width="120" alt="Incoming call notification"></a>
+<a href="docs/screenshots/android/12-incoming-call.png"><img src="docs/screenshots/android/12-incoming-call.png" width="120" alt="Incoming call screen"></a>
+</p>
+
+<sub>Tap a screenshot to see it full size.</sub>
+
+*Screenshots from app 0.5; newer versions add the dial pad, Call buttons and
+the Notifications and Calling settings.*
+
+| Screen | What it does |
+|---|---|
+| **Messages** | inbox with search and unread dots, swipe or multi-select delete with Undo, Start chat to any extension or number, copy, block, call |
+| **Calls** | All / Missed / **Hidden** (hide calls instead of deleting; they go after 90 days with the rest), call back, text, block, **dial pad**; the missed-call badge clears when you look |
+| **Voicemail** | New / Old, player with seek bar and 1x / 1.5x / 2x, call back, text, move, block, delete |
+| **Settings** | the same switches as My Phone, plus **Notifications**, **Calling** and **App security** |
+
+**Get it:** GitHub **Actions → Android app** → latest green run →
+**Artifacts → my-phone-debug-apk**, unzip, and open the `.apk` on the phone.
+
+**Connect:** the easiest way is **Sign in with my browser** in the app: it
+opens My Phone in an in-app browser tab, you sign in there (password or single
+sign-on), and the phone connects by itself (`/ucp/app/connect` makes the
+pairing code and hands it back; the app only auto-connects for the sign-in it
+started). Or, in My Phone (web) open **App → Get a pairing code**, then in the
+app tap **Scan QR code** (or scan with the phone's camera, tap *Open in the My
+Phone app* on the phone itself, or type the code). The app never sees the
+panel password; each phone stays signed in for 60 days after it was last used.
+
+**Calls:** in the app, **Settings → Calling → Phone login → Get from my PBX →
+Save**. Calls go through the edge like a remote Zoiper (TLS 5061, SRTP). For
+incoming calls the app signs in on the extension's app line,
+`<sip_username>-app` (created for every extension, same password and caller
+ID), never on the main line, so desk phones and Zoiper stay signed in; the PBX
+rings the app line together with the main line and the first answer wins.
+The app rings with the phone's ringtone, full screen, over the lock screen;
+**Settings → Calling → Incoming calls** turns it off. Needs the remote-access
+domain under **Admin → Network**.
+
+**Notifications:** new texts, missed calls and voicemail, with a count on the
+app icon. **Settings → Notifications → Check for new things:** **Instant**
+(the app stays connected and the PBX answers within seconds; Android shows a
+small "My Phone is connected" notification), every 30 s, 1 min or 5 min, or
+every 15 min to save battery. If Android's battery saver pauses the app, use
+**Let it run in the background**.
+
+**Missed calls** notify with who called and when ("Missed call · (555)
+123-4567 · 2:14 PM"), including calls that rolled to voicemail. If the app
+rang and nobody answered, it notifies the moment the ringing stops; a call
+picked up on another phone doesn't count. If the phone was offline and never
+rang, the notification comes as soon as it reaches the PBX again, with the
+time of each call.
+
+**PIN lock:** 6 or 12 digits, optional fingerprint, lock immediately or after
+1 / 5 / 15 minutes away (even if Android closed the app in between), screens
+hidden from screenshots (switchable). Coming back through the PIN keeps your
+place. An incoming call shows over the PIN.
+
+**For the admin:** nothing to configure; `pbx-update` adds the app API
+(`/api/v1/app/*`, `/api/v1/me/*`, documented in `docs/API.md`), its tables and
+the `segno` package for QR codes. No new ports: the app uses the published
+My Phone address (section 16) and the existing edge. More detail in
+[`android/README.md`](android/README.md).
 
 ---
 
@@ -559,16 +715,29 @@ see section 16) with their panel username and password.
 | `*555<ext>` | Monitor an extension's calls: stays on the line, auto-follows new calls (admins only by default) |
 | `*555` | Scan mode: listen to any active call on the system |
 | `*70` | DISA: outside dial tone after a PIN (only if a PIN has been configured) |
+| `*86` *(during a call)* | Block the caller: press it mid-call on a call someone made to you. The call ends, the caller hears "the number you have dialed is not in service", and their number goes on your block list. Only keys from your own phone count; the caller pressing `*86` does nothing |
 | ring group or IVR number | Ring that group or menu |
 
 While monitoring (`*555`), press `*` / `1` for the previous call and `#` / `2`
 for the next call. A beep confirms each hop. Hang up to stop monitoring.
 
 The **Features** page in the admin panel controls every star code: turn each
-one on/off for the whole system, set the default access (**All users**,
-**Admins only**, or **No one**), and override per user with Allow/Deny. For
-example, you can give `*555` (ChanSpy) to a supervisor without making them a
-full admin, or disable `*70` (DISA) entirely.
+one on/off for the whole system, set the default access (**By plan**, **All
+users**, **Admins only**, or **No one**), and override per user with
+Allow/Deny. For example, you can give `*555` (ChanSpy) to a supervisor without
+making them a full admin, or disable `*70` (DISA) entirely. Each user's row
+shows whether they can use the code right now, and why.
+
+**By plan** (the default for every code except `*555`, which is admins only):
+a new account starts with **no** star codes. A user gets a code when their
+active plan includes it (**Billing → plan → Star codes included**); it goes
+off again if the plan lapses or changes. Without a plan they get the
+**Star codes (no plan)** set under **Billing → User access**, empty by
+default; tick `*97`/`*98` there if you don't sell plans and want everyone to
+reach their voicemail. Admins can always use every code, and a per-user
+Allow/Deny always wins. Users who existed before this change kept the codes
+they had (an Allow override each); set them back to Default to hand them to
+their plan.
 
 ---
 
@@ -720,14 +889,24 @@ To let users reach My Phone from anywhere, publish the panel through
 - Never forward port 8001 (or NPM's 80/443) directly from the router.
 - Use a different name from the SIP domain: `sip.example.com` stays a
   grey-cloud A record.
+- The [Android app](#the-my-phone-app-for-android) uses this same address
+  (it only reaches My Phone features, never admin pages). Its Instant
+  notifications hold one request per phone open for up to 55 seconds, under
+  Cloudflare's 100-second limit.
 
 ---
 
 ## 17. Updating
 
-**PBX:** replace `/root/own-pbx` with the new version, then run
-`./scripts/deploy.sh`. Database changes are applied automatically, and your
-data and settings stay.
+**PBX:** run `pbx-update` (gets the latest code from GitHub and deploys it),
+or replace `/root/own-pbx` with the new version and run
+`./scripts/deploy.sh`. Database changes, new Python packages and the phone
+config (`pjsip.conf`) are applied automatically, and your data and settings
+stay.
+
+**Android app:** install the newest APK from **Actions → Android app** over
+the old one. After an app update, run `pbx-update` too: new app features
+often need the matching PBX side.
 
 **Edge:** copy the new `kamailio/` folder to `/root/kamailio`, then run
 `./update-edge.sh`.
@@ -767,6 +946,10 @@ data and settings stay.
 | Calls drop after an IP change | `systemctl status pbx-edge-ip.timer` on the edge; Network page shows "In sync" |
 | No emails | Email page → **Send test**; port 587 or 465 (many ISPs block 25) |
 | Can't open admin pages | Use `http://<PBX-IP>:8001` from the office network, not the published address |
+| Android app: "doesn't support the app yet", or "Not Found" | The PBX is older than the app: `pbx-update` |
+| Android app: no notifications | App **Settings → Notifications → Send a test notification**; **Let it run in the background** → Allow; the line under **Check now** shows the last check |
+| Android app: calls fail | **Settings → Calling → Phone login → Get from my PBX → Save**; "Remote calling isn't set up" = set the domain under **Admin → Network**; **Copy details** on the call screen gives the SIP code |
+| Android app doesn't ring | The line under **Settings → Calling → Incoming calls** must say *Signed in*; the phone login must end in `-app` (Get from my PBX); `asterisk -rx "pjsip show contacts" \| grep -- -app` |
 
 ---
 
@@ -779,6 +962,8 @@ pbx-api/        web panel + REST API (FastAPI)
   voipms_sms.py   voip.ms helper: sendSMS/sendMMS, getSMS/getMMS polling,
                   DID normalization, route lookups
   ucp.py          My Phone
+  app_api.py      JSON API for the Android app: pairing / QR, notifications
+                  long poll (/me/wait), phone login (/me/sip), hidden calls
   ring_groups_ui.py, ivr_ui.py, billing.py, e911_ui.py, email_ui.py,
   network_ui.py, safety_ui.py, security.py, ddns.py, entitlements.py, mailer.py
 pbx-brain/      call engine (ARI) - app.py, e911.py, agi_server.py (texts,
@@ -790,8 +975,12 @@ scripts/        install.sh, deploy.sh, create-admin.py, security-check.sh,
 kamailio/       edge server: install.sh, update-edge.sh, kamailio.cfg.template,
                 rtpengine.conf.template, fail2ban/, certificate + IP scripts,
                 verify-edge.sh, pbx-edge-notify
-dev/            developer and test tools (not needed to run own-pbx)
-docs/           API.md (REST API), SCREENSHOTS.md (all screenshots), screenshots/,
+android/        My Phone app for Android (Kotlin, Jetpack Compose, Linphone);
+                built by GitHub Actions (.github/workflows/android.yml)
+dev/            developer and test tools (not needed to run own-pbx),
+                incl. test-app-*.py and test-brain-ring.py
+docs/           API.md (REST API), SCREENSHOTS.md (all screenshots), screenshots/
+                (screenshots/android/ for the app), ANDROID_APP_PLAN.md,
                 VOIPMS_SMS_SETUP.md (voip.ms SMS/MMS setup and troubleshooting)
 ```
 
