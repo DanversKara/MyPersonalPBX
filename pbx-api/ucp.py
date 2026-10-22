@@ -1214,6 +1214,10 @@ def _settings_body(request, s, me, extra_top=""):
         ptt_status = ('<p class="muted">Push-to-talk is available on your account (through your plan or your admin). '
                       'Check "Enable push-to-talk" below to start receiving push-to-talk calls.</p>')
     ptt_missed_cur = "retry" if str(me.get("ptt_missed") or "").strip().lower() == "retry" else "voicemail"
+    with M.db() as c:
+        trusted_now = [r[0] for r in c.execute(
+            "SELECT exten FROM ptt_trusted WHERE login_id=? ORDER BY exten", (me["id"],)).fetchall()]
+    trusted_str = ", ".join(trusted_now)
     ptt_block = (f'{ptt_status}'
                  f'<input type="hidden" name="ptt_present" value="1">'
                  f'<label class="switch"><input type="checkbox" name="user_ptt" value="1" {chk(ptt_wish)}> '
@@ -1222,8 +1226,13 @@ def _settings_body(request, s, me, extra_top=""):
                  f'<option value="voicemail" {"selected" if ptt_missed_cur == "voicemail" else ""}>Send the caller to my voicemail</option>'
                  f'<option value="retry" {"selected" if ptt_missed_cur == "retry" else ""}>Chirp me again (up to 3 tries), then voicemail</option>'
                  f'</select></label>'
+                 f'<label>Auto-accept pages from these extensions<br>'
+                 f'<input name="user_ptt_trusted" value="{esc(trusted_str)}" size="30" placeholder="e.g. 8803, 8805"></label>'
                  f'<p class="muted">A push-to-talk never opens your line by itself: your phone chirps first '
-                 f'and only connects when you accept. To page someone, dial <b>*88</b> followed by their '
+                 f'and only connects when you accept — unless the caller is on your auto-accept list. '
+                 f'Pages from those extensions connect right away, walkie-talkie style: one chirp and '
+                 f'the line opens on speaker (your mic still stays off until you hold to talk or use VOX). '
+                 f'To page someone, dial <b>*88</b> followed by their '
                  f'extension (for example *88{esc(me["exten"] or "8801")}). Your account must have '
                  f'push-to-talk (through your plan or your admin), and theirs must have it and be '
                  f'switched on here.</p>')
@@ -1367,6 +1376,16 @@ async def settings_calls(request: Request):
     ptt_missed = None
     if "user_ptt_missed" in f:
         ptt_missed = "retry" if (f.get("user_ptt_missed") or "").strip().lower() == "retry" else "voicemail"
+    # Trusted PTT callers (ptt_trusted): same presence rule. The field is a
+    # comma-separated extension list; junk is dropped, max 20 entries.
+    ptt_trusted = None
+    if "user_ptt_trusted" in f:
+        vals = []
+        for tok in (f.get("user_ptt_trusted") or "").replace(";", ",").split(","):
+            t = tok.strip()
+            if t.isdigit() and t not in vals:
+                vals.append(t)
+        ptt_trusted = vals[:20]
     ivr_raw = (f.get("answer_ivr_id") or "").strip()
     ivr_id = None
     if ivr_raw:
@@ -1393,11 +1412,16 @@ async def settings_calls(request: Request):
             c.execute("UPDATE logins SET ptt_enabled=? WHERE id=?", (ptt_enabled, me["id"]))
         if ptt_missed is not None:
             c.execute("UPDATE logins SET ptt_missed=? WHERE id=?", (ptt_missed, me["id"]))
+        if ptt_trusted is not None:
+            c.execute("DELETE FROM ptt_trusted WHERE login_id=?", (me["id"],))
+            c.executemany("INSERT INTO ptt_trusted (login_id, exten) VALUES (?,?)",
+                          [(me["id"], t) for t in ptt_trusted])
         c.commit()
     _audit(me, "ucp.calls", f"dnd={dnd} fwd_always={fa} fwd_noanswer={fn} ring={ring} ivr={ivr_id}"
                             f" cell={cell} ring_cell={ring_cell} cell_delay={cell_delay}"
                             f" ptt={'keep' if ptt_enabled is None else ptt_enabled}"
-                            f" ptt_missed={'keep' if ptt_missed is None else ptt_missed}")
+                            f" ptt_missed={'keep' if ptt_missed is None else ptt_missed}"
+                            f" ptt_trusted={'keep' if ptt_trusted is None else ','.join(ptt_trusted)}")
     return _back("/ucp/settings", "saved")
 
 

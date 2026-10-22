@@ -198,6 +198,12 @@ CREATE TABLE IF NOT EXISTS audit (
 -- Per-user call handling, edited from the user control panel (/ucp).
 -- Separate table (not columns on logins) so existing DBs pick it up via
 -- CREATE TABLE IF NOT EXISTS without an ALTER migration.
+CREATE TABLE IF NOT EXISTS ptt_trusted (
+  login_id INTEGER NOT NULL,                 -- whose phone auto-accepts
+  exten TEXT NOT NULL,                       -- a caller extension they trust
+  PRIMARY KEY (login_id, exten)
+);
+
 CREATE TABLE IF NOT EXISTS user_prefs (
   login_id INTEGER PRIMARY KEY REFERENCES logins(id) ON DELETE CASCADE,
   dnd INTEGER NOT NULL DEFAULT 0,            -- 1 = do not disturb: straight to voicemail

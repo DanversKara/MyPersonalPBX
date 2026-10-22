@@ -450,10 +450,35 @@ r = c.post("/api/v1/me/settings/calls", headers=H, data={
 st = c.get("/api/v1/me/settings", headers=H).json()
 check("partial settings POST preserves the missed-PTT choice",
       st.get("user_ptt_missed") == "retry", st.get("user_ptt_missed"))
+
+# Trusted PTT callers (auto-accept list) round-trip through the app API.
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("me/settings defaults the trusted list to empty",
+      st.get("ptt_trusted") == [], st.get("ptt_trusted"))
+r = c.post("/api/v1/me/settings/calls", headers=H, data={
+    "dnd": "0", "forward_always": "", "forward_noanswer": "", "ring_seconds": "30",
+    "user_ptt": "1", "user_ptt_trusted": "8800, oops, 8801, 8800"})
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("trusted list saves (junk dropped, deduped, sorted)",
+      st.get("ptt_trusted") == ["8800", "8801"], st.get("ptt_trusted"))
+r = c.post("/api/v1/me/settings/calls", headers=H, data={
+    "dnd": "0", "forward_always": "", "forward_noanswer": "", "ring_seconds": "30",
+    "user_ptt": "1"})
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("partial settings POST preserves the trusted list",
+      st.get("ptt_trusted") == ["8800", "8801"], st.get("ptt_trusted"))
+r = c.post("/api/v1/me/settings/calls", headers=H, data={
+    "dnd": "0", "forward_always": "", "forward_noanswer": "", "ring_seconds": "30",
+    "user_ptt": "1", "user_ptt_trusted": ""})
+st = c.get("/api/v1/me/settings", headers=H).json()
+check("trusted list clears on an empty save",
+      st.get("ptt_trusted") == [], st.get("ptt_trusted"))
 cvv = portal(guest_exten, "visitorpass1")
 r = cvv.get("/ucp/settings")
 check("portal Settings shows the missed-PTT select",
       'name="user_ptt_missed"' in r.text and "Chirp me again" in r.text, r.status_code)
+check("portal Settings shows the auto-accept field",
+      'name="user_ptt_trusted"' in r.text and "Auto-accept pages from" in r.text, r.status_code)
 
 # --- User access page: push-to-talk default + per-user exception --------------
 r = c.get("/billing")

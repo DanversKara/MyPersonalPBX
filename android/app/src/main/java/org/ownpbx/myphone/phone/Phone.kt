@@ -297,6 +297,16 @@ object Phone {
             } catch (_: Exception) {
                 null
             }
+        // Trusted caller marker: the PBX sets X-PTT-Auto when the caller is
+        // on MY auto-accept list (I maintain the list; the PBX is the one
+        // that knows who's calling). Their pages connect right away.
+        val xAuto =
+            try {
+                call.remoteParams?.getCustomHeader("X-PTT-Auto")?.trim()
+            } catch (_: Exception) {
+                null
+            }
+        val autoAccept = xAuto == "1" || xAuto.equals("true", ignoreCase = true)
         val marked =
             xPtt == "1" ||
                 xPtt.equals("true", ignoreCase = true) ||
@@ -330,7 +340,8 @@ object Phone {
             CallUi(
                 number = number,
                 name = rawName.removePrefix("PTT "),
-                status = "PTT page — Accept to connect",
+                status =
+                    if (autoAccept) "PTT page — connecting…" else "PTT page — Accept to connect",
                 incoming = true,
                 ptt = true,
                 muted = true,
@@ -341,6 +352,20 @@ object Phone {
         if (ctx != null) {
             IncomingNotice.show(ctx, number, ui?.name.orEmpty(), ptt = true)
             startChirp(ctx)
+            if (autoAccept) {
+                // Trusted caller: ONE chirp to say "line opening", then
+                // connect on speaker — walkie-talkie style. The mic stays
+                // gated (hold to talk / VOX), so they can't hear my side
+                // until I talk. Posted, not run inline: accepting from
+                // inside the listener callback can re-enter the core.
+                voxHandler.postDelayed(
+                    {
+                        stopChirp()
+                        answer()
+                    },
+                    900,
+                )
+            }
         }
     }
 

@@ -146,6 +146,8 @@ data class Settings(
     val ptt_allowed: Boolean = false,
     /** Missed-PTT behaviour (server-side): "voicemail" or "retry" (chirp again). */
     val user_ptt_missed: String = "voicemail",
+    /** Extensions whose pages auto-accept on this phone (my trusted PTT callers). */
+    val ptt_trusted: List<String> = emptyList(),
     val vm_email: String = "",
     val text_email: Boolean = true,
     val msg_in: Boolean = true,
@@ -463,6 +465,8 @@ class Api(base: String, private val token: String?) {
                 add("user_ptt" to if (s.user_ptt) "1" else "0")
                 // Same presence rule for the missed-PTT choice.
                 add("user_ptt_missed" to s.user_ptt_missed)
+                // And for the trusted (auto-accept) extension list.
+                add("user_ptt_trusted" to s.ptt_trusted.joinToString(","))
             },
         )
 

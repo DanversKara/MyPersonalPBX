@@ -92,6 +92,13 @@ def set_ptt(exten, allowed, enabled):
 def set_missed(exten, mode):
     d.execute("UPDATE logins SET ptt_missed=? WHERE exten=?", (mode, exten)); d.commit()
 
+def set_trusted(callee_exten, caller_exten):
+    d.execute("DELETE FROM ptt_trusted WHERE login_id=?", (ids[callee_exten],))
+    if caller_exten:
+        d.execute("INSERT INTO ptt_trusted (login_id, exten) VALUES (?,?)",
+                  (ids[callee_exten], caller_exten))
+    d.commit()
+
 def reset():
     B.CALLS.clear(); B.PENDING.clear(); B.B_LOGIN.clear(); B.B_SCREEN.clear()
     B.REC_RECORDINGS.clear(); LOG.clear(); CHANS.clear(); VM.clear()
@@ -188,6 +195,22 @@ check("h: decline -> NO re-ring despite retry setting",
 check("h: decline -> caller routed to voicemail", VM == [("a8", "8801")], VM)
 check("h: caller not denied", not denied(a), (a.played, a.hung))
 set_missed("8801", "voicemail")
+
+# (i) trusted caller: the callee put the caller on their auto-accept list,
+#     so the B legs carry X-PTT-Auto for the phone to connect right away;
+#     an untrusted caller gets X-PTT only
+reset(); set_ptt("8800", 1, 1); set_ptt("8801", 1, 1); set_trusted("8801", "8800")
+STATES[sip["8801"] + "-app"] = "online"
+a = dial_ptt("a9")
+orig = originates()
+check("i: trusted -> X-PTT-Auto on every leg", bool(orig) and all(
+    o[1]["variables"].get("PJSIP_HEADER(add,X-PTT-Auto)") == "1" for o in orig), orig)
+reset(); set_ptt("8800", 1, 1); set_ptt("8801", 1, 1); set_trusted("8801", None)
+STATES[sip["8801"] + "-app"] = "online"
+a = dial_ptt("a10")
+orig = originates()
+check("i: untrusted -> no X-PTT-Auto", bool(orig) and all(
+    "PJSIP_HEADER(add,X-PTT-Auto)" not in o[1]["variables"] for o in orig), orig)
 
 # (c) both on -> B legs carry the PTT headers, bridge + beep on answer,
 #     recording never starts, CDR is marked direction='ptt'

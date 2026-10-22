@@ -309,6 +309,48 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 )
                 Text("Chirp me again (up to 3 tries), then voicemail")
             }
+            // Trusted callers (a server-side list, saved on the same calls
+            // POST): their pages skip the Accept screen entirely.
+            Text(
+                "Auto-accept pages from",
+                Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                "Extensions you trust, comma separated. Their pages connect right away: " +
+                    "one chirp and the line opens on speaker. Your mic stays off until you talk.",
+                Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            var trustedText by
+                remember(st.ptt_trusted) { mutableStateOf(st.ptt_trusted.joinToString(", ")) }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = trustedText,
+                    onValueChange = { trustedText = it },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    enabled = st.ptt_allowed,
+                    placeholder = { Text("e.g. 8803, 8805") },
+                )
+                TextButton(
+                    onClick = {
+                        val list =
+                            trustedText
+                                .split(',', ' ', ';')
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() && it.all { ch -> ch.isDigit() } }
+                                .distinct()
+                        saveCalls(st.copy(ptt_trusted = list))
+                    },
+                    enabled = st.ptt_allowed,
+                ) {
+                    Text("Save")
+                }
+            }
             // This phone's own PTT defaults (not PBX settings): the
             // in-call toggles start here, and changing them in a call
             // writes back here too.

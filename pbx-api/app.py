@@ -174,6 +174,10 @@ def _migrate(c):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_enabled INTEGER NOT NULL DEFAULT 0")
     if "ptt_missed" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_missed TEXT NOT NULL DEFAULT 'voicemail'")
+    # Trusted PTT callers: pages from these extensions auto-accept on the
+    # callee's phone (Nextel-style), everyone else chirps and waits.
+    c.execute("CREATE TABLE IF NOT EXISTS ptt_trusted (login_id INTEGER NOT NULL,"
+              " exten TEXT NOT NULL, PRIMARY KEY (login_id, exten))")
     # Guest extensions: a restricted account type with its own admin-set
     # rules (outside calling, PSTN inbound, SMS/MMS, 911). All flags default
     # OFF, so a login only becomes less restricted where the admin opts in.

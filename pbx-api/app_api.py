@@ -465,6 +465,9 @@ def me_settings(request: Request):
     with M.db() as c:
         ivrs = [dict(r) for r in c.execute("SELECT id, name FROM ivr_menus WHERE owner_login_id=?",
                                            (me["id"],)).fetchall()]
+        trusted = [r[0] for r in c.execute(
+            "SELECT exten FROM ptt_trusted WHERE login_id=? ORDER BY exten",
+            (me["id"],)).fetchall()]
     return {
         "dnd": bool(p["dnd"]), "forward_always": p["forward_always"] or "",
         "forward_noanswer": p["forward_noanswer"] or "",
@@ -475,6 +478,7 @@ def me_settings(request: Request):
         "ptt_allowed": bool(me.get("ptt_allowed")) or U._quota(me, "push_to_talk") != 0,
         "user_ptt": bool(me.get("ptt_enabled")),
         "user_ptt_missed": "retry" if str(me.get("ptt_missed") or "").strip().lower() == "retry" else "voicemail",
+        "ptt_trusted": trusted,
         "is_guest": bool(me.get("is_guest")),
         "guest_outbound": bool(me.get("guest_outbound")),
         "guest_inbound": bool(me.get("guest_inbound")),

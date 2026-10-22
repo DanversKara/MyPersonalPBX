@@ -704,6 +704,15 @@ def _ptt_ring(channel, me, callee):
     that ignore the header. Returns the legs ([] = callee unreachable)."""
     leg_cid = "PTT %s <%s>" % (me["display_name"] or me["exten"], me["exten"])
     variables = {"PJSIP_HEADER(add,X-PTT)": "1"}
+    # Trusted caller: the callee put this extension on their auto-accept
+    # list, so their phone connects right away (one chirp, line open on
+    # speaker, mic still gated) instead of waiting for an Accept tap.
+    try:
+        if q1("SELECT 1 FROM ptt_trusted WHERE login_id=? AND exten=?",
+              (callee["id"], me["exten"])):
+            variables["PJSIP_HEADER(add,X-PTT-Auto)"] = "1"
+    except Exception:
+        pass  # table not migrated yet: everyone just gets the accept flow
     legs = []
     for ep in phone_endpoints(callee):
         try:
