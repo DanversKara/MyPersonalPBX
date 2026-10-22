@@ -48,6 +48,7 @@ USER_FLASH = {
     "error": ("bad", "Something went wrong talking to the payment provider. Please try again."),
     "noplan": ("bad", "That plan isn't available."),
     "locked": ("bad", "Changes are disabled right now (the administrator has the safety lock on)."),
+    "guestnoup": ("bad", "Your admin doesn't allow this account to upgrade plans without contacting support first."),
 }
 
 
@@ -142,6 +143,54 @@ def _audit(actor, action, detail=""):
             c.commit()
     except Exception:
         pass
+
+
+def _guest_upgrade_blocked(me):
+    """True for a guest whose admin did NOT tick 'allow buying a plan to
+    become a normal user' on their login: guests may only buy plans with
+    that permission. Tolerates rows from before the guest columns."""
+    try:
+        return bool(me["is_guest"]) and not bool(me["guest_upgrade"])
+    except (IndexError, KeyError, TypeError):
+        return False
+
+
+def _guest_upgrade_allowed(me):
+    """True for a guest whose admin DID tick the upgrade permission."""
+    try:
+        return bool(me["is_guest"]) and bool(me["guest_upgrade"])
+    except (IndexError, KeyError, TypeError):
+        return False
+
+
+def _maybe_upgrade_guest(c, login_id, plan):
+    """Convert a guest to a normal extension when a PAID plan activates.
+
+    Only fires when the admin ticked logins.guest_upgrade for that guest
+    ('allow buying a plan to become a normal user'); guests never upgrade
+    on their own. Free plans (price 0) never convert. The guest rule
+    columns stay as they were — they are inert for a normal account.
+    Runs inside apply_subscription's transaction on connection `c`."""
+    if not int(plan.get("price_cents") or 0):
+        return
+    try:
+        row = c.execute("SELECT exten, is_guest, guest_upgrade FROM logins WHERE id=?",
+                        (login_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return  # pre-guest-migration DB: nothing to convert
+    if row and row["is_guest"] and row["guest_upgrade"]:
+        c.execute("UPDATE logins SET is_guest=0 WHERE id=?", (login_id,))
+        # Audit on THIS connection: _audit() opens a second one, which
+        # the open write transaction would lock out (and it swallows the
+        # error), losing the record.
+        try:
+            c.execute("INSERT INTO audit (actor, action, detail) VALUES (?,?,?)",
+                      ("billing", "logins.guest_change",
+                       f"login {login_id} ext {row['exten']}: guest -> normal "
+                       f"(paid plan '{plan.get('name', '')}' subscription activated; "
+                       "admin had allowed plan upgrade)"))
+        except sqlite3.OperationalError:
+            pass
 
 
 # ---------------------------------------------------------------- Stripe sync
@@ -273,6 +322,7 @@ def apply_subscription(login_id, sub):
                    1 if sub.get("cancel_at_period_end") else 0, int(time.time()), login_id))
         if status in ACTIVE and plan:
             _grant_plan(c, login_id, plan)
+            _maybe_upgrade_guest(c, login_id, plan)
         else:
             _revoke_plan_quota(c, login_id)
         c.commit()
@@ -416,10 +466,20 @@ def user_page(request: Request):
         current = (f'<section class="panel current-plan"><div class="lbl muted">YOUR PLAN</div><h3>No plan</h3>'
                    f'<p class="muted">Without a plan you can call other extensions on this system. Pick a plan below for '
                    f'outside calls, voicemail, texts, call recording and IVR menus.</p>{usage_html}</section>')
+    guest_blocked = _guest_upgrade_blocked(me)
+    guest_note = ""
+    if guest_blocked:
+        guest_note = ("<div class=\"flash bad\">Your admin doesn't allow this account to upgrade "
+                      "plans without contacting support first.</div>")
+    elif _guest_upgrade_allowed(me):
+        guest_note = ("<p class=\"muted\">This is a guest account. Buying a paid plan upgrades "
+                      "it to a full user account.</p>")
     cards = ""
     for p in plans:
         is_cur = subscribed and cur_plan and cur_plan["id"] == p["id"]
-        if is_cur:
+        if guest_blocked:
+            btn = '<button class="btn" disabled>Not available</button>'
+        elif is_cur:
             btn = '<button class="btn" disabled>Current plan</button>'
         else:
             label = "Switch to this plan" if subscribed else "Subscribe"
@@ -440,6 +500,7 @@ def user_page(request: Request):
                  if current_mode() == "test" else "")
     body = f"""{flash}{current}
 <h3>Plans</h3>
+{guest_note}
 <div class="plans">{cards}</div>
 {test_note}
 <p class="muted">Payments are handled securely by Stripe. Card details never touch this server.</p>"""
@@ -488,6 +549,8 @@ def _back(key):
 
 async def user_subscribe(request: Request, plan_id: int):
     s, me = await _user_post(request)
+    if _guest_upgrade_blocked(me):
+        return _back("guestnoup")
     if M.ucp._locked():
         return _back("locked")
     if not ready():

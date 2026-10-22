@@ -10,6 +10,19 @@ invite, or convert any existing login either way under Logins → Edit
 E911 page lists every guest and its 911 state; type/rule changes are
 audit-logged (`logins.guest_change`).
 
+## Update: plan-upgrade permission
+Guests can only buy plans when the admin ticks **Guest: allow buying a
+plan to become a normal user** (`logins.guest_upgrade`, also on invites;
+default off). Without the tick, the guest's Plans page shows "Your
+admin doesn't allow this account to upgrade plans without contacting
+support first", the Subscribe buttons are disabled, and the subscribe
+endpoint itself refuses (bmsg=guestnoup). With the tick, the Plans page
+notes that buying a paid plan upgrades the account — and when a paid
+plan's subscription activates in `billing.apply_subscription`, the
+login converts to a normal extension (guest rule columns stay stored
+but inert), audit-logged as `logins.guest_change` by actor `billing`.
+Free plans never convert. Deploy is the usual `pbx-update`.
+
 ## Update: 4-way texting scope
 The SMS/MMS rule is now a dropdown — **Both external and internal**,
 **External only**, **Internal only**, **Block all** — stored as
@@ -33,8 +46,13 @@ nobody's behavior. Deploy is the usual `pbx-update`; no app change.
 - `pbx-api/ucp.py` — portal/app send path refuses texts outside the
   guest's scope (sender or recipient, internal and external branches).
 - `pbx-api/e911_ui.py` — "Guest extensions" section + 911 states.
+- `pbx-api/billing.py` — the guest plan-upgrade gate: Plans-page notice
+  + disabled Subscribe for guests without permission, subscribe
+  endpoint refusal, and the guest -> normal conversion when a paid
+  plan activates for a permitted guest.
 - `pbx-api/app_api.py` — `me/settings` exposes `is_guest` + the four
-  rule flags + `guest_sms_mode` (additive; older apps ignore them).
+  rule flags + `guest_sms_mode` + `guest_upgrade` (additive; older apps
+  ignore them).
 - `pbx-brain/app.py` — the gates: 911 fast-fail for blocked guests,
   outbound deny (dial path + `handle_outbound` for DISA/forwards),
   PSTN ring skip in ring groups + voicemail path for direct rings,
@@ -62,7 +80,7 @@ python3 -m py_compile pbx-api/app.py pbx-api/ucp.py pbx-api/e911_ui.py \
 export PBX_DB=/tmp/guesttest.db && rm -f $PBX_DB
 python3 dev/seed-test-db.py
 python3 dev/test-brain-guest.py    # 30 checks: 911 / outbound / inbound / sms mode matrix
-python3 dev/test-guest-api.py      # 34 checks: migration, convert, invites, modes, e911 page, app gate
+python3 dev/test-guest-api.py      # 48 checks: migration, convert, invites, modes, plan upgrade, e911 page, app gate
 python3 dev/test-guest-agi.py      # 9 checks: AGI msg-route across the four modes
 sqlite3 /var/lib/pbx/pbx.db "PRAGMA table_info(logins);" | grep guest   # 6 rows on the live DB
 ```

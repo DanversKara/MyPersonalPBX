@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS logins (
   guest_inbound INTEGER NOT NULL DEFAULT 0,  -- guest may receive PSTN calls from DIDs
   guest_sms INTEGER NOT NULL DEFAULT 0,      -- synced flag: guest may text real phone numbers (mode all/external)
   guest_sms_mode TEXT NOT NULL DEFAULT 'off', -- guest texting scope: all | external | internal | off
+  guest_upgrade INTEGER NOT NULL DEFAULT 0,  -- guest may buy a paid plan to become a normal user
   guest_e911 INTEGER NOT NULL DEFAULT 0,     -- guest may place 911/933 calls (admin decision)
   vm_email TEXT NOT NULL DEFAULT '',
   sso_subject TEXT NOT NULL DEFAULT '',     -- single sign-on: "<issuer>|<subject>" linked to this login
@@ -460,6 +461,7 @@ CREATE TABLE IF NOT EXISTS invites (
   guest_inbound INTEGER NOT NULL DEFAULT 0,
   guest_sms INTEGER NOT NULL DEFAULT 0,
   guest_sms_mode TEXT NOT NULL DEFAULT 'off',
+  guest_upgrade INTEGER NOT NULL DEFAULT 0,
   guest_e911 INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,              -- UTC 'YYYY-MM-DD HH:MM:SS'
   used_at TEXT DEFAULT NULL,

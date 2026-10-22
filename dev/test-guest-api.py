@@ -9,7 +9,10 @@ new login; the E911 page lists guests and their 911 state; me/settings
 exposes the guest state to the app; and the portal/app send path refuses
 texts for a guest with guest_sms off (and allows them once it's on); and
 the 4-way texting scope (guest_sms_mode: all | external | internal |
-off) across the editor, invites, me/settings and the send path.
+off) across the editor, invites, me/settings and the send path; and the
+plan-upgrade path: guests can't buy plans unless the admin ticked
+guest_upgrade (their Plans page says so), and a guest WITH the tick
+converts to a normal account when a paid plan's subscription activates.
 
     export PBX_DB=/tmp/guestapi.db && rm -f $PBX_DB && python3 dev/seed-test-db.py
     python3 dev/test-guest-api.py     # run from the repo root
@@ -41,11 +44,11 @@ def csrf(html):
 # --- schema / migration columns -------------------------------------------
 for t in ("logins", "invites"):
     cols = {r[1] for r in q(f"PRAGMA table_info({t})")}
-    check(f"schema: {t} has the guest columns + sms mode",
+    check(f"schema: {t} has the guest columns + sms mode + upgrade",
           {"is_guest", "guest_outbound", "guest_inbound", "guest_sms", "guest_e911",
-           "guest_sms_mode"} <= cols,
+           "guest_sms_mode", "guest_upgrade"} <= cols,
           sorted(cols & {"is_guest", "guest_outbound", "guest_inbound", "guest_sms",
-                         "guest_e911", "guest_sms_mode"}))
+                         "guest_e911", "guest_sms_mode", "guest_upgrade"}))
 
 # --- admin sign-in ----------------------------------------------------------
 r = c.post("/login", data={"username": "admin", "password": "admin123"}, follow_redirects=False)
@@ -253,6 +256,125 @@ new2 = q("SELECT * FROM logins WHERE display_name='Shop Phone'")
 check("redeemed login carries mode=external",
       new2 and new2[0]["guest_sms_mode"] == "external" and new2[0]["guest_sms"] == 1,
       dict(new2[0]) if new2 else None)
+
+# --- plan upgrade: admin permission + paid-plan conversion ----------------------
+import billing as B
+
+# Fake Stripe test mode + two plans (paid, free), so billing is "ready"
+# without any real Stripe account.
+c2 = sqlite3.connect(DB)
+c2.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('stripe_secret', 'sk_test_fake')")
+c2.execute("INSERT INTO billing_plans (name, description, price_cents, currency, stripe_mode,"
+           " stripe_price_id, active) VALUES ('Test Paid', '', 1000, 'usd', 'test', 'price_paid', 1)")
+paid_id = c2.execute("SELECT id FROM billing_plans WHERE stripe_price_id='price_paid'").fetchone()[0]
+c2.execute("INSERT INTO billing_plans (name, description, price_cents, currency, stripe_mode,"
+           " stripe_price_id, active) VALUES ('Test Free', '', 0, 'usd', 'test', 'price_free', 1)")
+free_id = c2.execute("SELECT id FROM billing_plans WHERE stripe_price_id='price_free'").fetchone()[0]
+c2.commit(); c2.close()
+
+# A guest whose admin ticked the upgrade box (via the real editor).
+r = c.get("/logins/new/edit")
+check("editor offers the plan-upgrade checkbox", 'name="guest_upgrade"' in r.text)
+r = c.post("/logins/new/edit", data={
+    "csrf_token": csrf(r.text), "username": "buyer", "password": "buyerpass1", "role": "user",
+    "exten": "8851", "sip_username": "phone8851", "sip_secret": "s3cret-buyer",
+    "display_name": "Buyer Guest", "vm_email": "", "account_type": "guest",
+    "guest_upgrade": "on", "enabled": "on"}, follow_redirects=False)
+row = q("SELECT * FROM logins WHERE username='buyer'")
+check("guest created with the upgrade permission on",
+      row and row[0]["is_guest"] == 1 and row[0]["guest_upgrade"] == 1,
+      dict(row[0]) if row else None)
+buyer_id = row[0]["id"]
+
+def portal(username, password):
+    cc = TestClient(A.app, client=("192.168.1.10", 50000)); cc.__enter__()
+    cc.post("/login", data={"username": username, "password": password}, follow_redirects=False)
+    return cc
+
+# Allowed guest: Plans page explains the deal, subscribe is offered.
+cb = portal("buyer", "buyerpass1")
+r = cb.get("/ucp/billing")
+check("allowed guest sees the upgrade note on the Plans page",
+      "Buying a paid plan upgrades" in r.text, r.status_code)
+check("allowed guest is offered a Subscribe button", "Subscribe" in r.text)
+
+# Blocked guest (the visitor from the invite tests): notice + no way to buy.
+cv = portal(guest_exten, "visitorpass1")
+r = cv.get("/ucp/billing")
+check("blocked guest sees the support notice under Plans",
+      "doesn't allow this account to upgrade plans" in r.text, r.status_code)
+check("blocked guest gets no Subscribe button", "Subscribe" not in r.text
+      and "Not available" in r.text)
+# A forged subscribe POST with a VALID csrf token (scraped from another
+# portal page — the blocked billing page itself renders no forms) must
+# still be refused server-side.
+r = cv.get("/ucp/messages")
+r = cv.post(f"/ucp/billing/subscribe/{paid_id}", data={"csrf_token": csrf(r.text)},
+            follow_redirects=False)
+check("blocked guest subscribe POST is refused (guestnoup)",
+      "guestnoup" in r.headers.get("location", ""), r.headers.get("location", ""))
+
+def fake_sub(sid, price_id, status="active"):
+    return {"id": sid, "customer": "cus_" + sid, "status": status,
+            "current_period_end": 1893456000, "cancel_at_period_end": False,
+            "items": {"data": [{"id": "si_" + sid, "price": {"id": price_id}}]}}
+
+def mk_guest(exten, upgrade):
+    cc = sqlite3.connect(DB)
+    cc.execute("INSERT INTO logins (username, pwhash, role, exten, sip_username, sip_secret,"
+               " is_guest, guest_upgrade) VALUES (?, 'x', 'user', ?, ?, 's', 1, ?)",
+               ("g" + exten, exten, "phone" + exten, upgrade))
+    cc.commit()
+    lid = cc.execute("SELECT id FROM logins WHERE exten=?", (exten,)).fetchone()[0]
+    cc.close()
+    return lid
+
+def is_guest(lid):
+    return q("SELECT is_guest FROM logins WHERE id=?", (lid,))[0]["is_guest"]
+
+# Allowed guest + paid plan activates -> normal account, audit-logged.
+B.apply_subscription(buyer_id, fake_sub("sub_buyer", "price_paid"))
+check("allowed guest converts to normal when a paid plan activates",
+      is_guest(buyer_id) == 0, is_guest(buyer_id))
+aud = q("SELECT * FROM audit WHERE action='logins.guest_change' AND actor='billing'")
+check("the conversion is audit-logged as billing",
+      len(aud) >= 1 and "guest -> normal" in aud[0]["detail"], [dict(a) for a in aud][:1])
+
+# No permission: plan is granted, but the account stays a guest.
+g_off = mk_guest("8860", 0)
+B.apply_subscription(g_off, fake_sub("sub_off", "price_paid"))
+bc = q("SELECT plan_id FROM billing_customers WHERE login_id=?", (g_off,))
+check("guest without permission keeps the plan but stays a guest",
+      is_guest(g_off) == 1 and bc and bc[0]["plan_id"] == paid_id,
+      (is_guest(g_off), dict(bc[0]) if bc else None))
+
+# Free plan never converts, even with permission.
+g_free = mk_guest("8861", 1)
+B.apply_subscription(g_free, fake_sub("sub_free", "price_free"))
+check("free plan never converts a guest", is_guest(g_free) == 1, is_guest(g_free))
+
+# A non-active subscription converts nobody.
+g_cx = mk_guest("8862", 1)
+B.apply_subscription(g_cx, fake_sub("sub_cx", "price_paid", status="canceled"))
+check("canceled subscription converts nobody", is_guest(g_cx) == 1, is_guest(g_cx))
+
+# Invites can pre-tick the permission.
+r = c.get("/invites")
+r = c.post("/invites/new", data={
+    "csrf_token": csrf(r.text), "expires_days": "7", "email": "",
+    "account_type": "guest", "guest_upgrade": "on"}, follow_redirects=False)
+m = re.search(r"/invite/([A-Za-z0-9_\-]+)", r.text)
+token3 = m.group(1) if m else ""
+inv = q("SELECT * FROM invites ORDER BY id DESC LIMIT 1")
+check("invite row carries the upgrade permission",
+      inv and inv[0]["guest_upgrade"] == 1, dict(inv[0]) if inv else None)
+r = c.get(f"/invite/{token3}")
+r = c.post(f"/invite/{token3}", data={
+    "token": token3, "display_name": "Upgrade Guest", "vm_email": "",
+    "password": "upgradepass1", "password2": "upgradepass1"}, follow_redirects=False)
+new3 = q("SELECT * FROM logins WHERE display_name='Upgrade Guest'")
+check("redeemed login carries the upgrade permission",
+      new3 and new3[0]["guest_upgrade"] == 1, dict(new3[0]) if new3 else None)
 
 print()
 print("FAILED:", fails if fails else "none")

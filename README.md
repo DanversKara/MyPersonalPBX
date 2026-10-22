@@ -483,6 +483,13 @@ that guest:
   phones that are not E911-provisioned; normal extensions can never be
   blocked from 911. The E911 page lists every guest and its 911 state,
   and every guest type/rule change is written to the audit log.
+- **Buying a plan to become a normal user** — off (the default): the
+  guest cannot buy plans at all; their Plans page tells them the admin
+  doesn't allow upgrades without contacting support first. On: the
+  guest may buy a plan, and when a paid plan's subscription activates
+  the account converts to a normal extension and every guest rule
+  stops applying (audit-logged, actor `billing`). Free plans never
+  convert an account, and guests never upgrade on their own.
 
 Set the type when creating a login or generating an invite, or convert an
 existing account either way under **Logins → Edit** — the account, its
