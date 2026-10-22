@@ -1127,6 +1127,10 @@ def login_edit_page(request: Request, lid: str):
 <span class="muted">{'(on system-wide)' if _get_setting("admin_rec_enabled") == "1" else '(off system-wide - nothing is recorded until it is turned on under <a href="/recordings">Recordings</a>)'}</span><br>
 <label><input type="checkbox" name="user_record" {'checked' if t and t['user_record'] else ''}> User call recording (allow)</label>
 <span class="muted">Lets the user record their own calls. They must still turn on "Record my calls" in Settings themselves — this cannot enable it for them. Uncheck to disable user recording entirely.</span><br>
+<p class="muted" style="max-width:560px">Recording laws vary; some US states (e.g. California, Florida, Illinois, Maryland,
+Massachusetts, Pennsylvania, Washington) require every party's consent. "User call recording" only records once the user has
+accepted the recording notice in their control panel and their plan includes recording. Admin recording is your responsibility
+to use lawfully.</p>
 <label><input type="checkbox" name="ptt_allowed" {'checked' if t and t['ptt_allowed'] else ''}> Allow push-to-talk</label>
 <span class="muted">Lets the user place push-to-talk calls (dial *88 + extension) and receive them. They must still turn on push-to-talk in their own Settings themselves — this cannot enable it for them. Uncheck to disable push-to-talk entirely.</span><br>
 <label>Account type<br><select name="account_type"><option value="normal" {'selected' if not (t and t['is_guest']) else ''}>Normal extension</option><option value="guest" {'selected' if t and t['is_guest'] else ''}>Guest extension</option></select></label>
@@ -1139,10 +1143,6 @@ def login_edit_page(request: Request, lid: str):
 <span class="muted">How far this guest's texting reaches, in both directions. Both = real phone numbers and other extensions. External only = real phone numbers, no extension-to-extension texts. Internal only = extension-to-extension texts, no real phone numbers. Block all = no texting at all.</span><br>
 <label><input type="checkbox" name="guest_e911" {'checked' if t and t['guest_e911'] else ''}> Guest: allow 911 / 933 calls</label>
 <span class="muted">Off = dialing 911 or 933 from this guest extension is not routed (the caller hears the cannot-complete announcement). Normal extensions can never be blocked from 911. Only turn this off for guest phones that are not E911-provisioned — the decision and its legal responsibility are yours; every change is audit-logged.</span><br>
-<p class="muted" style="max-width:560px">Recording laws vary; some US states (e.g. California, Florida, Illinois, Maryland,
-Massachusetts, Pennsylvania, Washington) require every party's consent. "User call recording" only records once the user has
-accepted the recording notice in their control panel and their plan includes recording. Admin recording is your responsibility
-to use lawfully.</p>
 <label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
 <a class="btn ghost" href="/logins">Cancel</a>
