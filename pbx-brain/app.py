@@ -154,6 +154,12 @@ def handle_outbound(channel, me, dialed):
     """Route an outbound call via trunk per outbound_routes.
     Returns True if a route was found and the call was originated.
     """
+    if me is not None and not guest_can(me, "outbound"):
+        # Covers DISA and forward-to-outside paths, which reach the trunk
+        # through here rather than through handle_internal's own check.
+        log.info("guest %s may not call outside (tried %s)",
+                 me["exten"], dialed)
+        return False
     import json
     routes = qall("SELECT * FROM outbound_routes WHERE enabled=1"
                   " ORDER BY priority ASC")
@@ -204,8 +210,17 @@ def handle_internal(channel, dialed):
             (caller_num,))
     # 911 first, before anything that could refuse a call (unknown phone,
     # plans, DND...). See e911.py: emergency calls are never blocked.
+    # The one exception is a guest extension whose admin turned 911
+    # routing off for it (guest_e911) — an explicit per-extension admin
+    # decision for phones that are not E911-provisioned. Normal logins
+    # can never be blocked, and neither can unknown phones.
     number = e911.emergency_number(q1, dialed)
     if number:
+        if me and not guest_can(me, "e911"):
+            log.warning("guest %s dialed %s: 911 routing is off for this "
+                        "extension (admin setting)", me["exten"], number)
+            deny_and_hangup(channel, why="guest extension: 911 routing off")
+            return
         e911.handle_emergency(channel, me, number, client=CLIENT, app=APP, q1=q1, db=db,
                               calls=CALLS, pending=PENDING)
         return
@@ -309,6 +324,9 @@ def handle_internal(channel, dialed):
                 log.info("%s dialed %s without the outside prefix %s", caller_num, dialed, pfx)
                 deny_and_hangup(channel, why="outside prefix %s required" % pfx)
                 return
+        if not guest_can(me, "outbound"):
+            deny_and_hangup(channel, why="guest extension: outside calling is turned off")
+            return
         if not can_call_outside(me["id"]):
             deny_and_hangup(channel, why="%s has no outside minutes left" % me["exten"])
             return
@@ -535,6 +553,13 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
                    "caller_id": caller_id or "%s <%s>" % (me["display_name"] or me["exten"], me["exten"])}
             if start_ivr(channel, menu, ctx):
                 return
+    if direction == "inbound" and not guest_can(callee, "inbound"):
+        # Guest extension with PSTN inbound off: the outside call never
+        # rings it (same unavailable path as the plan check below).
+        log.info("guest %s has PSTN inbound off: inbound call -> voicemail/unavailable", callee["exten"])
+        CALLS[channel.id] = info
+        route_to_voicemail(channel.id, callee["exten"])
+        return
     if direction == "inbound" and not can_call_outside(callee["id"]):
         # Outside callers can only reach users whose plan includes outside calls.
         log.info("%s has no outside minutes: inbound call -> voicemail/unavailable", callee["exten"])
@@ -623,6 +648,40 @@ def _ptt_flag(login, col):
 def ptt_can_receive(login):
     """Effective receive-PTT for a login: admin allow AND user wish."""
     return _ptt_flag(login, "ptt_allowed") and _ptt_flag(login, "ptt_enabled")
+
+
+# ---------------------------------------------------------------- guest extensions
+# A guest extension is a restricted account type (logins.is_guest, set by
+# the admin on the Logins page or at invite generation). Internal calling
+# (extension to extension, feature codes, ring groups dialed internally)
+# always works. Everything that reaches outside the PBX is off unless the
+# admin turned that one thing on for the guest:
+#   guest_outbound  call outside numbers (plan minutes still apply)
+#   guest_inbound   receive PSTN calls from DIDs
+#   guest_sms       send/receive SMS/MMS and internal texts
+#   guest_e911      place 911/933 calls (an admin decision; normal
+#                   extensions can never be blocked from 911)
+# The helpers tolerate pre-migration DBs (missing columns read as
+# "not a guest"), mirroring _ptt_flag.
+
+def _guest_flag(login, col):
+    try:
+        return bool(login[col])
+    except (IndexError, KeyError, TypeError):
+        return False
+
+
+def is_guest(login):
+    return bool(login) and _guest_flag(login, "is_guest")
+
+
+def guest_can(login, cap):
+    """True when `login` may do `cap` ('outbound'|'inbound'|'sms'|'e911').
+    Normal (non-guest) logins always can; guests only where the admin
+    turned that rule on."""
+    if not is_guest(login):
+        return True
+    return _guest_flag(login, "guest_" + cap)
 
 
 def handle_ptt(channel, me, target):
@@ -2312,6 +2371,9 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
             continue
         if first_login is None:
             first_login = callee
+        if not internal and not guest_can(callee, "inbound"):
+            log.info("inbound %s: %s is a guest extension with PSTN inbound off, skipped", did, exten)
+            continue
         if not internal and not can_call_outside(callee["id"]):
             log.info("inbound %s: %s has no outside minutes, skipped", did, exten)
             continue
@@ -3229,6 +3291,8 @@ def send_message_api(to_exten, from_exten, body):
                                (from_exten,)).fetchone()
             if not sender:
                 return False, {"error": "unknown sender extension"}
+            if not guest_can(sender, "sms"):
+                return False, {"error": "texting is turned off for this extension"}
             try:
                 r = c.execute("SELECT msg_out FROM user_prefs WHERE login_id=?", (sender["id"],)).fetchone()
                 if r is not None and not int(r[0]):
@@ -3284,7 +3348,11 @@ def send_message_api(to_exten, from_exten, body):
 
         if not _pref(sender["id"], "msg_out"):
             return False, {"error": "sending is turned off for this extension"}
+        if not guest_can(sender, "sms"):
+            return False, {"error": "sending is turned off for this extension"}
         if not _pref(dest["id"], "msg_in"):
+            return False, {"error": "recipient isn't accepting texts"}
+        if not guest_can(dest, "sms"):
             return False, {"error": "recipient isn't accepting texts"}
         try:
             blocked = c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?",

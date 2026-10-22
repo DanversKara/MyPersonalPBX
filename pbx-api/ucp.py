@@ -968,6 +968,15 @@ _send_times: dict[int, list[float]] = {}
 MSG_RATE = 20  # per minute per user (stops spam / runaway scripts)
 
 
+def _guest_sms_off(row) -> bool:
+    """True when `row` (a logins row) is a guest extension whose admin
+    left guest_sms off. Tolerates pre-migration rows without the columns."""
+    try:
+        return bool(row["is_guest"]) and not bool(row["guest_sms"])
+    except (IndexError, KeyError, TypeError):
+        return False
+
+
 async def msg_send(request: Request):
     """Send a text from My Phone. Internal exten or external PSTN via voip.ms.
     Counts against the plan's monthly texts exactly like texts sent from a phone."""
@@ -988,6 +997,8 @@ async def msg_send(request: Request):
     with M.db() as c:
         if is_external:
             # External SMS via voip.ms - validate sender only
+            if _guest_sms_off(me):
+                return RedirectResponse(back + "msg=msgoff", status_code=303)
             if not M.safety_ui.msg_prefs(me["id"])["msg_out"]:
                 return RedirectResponse(back + "msg=msgoff", status_code=303)
             if _quota(me, "messages") == 0 or _left(me, "messages") == 0:
@@ -1019,6 +1030,12 @@ async def msg_send(request: Request):
         dest = c.execute("SELECT id, exten FROM logins WHERE exten=? AND enabled=1", (to,)).fetchone()
         if not dest or not re.fullmatch(r"\d{2,8}", to) or to == me["exten"]:
             return RedirectResponse(back + "msg=msgto", status_code=303)
+        if _guest_sms_off(me):
+            return RedirectResponse(back + "msg=msgoff", status_code=303)
+        dest_full = c.execute("SELECT * FROM logins WHERE id=?", (dest["id"],)).fetchone()
+        if dest_full and _guest_sms_off(dest_full):
+            # Same answer as "turned off / blocked" (doesn't reveal why).
+            return RedirectResponse(back + "msg=msgnotaccepting", status_code=303)
         if not M.safety_ui.msg_prefs(me["id"])["msg_out"]:
             return RedirectResponse(back + "msg=msgoff", status_code=303)
         if not M.safety_ui.msg_prefs(dest["id"])["msg_in"] or M.safety_ui.is_blocked(dest["id"], me["exten"]):

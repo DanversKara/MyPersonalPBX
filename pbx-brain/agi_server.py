@@ -49,6 +49,15 @@ def text_quota(c, login_id):
         return 0
 
 
+def _guest_sms_ok(login):
+    """Guest extensions may only text when the admin turned guest_sms on.
+    Normal logins always pass; missing columns (pre-migration DB) pass."""
+    try:
+        return not login["is_guest"] or bool(login["guest_sms"])
+    except (IndexError, KeyError, TypeError):
+        return True
+
+
 def _push_to_phone(to_exten, from_exten, body):
     """Ask pbx-brain (localhost) to deliver the text to the recipient's phone."""
     import json as _json
@@ -130,8 +139,14 @@ def handle_msg_route(agi_vars):
         if not _pref(sender["id"], "msg_out"):
             log.info("msg-route: %s has sending turned off", from_exten)
             return
+        if not _guest_sms_ok(sender):
+            log.info("msg-route: %s is a guest extension with texting off", from_exten)
+            return
         if not _pref(dest["id"], "msg_in"):
             log.info("msg-route: %s isn't accepting texts", dest_exten)
+            return
+        if not _guest_sms_ok(dest):
+            log.info("msg-route: %s is a guest extension with texting off", dest_exten)
             return
         try:
             if c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?",
@@ -197,6 +212,9 @@ def _handle_external_outbound(from_exten: str, dest_number: str, body: str):
         sender = c.execute("SELECT * FROM logins WHERE exten=? AND enabled=1", (from_exten,)).fetchone()
         if not sender:
             log.warning("msg-route external: unknown sender %s", from_exten)
+            return
+        if not _guest_sms_ok(sender):
+            log.info("msg-route external: %s is a guest extension with texting off", from_exten)
             return
         try:
             r = c.execute("SELECT msg_out FROM user_prefs WHERE login_id=?", (sender["id"],)).fetchone()

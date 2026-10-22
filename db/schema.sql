@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS logins (
   user_wants_record INTEGER NOT NULL DEFAULT 0, -- user's own "record my calls" wish
   ptt_allowed INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for push-to-talk
   ptt_enabled INTEGER NOT NULL DEFAULT 0,  -- user's own "receive push-to-talk" wish
+  is_guest INTEGER NOT NULL DEFAULT 0,     -- guest extension: restricted account type (admin-set)
+  guest_outbound INTEGER NOT NULL DEFAULT 0, -- guest may call outside numbers (plan minutes still apply)
+  guest_inbound INTEGER NOT NULL DEFAULT 0,  -- guest may receive PSTN calls from DIDs
+  guest_sms INTEGER NOT NULL DEFAULT 0,      -- guest may send/receive SMS/MMS and internal texts
+  guest_e911 INTEGER NOT NULL DEFAULT 0,     -- guest may place 911/933 calls (admin decision)
   vm_email TEXT NOT NULL DEFAULT '',
   sso_subject TEXT NOT NULL DEFAULT '',     -- single sign-on: "<issuer>|<subject>" linked to this login
   max_messages INTEGER NOT NULL DEFAULT 500,
@@ -449,6 +454,11 @@ CREATE TABLE IF NOT EXISTS invites (
   sip_username TEXT NOT NULL,
   sip_secret TEXT NOT NULL,              -- shown once at redemption
   email TEXT NOT NULL DEFAULT '',        -- optional recipient (for the email option)
+  is_guest INTEGER NOT NULL DEFAULT 0,   -- account type chosen by the admin at generation
+  guest_outbound INTEGER NOT NULL DEFAULT 0,
+  guest_inbound INTEGER NOT NULL DEFAULT 0,
+  guest_sms INTEGER NOT NULL DEFAULT 0,
+  guest_e911 INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,              -- UTC 'YYYY-MM-DD HH:MM:SS'
   used_at TEXT DEFAULT NULL,
   revoked_at TEXT DEFAULT NULL,

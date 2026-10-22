@@ -11,7 +11,9 @@ What the settings mean for calls (pbx-brain/e911.py):
   * A user with E911 on: 911 calls use their E911 number, whose address is
     registered with the trunk provider (the admin registers it there).
   * Everyone else: the office fallback E911 number/address.
-  * 911 is never blocked (US 911 rules).
+  * 911 is never blocked (US 911 rules) — except a guest extension whose
+    admin explicitly turned its 911 routing off (Logins page); those are
+    listed at the bottom of this page.
 
 Lost code: on the PBX run
   sqlite3 /var/lib/pbx/pbx.db "DELETE FROM kv_settings WHERE key='e911_code_hash'"
@@ -109,6 +111,12 @@ def page(request: Request):
             " FROM logins l LEFT JOIN e911_users e ON e.login_id=l.id"
             " WHERE l.exten != '' ORDER BY l.exten").fetchall()
         trunks = c.execute("SELECT id, name FROM trunks WHERE enabled=1 ORDER BY id").fetchall()
+        try:
+            guests = c.execute(
+                "SELECT id, username, exten, display_name, guest_e911 FROM logins"
+                " WHERE is_guest=1 AND exten != '' ORDER BY exten").fetchall()
+        except Exception:
+            guests = []  # pre-guest-feature database
     fb_did, fb_addr = _kv("e911_fallback_did"), _kv("e911_fallback_address")
     trunk_id = _kv("e911_trunk_id")
     nine = _kv("e911_allow_9prefix", "1") == "1"
@@ -174,6 +182,11 @@ to go: the address is the one registered for the caller ID number at your provid
 <td class="muted">{esc(u['updated_at'] or '')}<br>{esc(u['updated_by'] or '')}</td>
 <td><button class="link-btn" form="e{u['id']}" {dis}>Save</button></td></tr>""")
     table = "".join(rows) or '<tr><td colspan="6" class="muted">No users with extensions</td></tr>'
+    guest_rows = "".join(
+        f"""<tr><td>{esc(g['display_name'] or g['username'])}</td><td>{esc(g['exten'])}</td>
+<td>{'<span class="pill ok">On</span>' if g['guest_e911'] else '<span class="pill bad">Off — 911 not routed</span>'}</td>
+<td><a class="btn ghost" href="/logins/{g['id']}/edit">Edit</a></td></tr>""" for g in guests
+    ) or '<tr><td colspan="4" class="muted">No guest extensions</td></tr>'
     body = f"""{flash}<h2>E911 / 911</h2>
 <div class="flash bad"><b>Not tested:</b> own-pbx is a home/hobby project and its 911/E911 features have not been
 tested end to end. Don't rely on it for emergency calls - keep a mobile phone or landline available, and test
@@ -181,14 +194,22 @@ with your provider (e.g. dial 933) before trusting any address.</div>
 <div class="flash warn-note"><b>911 always connects.</b> US 911 rules don't allow a phone system to block 911, so every
 phone can dial 911 (and 933, the address test line at many providers) - including users without E911, users with
 no plan, phones on DND, and phones connected from outside the office. These settings decide which number and address
-the call is sent with. Every 911 call is logged on the dashboard and emailed to the security-alert address.</div>
+the call is sent with. Every 911 call is logged on the dashboard and emailed to the security-alert address.
+The one exception is a <b>guest extension</b> whose admin turned 911 routing off for it (see Guest extensions below).</div>
 <div class="grid2">{lock_html}{settings_html}</div>
 <h3>Users</h3>
 <p class="muted">Turn E911 on for a user and give their own 911 number (a DID whose address you registered with the
 provider) and that address. Users see the address in My Phone with a warning that 911 sends help there, wherever
 the phone actually is.</p>
 <div class="scrollbox"><table><tr><th>User</th><th>E911</th><th>911 number</th><th>Address on file</th><th>Last change</th><th></th></tr>
-{table}</table></div>"""
+{table}</table></div>
+<h3>Guest extensions</h3>
+<p class="muted">Guest extensions (set on the Logins page) follow their own 911 rule: dialing 911/933 is only routed
+when the admin turned on "Guest: allow 911 / 933 calls" for that extension. A guest with 911 off is not
+E911-provisioned by this system — make sure that matches how the phone is actually used, and keep the per-user
+E911 above or the office fallback covering every phone that needs emergency calling.</p>
+<div class="scrollbox"><table><tr><th>Guest</th><th>Ext</th><th>911 routing</th><th></th></tr>
+{guest_rows}</table></div>"""
     return HTMLResponse(M.page("E911", body, s["username"], s["role"], "e911"))
 
 

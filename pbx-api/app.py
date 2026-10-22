@@ -171,6 +171,15 @@ def _migrate(c):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_allowed INTEGER NOT NULL DEFAULT 0")
     if "ptt_enabled" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_enabled INTEGER NOT NULL DEFAULT 0")
+    # Guest extensions: a restricted account type with its own admin-set
+    # rules (outside calling, PSTN inbound, SMS/MMS, 911). All flags default
+    # OFF, so a login only becomes less restricted where the admin opts in.
+    # The same five columns ride along on invites (migrated below, after
+    # that table's CREATE TABLE block), chosen at generation.
+    for _col in ("is_guest", "guest_outbound", "guest_inbound",
+                 "guest_sms", "guest_e911"):
+        if _col not in cols("logins"):
+            c.execute(f"ALTER TABLE logins ADD COLUMN {_col} INTEGER NOT NULL DEFAULT 0")
     # Single sign-on: "<issuer>|<subject>" of the provider account linked to this login.
     if "sso_subject" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN sso_subject TEXT NOT NULL DEFAULT ''")
@@ -253,6 +262,11 @@ def _migrate(c):
       created_by TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""")
+    # Guest account type on invites too (see the logins block above).
+    for _col in ("is_guest", "guest_outbound", "guest_inbound",
+                 "guest_sms", "guest_e911"):
+        if _col not in cols("invites"):
+            c.execute(f"ALTER TABLE invites ADD COLUMN {_col} INTEGER NOT NULL DEFAULT 0")
     c.commit()
 
 
@@ -1005,9 +1019,9 @@ def logins_page(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     with db() as c:
-        rows = c.execute("SELECT id, username, role, exten, sip_username, display_name, enabled FROM logins ORDER BY exten").fetchall()
+        rows = c.execute("SELECT id, username, role, exten, sip_username, display_name, enabled, is_guest FROM logins ORDER BY exten").fetchall()
     tr = "".join(
-        f"<tr><td>{esc(r['username'])}</td><td>{esc(r['role'])}</td><td>{esc(r['exten'])}</td>"
+        f"<tr><td>{esc(r['username'])}</td><td>{esc(r['role'])}</td><td>{'<span class=\"pill warn\">guest</span>' if r['is_guest'] else 'normal'}</td><td>{esc(r['exten'])}</td>"
         f"<td>{esc(r['sip_username'])}</td><td>{esc(r['display_name'])}</td><td>{'yes' if r['enabled'] else 'no'}</td>"
         f"<td><a class='btn ghost' href='/logins/{r['id']}/edit'>Edit</a>"
         + ("" if r['id'] == s.get('id') else
@@ -1016,7 +1030,7 @@ def logins_page(request: Request):
            f"and ALL of their data — call logs, messages, voicemail, recordings? This cannot be undone.')\">"
            f"{_csrf_field(s)}<button class='btn ghost' type='submit'>Delete</button></form>")
         + "</td></tr>" for r in rows)
-    body = f"<h2>Logins / Extensions</h2><table><tr><th>Username</th><th>Role</th><th>Exten</th><th>SIP user</th><th>Name</th><th>Enabled</th><th></th></tr>{tr}</table>"
+    body = f"<h2>Logins / Extensions</h2><table><tr><th>Username</th><th>Role</th><th>Type</th><th>Exten</th><th>SIP user</th><th>Name</th><th>Enabled</th><th></th></tr>{tr}</table>"
     body += "<p><a href='/logins/new/edit' class='btn'>Add login</a></p>"
     return page("Logins", body, s["username"], s["role"], "logins")
 
@@ -1053,6 +1067,16 @@ def login_edit_page(request: Request, lid: str):
 <span class="muted">Lets the user record their own calls. They must still turn on "Record my calls" in Settings themselves — this cannot enable it for them. Uncheck to disable user recording entirely.</span><br>
 <label><input type="checkbox" name="ptt_allowed" {'checked' if t and t['ptt_allowed'] else ''}> Allow push-to-talk</label>
 <span class="muted">Lets the user place push-to-talk calls (dial *88 + extension) and receive them. They must still turn on push-to-talk in their own Settings themselves — this cannot enable it for them. Uncheck to disable push-to-talk entirely.</span><br>
+<label>Account type<br><select name="account_type"><option value="normal" {'selected' if not (t and t['is_guest']) else ''}>Normal extension</option><option value="guest" {'selected' if t and t['is_guest'] else ''}>Guest extension</option></select></label>
+<span class="muted">A guest extension is a restricted account (a courtesy, lobby or visitor phone). Calling other extensions, feature codes and internal ring groups always works. Everything below is OFF for a guest unless you turn it on. Switching type takes effect immediately — the account, extension and history are kept; switch back any time.</span><br>
+<label><input type="checkbox" name="guest_outbound" {'checked' if t and t['guest_outbound'] else ''}> Guest: allow outside calling</label>
+<span class="muted">May dial real phone numbers through a trunk. Their plan / outside minutes still apply.</span><br>
+<label><input type="checkbox" name="guest_inbound" {'checked' if t and t['guest_inbound'] else ''}> Guest: allow receiving calls from real phone numbers</label>
+<span class="muted">DID routes and ring groups may ring this extension for callers from outside. Internal callers can always reach it.</span><br>
+<label><input type="checkbox" name="guest_sms" {'checked' if t and t['guest_sms'] else ''}> Guest: allow SMS / MMS texting</label>
+<span class="muted">May send and receive text messages (outside numbers and other extensions). Off = texts are blocked in both directions.</span><br>
+<label><input type="checkbox" name="guest_e911" {'checked' if t and t['guest_e911'] else ''}> Guest: allow 911 / 933 calls</label>
+<span class="muted">Off = dialing 911 or 933 from this guest extension is not routed (the caller hears the cannot-complete announcement). Normal extensions can never be blocked from 911. Only turn this off for guest phones that are not E911-provisioned — the decision and its legal responsibility are yours; every change is audit-logged.</span><br>
 <p class="muted" style="max-width:560px">Recording laws vary; some US states (e.g. California, Florida, Illinois, Maryland,
 Massachusetts, Pennsylvania, Washington) require every party's consent. "User call recording" only records once the user has
 accepted the recording notice in their control panel and their plan includes recording. Admin recording is your responsibility
@@ -1081,6 +1105,9 @@ async def login_edit_save(request: Request, lid: str,
                     display_name: str = Form(""), vm_email: str = Form(""),
                     record_admin: str = Form(None), user_record: str = Form(None),
                     ptt_allowed: str = Form(None),
+                    account_type: str = Form("normal"),
+                    guest_outbound: str = Form(None), guest_inbound: str = Form(None),
+                    guest_sms: str = Form(None), guest_e911: str = Form(None),
                     enabled: str = Form(None)):
     s = _sess(request)
     if not s or s["role"] != "admin":
@@ -1090,6 +1117,7 @@ async def login_edit_save(request: Request, lid: str,
     await _check_csrf(request, s)
     import subprocess
     new_id, old_exten = None, ""
+    old_guest = None
     with db() as c:
         if lid == "new":
             pwh = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -1099,21 +1127,28 @@ async def login_edit_save(request: Request, lid: str,
             if exten and not sip_secret:
                 raise HTTPException(400, "SIP secret is required when an extension is set")
             cur = c.execute("""INSERT INTO logins (username, pwhash, role, exten, sip_username, sip_secret,
-                       display_name, vm_email, record_admin, user_record, ptt_allowed, enabled)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       display_name, vm_email, record_admin, user_record, ptt_allowed, enabled,
+                       is_guest, guest_outbound, guest_inbound, guest_sms, guest_e911)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (username, pwh, role, exten or "", sip_u, sip_secret or "",
                        display_name or "", vm_email or "",
                        1 if record_admin else 0, 1 if user_record else 0,
                        1 if ptt_allowed else 0,
-                       1 if enabled else 0))
+                       1 if enabled else 0,
+                       1 if account_type == "guest" else 0,
+                       1 if guest_outbound else 0, 1 if guest_inbound else 0,
+                       1 if guest_sms else 0, 1 if guest_e911 else 0))
             new_id = cur.lastrowid
             # Create their voicemail box
             if exten:
                 c.execute("INSERT OR IGNORE INTO voicemail_boxes (mailbox, login_id) VALUES (?,?)",
                           (f"vm-{exten}", new_id))
         else:
-            old = c.execute("SELECT exten FROM logins WHERE id=?", (lid,)).fetchone()
+            old = c.execute("SELECT exten, is_guest, guest_outbound, guest_inbound, guest_sms, guest_e911 FROM logins WHERE id=?", (lid,)).fetchone()
             old_exten = (old["exten"] if old else "") or ""
+            if old:
+                old_guest = (old["is_guest"], old["guest_outbound"], old["guest_inbound"],
+                             old["guest_sms"], old["guest_e911"])
             sets, vals = [], []
             sip_username = _valid_name(sip_username, "sip_username") if sip_username else ""
             for k, val in [("username", username), ("role", role), ("exten", exten or ""),
@@ -1123,6 +1158,11 @@ async def login_edit_save(request: Request, lid: str,
             sets.append("record_admin=?"); vals.append(1 if record_admin else 0)
             sets.append("user_record=?"); vals.append(1 if user_record else 0)
             sets.append("ptt_allowed=?"); vals.append(1 if ptt_allowed else 0)
+            sets.append("is_guest=?"); vals.append(1 if account_type == "guest" else 0)
+            sets.append("guest_outbound=?"); vals.append(1 if guest_outbound else 0)
+            sets.append("guest_inbound=?"); vals.append(1 if guest_inbound else 0)
+            sets.append("guest_sms=?"); vals.append(1 if guest_sms else 0)
+            sets.append("guest_e911=?"); vals.append(1 if guest_e911 else 0)
             sets.append("enabled=?"); vals.append(1 if enabled else 0)
             if password:
                 sets.append("pwhash=?"); vals.append(bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode())
@@ -1134,6 +1174,18 @@ async def login_edit_save(request: Request, lid: str,
             vals.append(lid)
             c.execute(f"UPDATE logins SET {', '.join(sets)} WHERE id=?", vals)
         c.commit()
+    # Guest type/rule changes are compliance-sensitive (911 especially):
+    # audit them so the dashboard activity log shows who changed what.
+    _new_guest = (1 if account_type == "guest" else 0,
+                  1 if guest_outbound else 0, 1 if guest_inbound else 0,
+                  1 if guest_sms else 0, 1 if guest_e911 else 0)
+    if lid != "new" and old_guest is not None and tuple(old_guest) != _new_guest:
+        _audit_log(s["username"], "logins.guest_change",
+                   f"login {lid} ext {(exten or '').strip() or old_exten}: "
+                   f"guest={_new_guest[0]} outbound={_new_guest[1]} inbound={_new_guest[2]} "
+                   f"sms={_new_guest[3]} e911={_new_guest[4]} "
+                   f"(was guest={old_guest[0]} outbound={old_guest[1]} inbound={old_guest[2]} "
+                   f"sms={old_guest[3]} e911={old_guest[4]})")
     # Privacy clean slate on (re)assignment. Changing a login's extension
     # purges all user data for BOTH the old and new extension; a brand-new
     # login purges the new extension's previous holder data.
@@ -1322,6 +1374,7 @@ def invites_page(request: Request, msg: str = ""):
         st = _invite_status(r)
         pill = {"active": "ok", "used": "", "expired": "warn", "revoked": "warn"}[st]
         tr += (f"<tr><td>{esc(r['exten'])}</td><td>{esc(r['sip_username'])}</td>"
+               f"<td>{'<span class=\"pill warn\">guest</span>' if r['is_guest'] else 'normal'}</td>"
                f"<td>{esc(r['email']) or '<span class=muted>—</span>'}</td>"
                f"<td>{esc(r['created_at'])}</td><td>{esc(r['expires_at'])}</td>"
                f"<td><span class='pill {pill}'>{st}</span></td><td>"
@@ -1333,12 +1386,18 @@ def invites_page(request: Request, msg: str = ""):
 {_csrf_field(s)}
 <label>Link expires in<br><select name="expires_days">{exp_opts}</select></label><br>
 <label>Email it to (optional)<br><input name="email" size="40" placeholder="newuser@example.com"></label><br>
+<label>Account type<br><select name="account_type"><option value="normal">Normal extension</option><option value="guest">Guest extension</option></select></label><br>
+<span class="muted">Guest extensions are restricted: internal calling always works; outside calling, receiving calls from real numbers, texting and 911 are each off unless ticked here. The admin can change the type and rules later on the Logins page.</span><br>
+<label><input type="checkbox" name="guest_outbound"> Guest: allow outside calling</label><br>
+<label><input type="checkbox" name="guest_inbound"> Guest: allow receiving calls from real phone numbers</label><br>
+<label><input type="checkbox" name="guest_sms"> Guest: allow SMS / MMS texting</label><br>
+<label><input type="checkbox" name="guest_e911"> Guest: allow 911 / 933 calls</label><br><br>
 <span class="muted">Leave email blank to just copy the link yourself. The extension, SIP username and SIP secret are auto-generated. The invite link is shown once, right after generation.</span><br><br>
 <button class="btn" type="submit">Generate invite</button>
 </form></div>
 <h3>Invites</h3>
-<table><tr><th>Ext</th><th>SIP user</th><th>Emailed to</th><th>Created</th><th>Expires (UTC)</th><th>Status</th><th>Actions</th></tr>
-{tr or '<tr><td colspan=7 class=muted>No invites yet</td></tr>'}</table>"""
+<table><tr><th>Ext</th><th>SIP user</th><th>Type</th><th>Emailed to</th><th>Created</th><th>Expires (UTC)</th><th>Status</th><th>Actions</th></tr>
+{tr or '<tr><td colspan=8 class=muted>No invites yet</td></tr>'}</table>"""
     return page("User invites", body, s["username"], s["role"], "invites")
 
 
@@ -1367,9 +1426,15 @@ async def invite_new(request: Request):
             return RedirectResponse("/invites?msg=noext", status_code=303)
         token = secrets.token_urlsafe(32)
         exp = (_dt.utcnow() + _td(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        cur = c.execute("INSERT INTO invites (token_hash, exten, sip_username, sip_secret, email, expires_at, created_by)"
-                        " VALUES (?,?,?,?,?,?,?)",
-                        (_invite_token_hash(token), exten, sip_u, secrets.token_urlsafe(24), email, exp, s["username"]))
+        cur = c.execute("INSERT INTO invites (token_hash, exten, sip_username, sip_secret, email, expires_at, created_by,"
+                        " is_guest, guest_outbound, guest_inbound, guest_sms, guest_e911)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (_invite_token_hash(token), exten, sip_u, secrets.token_urlsafe(24), email, exp, s["username"],
+                         1 if (f.get("account_type") or "") == "guest" else 0,
+                         1 if f.get("guest_outbound") else 0,
+                         1 if f.get("guest_inbound") else 0,
+                         1 if f.get("guest_sms") else 0,
+                         1 if f.get("guest_e911") else 0))
         iid = cur.lastrowid
         c.commit()
     link = f"{_invite_base_url(request)}/invite/{token}"
@@ -1389,7 +1454,8 @@ async def invite_new(request: Request):
         except Exception as e:  # noqa: BLE001 - MailError or SMTP failure
             mail_err = str(e)[:120]
     _audit_log(s["username"], "invites.generate",
-               f"id={iid} exten={exten} sip={sip_u} email={email or '-'} mailed={mailed}")
+               f"id={iid} exten={exten} sip={sip_u} email={email or '-'} mailed={mailed} "
+               f"guest={1 if (f.get('account_type') or '') == 'guest' else 0}")
     # Result page: the ONLY time the raw link is shown. Copy it now.
     mailed_note = (f"<p class='ok'>Emailed to {esc(email)}.</p>" if mailed else
                    (f"<p class='warn'>Email failed ({esc(mail_err)}) — copy the link manually.</p>" if email else
@@ -1525,10 +1591,18 @@ async def invite_redeem(request: Request, token: str):
                 return page("Invite", "<p class='warn'>No extensions available — please contact your administrator.</p>")
             c.execute("UPDATE invites SET exten=?, sip_username=? WHERE id=?", (exten2, sip_u2, inv["id"]))
             exten, sip_u = exten2, sip_u2
+        def _icol(name):
+            try:
+                return 1 if inv[name] else 0
+            except (IndexError, KeyError, TypeError):
+                return 0
         c.execute("INSERT INTO logins (username, pwhash, role, exten, sip_username, sip_secret,"
-                  " display_name, vm_email, record_admin, user_record, enabled)"
-                  " VALUES (?,?,?,?,?,?,?,?,0,0,1)",
-                  (exten, pwh, "user", exten, sip_u, inv["sip_secret"], display_name, vm_email))
+                  " display_name, vm_email, record_admin, user_record, enabled,"
+                  " is_guest, guest_outbound, guest_inbound, guest_sms, guest_e911)"
+                  " VALUES (?,?,?,?,?,?,?,?,0,0,1,?,?,?,?,?)",
+                  (exten, pwh, "user", exten, sip_u, inv["sip_secret"], display_name, vm_email,
+                   _icol("is_guest"), _icol("guest_outbound"), _icol("guest_inbound"),
+                   _icol("guest_sms"), _icol("guest_e911")))
         c.commit()
     _best_effort_apply()
     _audit_log("invite", "invites.redeemed", f"exten={exten} sip={sip_u}")
@@ -2207,6 +2281,24 @@ def _handle_voipms_inbound(params: dict) -> tuple[bool, str]:
         if not valid:
             c.commit()
             return False, f"dest exts {','.join(dests)} not found/disabled"
+        # Guest extensions with texting off never receive SMS/MMS: drop
+        # their copies here (the dedupe row above is already committed, so
+        # voip.ms won't retry and the poller won't re-ingest it).
+        def _guest_texting_off(exten):
+            r = c.execute("SELECT is_guest, guest_sms FROM logins WHERE exten=?",
+                          (exten,)).fetchone()
+            return bool(r) and bool(r[0]) and not bool(r[1])
+        try:
+            kept = [d for d in valid if not _guest_texting_off(d)]
+        except Exception:
+            kept = valid  # pre-migration DB without the columns: deliver
+        if len(kept) != len(valid):
+            log.info("voip.ms inbound: dropped SMS for guest extension(s) "
+                     "with texting off: %s", ",".join(set(valid) - set(kept)))
+            valid = kept
+        if not valid:
+            c.commit()
+            return True, "dropped: guest extension texting off"
         from_disp = voipms_sms.e164(from_raw) or from_raw.strip()[:32]
         # Store: from_ext = external E.164, to_ext = internal exten.
         # My Phone groups by correspondent, so the user sees "+1555..." thread.

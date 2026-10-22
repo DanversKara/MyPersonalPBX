@@ -457,7 +457,35 @@ user (SMTP must be set up under Email). The link expires after 1–30 days
 (your choice), dies after one use, and can be revoked anytime. The recipient
 opens it, picks their own login password, and enters display name + voicemail
 email; the login is created on the spot. Tokens are 256-bit and stored hashed,
-so a database read alone can't mint accounts.
+so a database read alone can't mint accounts. The generator also picks the
+account type — normal or guest (below) — and the guest rules it starts with.
+
+### Guest extensions
+A guest extension is a restricted account type for courtesy, lobby or
+visitor phones. Internal calling — other extensions, feature codes,
+internally dialed ring groups — always works. Everything that reaches
+outside the PBX is **off** unless the admin turns that one thing on for
+that guest:
+
+- **Outside calling** — dial real phone numbers through a trunk (the
+  account's plan / outside minutes still apply on top).
+- **Receiving calls from real phone numbers** — DID routes and ring
+  groups ring the guest for outside callers. Off: the guest is skipped,
+  exactly as if it weren't in the list.
+- **SMS / MMS texting** — send and receive texts (outside numbers and
+  other extensions), in both directions. Off: sends are refused and
+  inbound texts are dropped.
+- **911 / 933 calls** — off: emergency dialing from that guest extension
+  is not routed. This is an explicit per-extension admin decision for
+  phones that are not E911-provisioned; normal extensions can never be
+  blocked from 911. The E911 page lists every guest and its 911 state,
+  and every guest type/rule change is written to the audit log.
+
+Set the type when creating a login or generating an invite, or convert an
+existing account either way under **Logins → Edit** — the account, its
+extension and its history are kept; the change takes effect immediately.
+Guest rules are hard caps on top of plans: a plan can never grant a guest
+something its guest rules leave off.
 
 ### Trunks
 ![Trunks](docs/screenshots/05-trunks.png)
