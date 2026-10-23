@@ -540,7 +540,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         }
         ClickRow(
             Icons.Filled.Sync,
-            if (checking) "Checking..." else "Check now",
+            if (checking) "Checking..." else "Check for messages now",
             lastCheck.let { (at, info) ->
                 if (at == 0L) "No background check has run yet"
                 else
@@ -701,7 +701,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         SwitchRow(
             Icons.Filled.Update,
             "Check for updates",
-            "Once a day, against the GitHub releases",
+            "Checks whenever the app opens — an update shows on screen right away",
             updateCheck,
         ) {
             updateCheck = it
@@ -709,7 +709,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         }
         ClickRow(
             Icons.Filled.SystemUpdate,
-            "Check now",
+            "Check for updates now",
             "You have ${org.ownpbx.myphone.data.Updates.installedVersion()}",
         ) {
             model.checkUpdates(ctx, force = true)
