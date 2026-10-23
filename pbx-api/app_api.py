@@ -72,6 +72,18 @@ def device_login(request: Request):
         c.execute("UPDATE app_devices SET last_used_at=datetime('now'),"
                   " expires_at=datetime('now', ?) WHERE id=?",
                   (f"+{DEVICE_TTL_DAYS} days", r["device_id"]))
+        # The app reports its version on every API call; keep the latest
+        # per login so the admin can see who is on what (Logins page +
+        # Signed in now). No-ops unless the version changed or the last
+        # report is over an hour old, so the hot path stays one write.
+        ver = (request.headers.get("x-myphone-version") or "").strip()
+        ver = "".join(ch for ch in ver if ch.isprintable())[:20]
+        if ver:
+            c.execute("UPDATE logins SET app_version=?, app_version_at=datetime('now')"
+                      " WHERE id=? AND (app_version IS NULL OR app_version<>?"
+                      " OR app_version_at IS NULL OR app_version_at=''"
+                      " OR app_version_at < datetime('now','-1 hour'))",
+                      (ver, r["id"], ver))
         c.commit()
     return dict(r)
 

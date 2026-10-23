@@ -275,8 +275,14 @@ class Api(base: String, private val token: String?) {
 
     fun url(path: String) = "$base/api/v1$path"
 
-    fun authHeaders(): Map<String, String> =
-        token?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
+    /**
+     * Auth, plus the app version on every call: the PBX keeps the latest per login so the admin can
+     * see who is running what (Logins page, Signed in now) without asking the user to go and look.
+     */
+    fun authHeaders(): Map<String, String> = buildMap {
+        token?.let { put("Authorization", "Bearer $it") }
+        put("X-MyPhone-Version", org.ownpbx.myphone.BuildConfig.VERSION_NAME)
+    }
 
     private fun errorText(body: String, code: Int): String =
         try {

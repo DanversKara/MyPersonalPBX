@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS logins (
   ptt_allowed INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for push-to-talk
   ptt_enabled INTEGER NOT NULL DEFAULT 0,  -- user's own "receive push-to-talk" wish
   ptt_missed TEXT NOT NULL DEFAULT 'voicemail',  -- missed PTT: 'voicemail' | 'retry' (chirp again)
+  app_version TEXT NOT NULL DEFAULT '',     -- last My Phone app version the phone reported (header)
+  app_version_at TEXT NOT NULL DEFAULT '',  -- when it last reported it (UTC)
   is_guest INTEGER NOT NULL DEFAULT 0,     -- guest extension: restricted account type (admin-set)
   guest_outbound INTEGER NOT NULL DEFAULT 0, -- guest may call outside numbers (plan minutes still apply)
   guest_inbound INTEGER NOT NULL DEFAULT 0,  -- guest may receive PSTN calls from DIDs

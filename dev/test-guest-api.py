@@ -517,6 +517,19 @@ r = c.post(f"/billing/access/{u_def}", data={
 check("per-user exception cleared by choosing 'default'",
       ent_ptt(u_def) is None, ent_ptt(u_def))
 
+# 22) The app reports its version on API calls (X-MyPhone-Version); the
+# server keeps the latest report per login for the admin pages.
+r = c.get("/api/v1/me/settings", headers={**H, "x-myphone-version": "9.9.9"})
+check("settings with a version header still answers", r.status_code == 200, r.status_code)
+row = q("SELECT username, app_version, app_version_at FROM logins WHERE app_version='9.9.9'")
+check("the reported version is stored on the login",
+      len(row) == 1 and bool(row[0]["app_version_at"]), [dict(x) for x in row])
+r = c.get("/api/v1/me/settings", headers=H)
+row = q("SELECT app_version FROM logins WHERE app_version='9.9.9'")
+check("a call without the header leaves the stored version alone", len(row) == 1)
+page = c.get("/logins").text
+check("the Logins page shows the reported app version", "App v9.9.9" in page)
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

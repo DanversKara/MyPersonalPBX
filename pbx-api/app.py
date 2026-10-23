@@ -178,6 +178,12 @@ def _migrate(c):
     # callee's phone (Nextel-style), everyone else chirps and waits.
     c.execute("CREATE TABLE IF NOT EXISTS ptt_trusted (login_id INTEGER NOT NULL,"
               " exten TEXT NOT NULL, PRIMARY KEY (login_id, exten))")
+    # The My Phone app reports its version on API calls (X-MyPhone-Version);
+    # the last report is kept per login for the admin pages.
+    if "app_version" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN app_version TEXT NOT NULL DEFAULT ''")
+    if "app_version_at" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN app_version_at TEXT NOT NULL DEFAULT ''")
     # Guest extensions: a restricted account type with its own admin-set
     # rules (outside calling, PSTN inbound, SMS/MMS, 911). All flags default
     # OFF, so a login only becomes less restricted where the admin opts in.
@@ -955,7 +961,10 @@ async function loadDevices() {
     document.getElementById('devices').innerHTML = devices.length ? devices.map(d =>
       '<tr><td>' + esc(d.display_name || d.username) +
       (d.kind === 'app' ? ' <span class="pill">My Phone app</span>' : '') +
-      ' <span class="muted">' + esc(d.sip_username || d.username) + '</span></td>' +
+      ' <span class="muted">' + esc(d.sip_username || d.username) + '</span>' +
+      (d.kind === 'app' ? '<br><span class="muted">' +
+        (d.app_version ? 'App v' + esc(d.app_version) + ' · reported ' + ago(d.app_version_at)
+                       : 'App version not reported yet (older app)') + '</span>' : '') + '</td>' +
       '<td>' + esc(d.exten) + '</td>' +
       '<td>' + esc(d.ip) + (d.port ? '<span class="muted">:' + esc(d.port) + '</span>' : '') + '</td>' +
       '<td><span class="pill ' + (d.location === 'external' ? 'warn' : 'ok') + '">' +
@@ -1088,10 +1097,11 @@ def logins_page(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     with db() as c:
-        rows = c.execute("SELECT id, username, role, exten, sip_username, display_name, enabled, is_guest FROM logins ORDER BY exten").fetchall()
+        rows = c.execute("SELECT id, username, role, exten, sip_username, display_name, enabled, is_guest, app_version, app_version_at FROM logins ORDER BY exten").fetchall()
     tr = "".join(
         f"<tr><td>{esc(r['username'])}</td><td>{esc(r['role'])}</td><td>{'<span class=\"pill warn\">guest</span>' if r['is_guest'] else 'normal'}</td><td>{esc(r['exten'])}</td>"
-        f"<td>{esc(r['sip_username'])}</td><td>{esc(r['display_name'])}</td><td>{'yes' if r['enabled'] else 'no'}</td>"
+        f"<td>{esc(r['sip_username'])}</td><td>{esc(r['display_name'])}</td>"
+        f"<td>{('<span class=\"pill\">App v' + esc(r['app_version']) + '</span>') if r['app_version'] else '<span class=\"muted\">—</span>'}</td><td>{'yes' if r['enabled'] else 'no'}</td>"
         f"<td><a class='btn ghost' href='/logins/{r['id']}/edit'>Edit</a>"
         + ("" if r['id'] == s.get('id') else
            f" <form method='post' action='/logins/{r['id']}/delete' style='display:inline' "
@@ -1099,7 +1109,7 @@ def logins_page(request: Request):
            f"and ALL of their data — call logs, messages, voicemail, recordings? This cannot be undone.')\">"
            f"{_csrf_field(s)}<button class='btn ghost' type='submit'>Delete</button></form>")
         + "</td></tr>" for r in rows)
-    body = f"<h2>Logins / Extensions</h2><table><tr><th>Username</th><th>Role</th><th>Type</th><th>Exten</th><th>SIP user</th><th>Name</th><th>Enabled</th><th></th></tr>{tr}</table>"
+    body = f"<h2>Logins / Extensions</h2><table><tr><th>Username</th><th>Role</th><th>Type</th><th>Exten</th><th>SIP user</th><th>Name</th><th>App</th><th>Enabled</th><th></th></tr>{tr}</table>"
     body += "<p><a href='/logins/new/edit' class='btn'>Add login</a></p>"
     return page("Logins", body, s["username"], s["role"], "logins")
 
@@ -3669,7 +3679,7 @@ def v1_devices(request: Request):
         raise HTTPException(503, f"asterisk status unavailable: {e}")
     with db() as c:
         logins = {r["sip_username"]: dict(r) for r in c.execute(
-            "SELECT id, username, exten, sip_username, display_name "
+            "SELECT id, username, exten, sip_username, display_name, app_version, app_version_at "
             "FROM logins WHERE enabled = 1")}
     seen = set()
     devices = []
@@ -3697,6 +3707,9 @@ def v1_devices(request: Request):
             "transport": ct["transport"],
             "location": where, "via": via,
             "status": ct["status"], "rtt_ms": _finite(ct.get("rtt_ms")),
+            # The app version the phone last reported (app rows only).
+            "app_version": (login.get("app_version") or "") if is_app else "",
+            "app_version_at": (login.get("app_version_at") or "") if is_app else "",
         })
     devices.sort(key=lambda d: (d["location"] != "external", d["exten"] or "", d["ip"]))
     return {"devices": devices,
