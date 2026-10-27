@@ -57,6 +57,15 @@ bt = ac.get("/billing").text
 check("billing: Fax in the no-plan defaults and per-user table", 'name="fax"' in bt and "<th>Fax</th>" in bt, bt[-400:])
 pt = ac.get("/billing/plans/new/edit").text
 check("billing: plan form has Fax", 'name="fax"' in pt and "send and receive faxes" in pt)
+check("billing: plan form has Faxes per month", 'name="faxes"' in pt and 'name="faxes_unl"' in pt)
+ptok = csrf(ac, "/billing/plans/new/edit")
+r = ac.post("/billing/plans/new/edit", data={"csrf_token": ptok, "name": "Fax Pro", "price": "9.99", "currency": "usd",
+                                             "fax": "1", "faxes": "40", "active": "1"})
+pl = d.execute("SELECT fax, faxes FROM billing_plans WHERE name='Fax Pro'").fetchone()
+check("plan saved with 40 faxes/month", pl is not None and pl["fax"] == 1 and pl["faxes"] == 40, (r.status_code, r.text[-300:] if r.status_code >= 400 else ""))
+import billing
+check("plan lists 'Fax: 40 faxes / month'", "Fax: 40 faxes / month" in billing.plan_features(dict(d.execute("SELECT * FROM billing_plans WHERE name='Fax Pro'").fetchone())),
+      billing.plan_features(dict(d.execute("SELECT * FROM billing_plans WHERE name='Fax Pro'").fetchone())))
 tok = csrf(ac, "/billing")
 r = ac.post(f"/billing/access/{lid('phone8800')}", data={"csrf_token": tok, "fax": "1"})
 check("per-user exception turns fax on", d.execute("SELECT quota FROM user_entitlements WHERE login_id=? AND feature='fax'",

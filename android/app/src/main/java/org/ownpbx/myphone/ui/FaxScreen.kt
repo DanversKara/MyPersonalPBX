@@ -804,6 +804,13 @@ private fun FaxSendScreen(
                 .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            data.faxes_left?.let { n ->
+                Text(
+                    if (n == 1) "1 fax left this month" else "$n faxes left this month",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (n <= 2) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             // 1. the document
             OutlinedCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {

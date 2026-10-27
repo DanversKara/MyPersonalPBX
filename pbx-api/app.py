@@ -107,7 +107,8 @@ def _migrate(c):
         c.execute("ALTER TABLE user_prefs ADD COLUMN answer_ivr_id INTEGER DEFAULT NULL")
     for col, ddl in (("call_minutes", "INTEGER NOT NULL DEFAULT 0"), ("voicemail", "INTEGER NOT NULL DEFAULT 0"),
                      ("messages", "INTEGER NOT NULL DEFAULT 0"), ("recording", "INTEGER NOT NULL DEFAULT 0"),
-                     ("push_to_talk", "INTEGER NOT NULL DEFAULT 0"), ("fax", "INTEGER NOT NULL DEFAULT 0")):
+                     ("push_to_talk", "INTEGER NOT NULL DEFAULT 0"), ("fax", "INTEGER NOT NULL DEFAULT 0"),
+                     ("faxes", "INTEGER NOT NULL DEFAULT -1")):
         if col not in cols("billing_plans"):
             c.execute(f"ALTER TABLE billing_plans ADD COLUMN {col} {ddl}")
     if "header" not in cols("fax_outbox"):

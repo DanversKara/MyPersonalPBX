@@ -320,7 +320,7 @@ def user_page(request: Request):
 <label>Subject<br><input name="subject" maxlength="80"></label>
 <label>Message on the cover<br><textarea name="note" rows="3" maxlength="2000"></textarea></label>
 <button class="btn">Send fax</button>
-<p class="muted">Uses outside-call minutes from your plan. Busy or unanswered lines are tried again (3 tries).</p>
+<p class="muted">{_left_txt(me)}Uses outside-call minutes from your plan. Busy or unanswered lines are tried again (3 tries).</p>
 </form></details>"""
     else:
         send = f'<p class="muted">Sending: {esc(why)}</p>'
@@ -344,6 +344,11 @@ def user_page(request: Request):
 {_rows(faxes, False, "ufax") or '<tr><td colspan="6" class="muted">No faxes yet.</td></tr>'}</table></div>
 {M.ucp._bulk_js("ufax")}{sent_html}{M.fax_brand.user_section(s, me) if M.fax_send.entitled(me) else ""}"""
     return M.ucp._render(request, s, me, "ucp-fax", "Faxes", body)
+
+
+def _left_txt(me):
+    n = M.fax_send.faxes_left(me)
+    return "" if n is None else f"{n} fax{'es' if n != 1 else ''} left this month. "
 
 
 SENT_LABEL = {"queued": ("Waiting to send", "warn"), "sending": ("Sending…", "warn"),
@@ -444,7 +449,9 @@ def api_list(request: Request):
         r["last_error"] = M.app_api.neutral(me, r.get("last_error") or "", hidden)
     return {"received": _received_json(me), "sent": sent, "numbers": M.fax_send.allowed_numbers(me),
             "branding": M.fax_brand.summary(me),
-            "can_send": can, "why_not": M.app_api.neutral(me, why, hidden), "max_mb": M.fax_send.MAX_UPLOAD // (1024 * 1024)}
+            "can_send": can, "why_not": M.app_api.neutral(me, why, hidden),
+            # This month's sending allowance (null = unlimited, or not shown in store mode).
+            "faxes_left": None if hidden else M.fax_send.faxes_left(me), "max_mb": M.fax_send.MAX_UPLOAD // (1024 * 1024)}
 
 
 async def api_send(request: Request):

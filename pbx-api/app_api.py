@@ -612,6 +612,8 @@ def me_usage(request: Request):
             "voicemail": feat("voicemail"),
             "recording": feat("recording"),
             "ivr_menus": feat("ivr_menus"),
+            # Only when fax is in the plan; receiving is never limited.
+            **({"faxes": feat("faxes")} if U._quota(me, "fax") != 0 else {}),
         },
         "includes": {
             "calls": U._quota(me, "call_minutes") != 0,
@@ -620,6 +622,7 @@ def me_usage(request: Request):
             "recording": U._quota(me, "recording") != 0,
             "ivr_menus": U._quota(me, "ivr_menus") != 0,
             "push_to_talk": bool(me.get("ptt_allowed")) or U._quota(me, "push_to_talk") != 0,
+            "fax": U._quota(me, "fax") != 0,
         },
     }
 

@@ -82,6 +82,8 @@ data class UsageFeatures(
     val voicemail: UsageFeature = UsageFeature(),
     val recording: UsageFeature = UsageFeature(),
     val ivr_menus: UsageFeature = UsageFeature(),
+    /** Faxes sent this month; only when fax is in the plan. */
+    val faxes: UsageFeature? = null,
 )
 
 /** Which plan features are switched on at all (quota != 0), plus the PTT allow flag. */
@@ -93,6 +95,7 @@ data class UsageIncludes(
     val recording: Boolean = false,
     val ivr_menus: Boolean = false,
     val push_to_talk: Boolean = false,
+    val fax: Boolean = false,
 )
 
 /** GET /api/v1/me/usage — the same numbers the web portal's usage panel shows. */
@@ -250,6 +253,8 @@ data class FaxList(
     val why_not: String = "",
     val max_mb: Int = 20,
     val branding: FaxBrand? = null,
+    /** Faxes left to send this month (null = unlimited). */
+    val faxes_left: Int? = null,
 )
 
 @Serializable
