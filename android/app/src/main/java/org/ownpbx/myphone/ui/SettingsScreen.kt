@@ -191,7 +191,8 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                             false -> "no phone online"
                             else -> "status unknown"
                         } +
-                        (overview?.texts_left?.let { " · $it texts left" } ?: "")
+                        (overview?.texts_left?.takeUnless { org.ownpbx.myphone.BuildConfig.STORE_BUILD }
+                            ?.let { " · $it texts left" } ?: "")
                 )
             },
         )
@@ -206,7 +207,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         // just where to find account details. Hidden until the PBX has said which.
         when {
             overview == null -> {}
-            overview.hide_billing ->
+            overview.hide_billing || org.ownpbx.myphone.BuildConfig.STORE_BUILD ->
                 ListItem(
                     leadingContent = { Icon(Icons.Filled.AccountCircle, null) },
                     headlineContent = { Text("Account") },
@@ -223,7 +224,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                     showUsage = true
                 }
         }
-        val notIncluded = if (overview?.hide_billing == true) "Not available on your account" else "Not included in your plan"
+        val notIncluded = if (overview?.hide_billing == true || org.ownpbx.myphone.BuildConfig.STORE_BUILD) "Not available on your account" else "Not included in your plan"
 
         val st = s
         if (st == null) {
@@ -712,30 +713,13 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 Text("Free software (GPL-2.0-or-later). No ads, no tracking, no Google services.")
             },
         )
-        if (org.ownpbx.myphone.data.Updates.isPlayInstall(ctx)) {
+        if (!org.ownpbx.myphone.BuildConfig.SELF_UPDATE || org.ownpbx.myphone.data.Updates.isPlayInstall(ctx))
             ListItem(
+                leadingContent = { Icon(Icons.Filled.SystemUpdate, null) },
                 headlineContent = { Text("Updates") },
                 supportingContent = { Text("Delivered by Google Play") },
             )
-        } else {
-            var updateCheck by remember { mutableStateOf(store.updateCheck) }
-            SwitchRow(
-                Icons.Filled.Update,
-                "Check for updates",
-                "Checks whenever the app opens — an update shows on screen right away",
-                updateCheck,
-            ) {
-                updateCheck = it
-                store.updateCheck = it
-            }
-            ClickRow(
-                Icons.Filled.SystemUpdate,
-                "Check for updates now",
-                "You have ${org.ownpbx.myphone.data.Updates.installedVersion()}",
-            ) {
-                model.checkUpdates(ctx, force = true)
-            }
-        }
+        else UpdateRows(model, store, ctx)
         Spacer(Modifier.height(32.dp))
     }
 
@@ -1027,4 +1011,27 @@ private fun SipLoginDialog(model: AppModel, onDone: () -> Unit) {
             }
         },
     )
+}
+
+
+/** GitHub build only: the self-update switch and "Check now". */
+@Composable
+private fun UpdateRows(model: AppModel, store: org.ownpbx.myphone.data.Store, ctx: android.content.Context) {
+    var updateCheck by remember { mutableStateOf(store.updateCheck) }
+    SwitchRow(
+        Icons.Filled.Update,
+        "Check for updates",
+        "Checks whenever the app opens — an update shows on screen right away",
+        updateCheck,
+    ) {
+        updateCheck = it
+        store.updateCheck = it
+    }
+    ClickRow(
+        Icons.Filled.SystemUpdate,
+        "Check for updates now",
+        "You have ${org.ownpbx.myphone.data.Updates.installedVersion()}",
+    ) {
+        model.checkUpdates(ctx, force = true)
+    }
 }

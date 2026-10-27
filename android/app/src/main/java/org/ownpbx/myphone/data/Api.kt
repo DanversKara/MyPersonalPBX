@@ -316,7 +316,7 @@ data class ContactDetail(
 class ApiException(val status: Int, message: String) : Exception(message)
 
 /** Thin client for pbx-api's /api/v1/app and /api/v1/me endpoints. */
-class Api(base: String, private val token: String?) {
+class Api(base: String, private val token: String?, private val playInstall: Boolean = false) {
     private val base = base.trim().trimEnd('/')
 
     companion object {
@@ -350,6 +350,9 @@ class Api(base: String, private val token: String?) {
     fun authHeaders(): Map<String, String> = buildMap {
         token?.let { put("Authorization", "Bearer $it") }
         put("X-MyPhone-Version", org.ownpbx.myphone.BuildConfig.VERSION_NAME)
+        // The Google Play build: the PBX sends no plan/billing info to it.
+        // The Google Play build, or any copy Play installed: no plans/billing shown.
+        if (org.ownpbx.myphone.BuildConfig.STORE_BUILD || playInstall) put("X-MyPhone-Store", "play")
     }
 
     private fun errorText(body: String, code: Int): String =

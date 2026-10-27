@@ -13,6 +13,8 @@ import androidx.security.crypto.MasterKey
  */
 class Store(context: Context) {
     private val cacheDir = context.applicationContext.cacheDir
+    /** Installed by Google Play (looked up once): tells the PBX to show no plans/billing. */
+    private val playInstall = Updates.isPlayInstall(context.applicationContext)
     private val prefs: SharedPreferences =
         EncryptedSharedPreferences.create(
             context,
@@ -249,7 +251,7 @@ class Store(context: Context) {
         if (id > seenFor(peer)) prefs.edit().putLong("seen_$peer", id).apply()
     }
 
-    fun api() = Api(server, token)
+    fun api() = Api(server, token, playInstall)
 
     /** Sign out locally: forget the token and the PIN (server row is removed separately). */
     fun wipe() {

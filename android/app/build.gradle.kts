@@ -7,7 +7,7 @@ plugins {
 
 // The one place the version lives. .github/workflows/android-auto-release.yml
 // edits this exact line, so keep it on a single line in this form.
-val APP_VERSION_NAME = "0.8.4"
+val APP_VERSION_NAME = "0.9.0"
 
 // versionCode is derived, never hand-maintained: 0.7.3 -> 703, 1.2.3 -> 10203.
 // Rebuilding any tag anywhere gives the same number.
@@ -18,12 +18,13 @@ fun versionCodeOf(name: String): Int {
 
 android {
     namespace = "org.ownpbx.myphone"
-    compileSdk = 34
+    // Google Play requires targeting Android 16 (API 36) since Aug 31, 2026.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.ownpbx.myphone"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = versionCodeOf(APP_VERSION_NAME)
         versionName = APP_VERSION_NAME
         val defaultServer = (project.findProperty("myphone.defaultServer") as String?).orEmpty()
@@ -31,6 +32,27 @@ android {
         buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
         // Phones only (keeps the APK smaller; Linphone ships native code per ABI).
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+    }
+
+    // Two builds of the same app:
+    //   github: installed from GitHub releases (or F-Droid-style); updates
+    //           itself from GitHub (Settings > Check for updates).
+    //   play:   for Google Play; Play updates it, so no self-updater and no
+    //           install permission, and plans/billing are never shown
+    //           (app store mode, whatever the PBX says).
+    flavorDimensions += "store"
+    productFlavors {
+        create("github") {
+            dimension = "store"
+            isDefault = true
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+            buildConfigField("boolean", "STORE_BUILD", "false")
+        }
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+            buildConfigField("boolean", "STORE_BUILD", "true")
+        }
     }
 
     // Release signing comes from the environment (GitHub secrets in CI). With

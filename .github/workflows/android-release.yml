@@ -32,7 +32,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: "8.11.1"
 
       # Refuse a tag that does not match the version the build declares, so the
       # published file names never lie about what is inside.
@@ -64,14 +64,16 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
           echo "MYPHONE_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
 
-      - name: Build the signed release APK
+      # The GitHub APK (self-updating) and the Google Play bundle (.aab), both
+      # signed with the release key (for Play it is the upload key).
+      - name: Build the signed release APK and Play bundle
         env:
           MYPHONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           MYPHONE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           MYPHONE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set +e
-          gradle -p android assembleRelease --no-daemon --console=plain > "$RUNNER_TEMP/build.log" 2>&1
+          gradle -p android assembleGithubRelease bundlePlayRelease --no-daemon --console=plain > "$RUNNER_TEMP/build.log" 2>&1
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then
@@ -89,12 +91,17 @@ jobs:
           shopt -s nullglob
           out="$RUNNER_TEMP/artifacts"
           mkdir -p "$out"
-          for apk in android/app/build/outputs/apk/release/*.apk; do
+          for apk in android/app/build/outputs/apk/github/release/*.apk; do
             cp "$apk" "$out/my-phone-$APP_VERSION.apk"
           done
+          # Google Play bundle: upload it in Play Console (or automatically,
+          # below). The app's self-updater only ever looks at .apk files.
+          for aab in android/app/build/outputs/bundle/playRelease/*.aab; do
+            cp "$aab" "$out/my-phone-$APP_VERSION-google-play.aab"
+          done
           # R8 mapping (only present when minify is enabled).
-          if [ -f android/app/build/outputs/mapping/release/mapping.txt ]; then
-            cp android/app/build/outputs/mapping/release/mapping.txt "$out/my-phone-$APP_VERSION-mapping.txt"
+          if [ -f android/app/build/outputs/mapping/githubRelease/mapping.txt ]; then
+            cp android/app/build/outputs/mapping/githubRelease/mapping.txt "$out/my-phone-$APP_VERSION-mapping.txt"
           fi
           ls -l "$out"
 
@@ -108,6 +115,11 @@ jobs:
             echo "== $(basename "$apk")"
             "$apksigner" verify --print-certs "$apk"
           done
+          for aab in "$RUNNER_TEMP"/artifacts/*.aab; do
+            echo "== $(basename "$aab")"
+            jarsigner -verify "$aab" | tail -n 1
+            jarsigner -verify "$aab" | grep -q "jar verified" || { echo "::error::$aab is not signed"; exit 1; }
+          done
 
       - name: Publish the GitHub Release
         uses: softprops/action-gh-release@v2
@@ -117,3 +129,30 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
+
+      # Optional: send the bundle to Google Play's Internal testing track.
+      # Set the PLAY_SERVICE_ACCOUNT_JSON secret (a Play Console service
+      # account) to turn it on; without it this step is skipped and you
+      # upload the .aab from the release by hand. The very first upload of
+      # the app must be done by hand in Play Console.
+      - name: Check for Google Play upload credentials
+        id: play
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$PLAY_JSON" ] && [ "${{ contains(github.ref_name, '-') }}" != "true" ]; then
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Google Play::Not uploaded automatically (no PLAY_SERVICE_ACCOUNT_JSON secret). Upload my-phone-$APP_VERSION-google-play.aab in Play Console."
+          fi
+
+      - name: Upload to Google Play (Internal testing)
+        if: steps.play.outputs.upload == 'true'
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.ownpbx.myphone
+          releaseFiles: ${{ runner.temp }}/artifacts/*.aab
+          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          status: ${{ vars.PLAY_STATUS || 'completed' }}

@@ -52,5 +52,12 @@ r = ac.post("/billing/app-store-mode", data={"csrf_token": csrf("/billing"), "al
 check("all users: everyone hidden", c.get("/api/v1/me/overview", headers=H2).json()["hide_billing"] is True)
 t = ac.get(f"/logins/{lid('phone8801')}/edit").text
 check("login edit page has the per-user tick", 'name="app_hide_billing"' in t)
+# The Google Play build always gets store mode, whatever the PBX setting.
+ac.post("/billing/app-store-mode", data={"csrf_token": csrf("/billing"), "site": "myphone.dox.box"})
+check("setting off: plain app shows plans", c.get("/api/v1/me/overview", headers=H2).json()["hide_billing"] is False)
+P = dict(H2, **{"X-MyPhone-Store": "play"})
+ov = c.get("/api/v1/me/overview", headers=P).json()
+check("Google Play build: store mode anyway", ov["hide_billing"] is True and ov["texts_left"] is None
+      and c.get("/api/v1/me/usage", headers=P).status_code == 404, ov)
 print("ALL PASSED" if not fails else f"FAILED {fails}")
 sys.exit(1 if fails else 0)

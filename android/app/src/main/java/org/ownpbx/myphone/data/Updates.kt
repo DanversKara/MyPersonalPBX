@@ -93,9 +93,10 @@ object Updates {
      * offer if any. Network and parse errors are swallowed by design.
      */
     suspend fun refresh(ctx: Context, force: Boolean = false): Offer? {
-        // Google Play installs never self-update: Play delivers updates itself, and a
-        // GitHub .apk cannot install over a Play-signed app anyway.
-        if (isPlayInstall(ctx)) return null
+        // Google Play never self-updates: the Play build has no updater at all, and a
+        // GitHub-built APK that was installed through Play (or restored by it) is left
+        // to Play too, since a GitHub .apk can't install over a Play-signed app.
+        if (!org.ownpbx.myphone.BuildConfig.SELF_UPDATE || isPlayInstall(ctx)) return null
         val store = Store(ctx)
         if (!store.updateCheck) return null
         val now = System.currentTimeMillis()

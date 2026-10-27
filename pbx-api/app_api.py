@@ -85,7 +85,10 @@ def device_login(request: Request):
                       " OR app_version_at < datetime('now','-1 hour'))",
                       (ver, r["id"], ver))
         c.commit()
-    return dict(r)
+    d = dict(r)
+    # The Google Play build says so on every call: it always gets store mode.
+    d["store_build"] = (request.headers.get("x-myphone-store") or "").strip().lower() == "play"
+    return d
 
 
 def device_session(row: dict) -> dict:
@@ -123,6 +126,8 @@ _PLANNY = ("plan", "upgrade", "billing", "subscri", "purchase", "price", "minute
 
 def hide_billing(me) -> bool:
     try:
+        if me.get("store_build"):
+            return True
         with M.db() as c:
             r = c.execute("SELECT value FROM kv_settings WHERE key='app_hide_billing_all'").fetchone()
             if r and r[0] == "1":

@@ -18,15 +18,16 @@ jobs:
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
-      - name: Build debug APK
-        run: gradle -p android assembleDebug --no-daemon
+          gradle-version: "8.11.1"
+      # Both builds: GitHub (self-updating) and Google Play.
+      - name: Build debug APKs
+        run: gradle -p android assembleGithubDebug assemblePlayDebug --no-daemon
       - name: Show resolved androidx.fragment and Linphone versions
         run: |
-          v=$(gradle -p android -q :app:dependencies --configuration debugRuntimeClasspath --no-daemon | grep -oE '(androidx.fragment:fragment|org.linphone[^:]*:linphone-sdk-android):[^ ]*( -> [^ ]*)?' | sort -u | tr '\n' ' ')
+          v=$(gradle -p android -q :app:dependencies --configuration githubDebugRuntimeClasspath --no-daemon | grep -oE '(androidx.fragment:fragment|org.linphone[^:]*:linphone-sdk-android):[^ ]*( -> [^ ]*)?' | sort -u | tr '\n' ' ')
           echo "$v"
           echo "::notice title=androidx.fragment::$v"
       - uses: actions/upload-artifact@v4
         with:
           name: my-phone-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/*/debug/*.apk
