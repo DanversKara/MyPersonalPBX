@@ -67,22 +67,32 @@ def fax_allowed(c, login) -> bool:
         return False
 
 
-def fax_wait(did) -> int:
-    """Seconds to listen for a fax on this number; 0 = fax detection off.
-    Off too when the people the number rings have no fax in their plan (a
-    number that rings no one, e.g. a menu run by the admin, still gets it)."""
+def fax_check(did):
+    """(seconds to listen, why) for a call to this number; 0 = don't listen.
+    The admin's Detect faxes tick decides: a fax is always caught on such a
+    number. The plan only decides who it's filed and emailed for (fax_done);
+    with nobody entitled it still lands in admin Faxes and the route's emails."""
     try:
         with db() as c:
             r = route_for(c, did)
-            if not r or not r["fax_detect"]:
-                return 0
-            who = recipients(c, r)
-            if who and not any(fax_allowed(c, u) for u in who):
-                return 0
+            if not r:
+                return 0, "no inbound route for this number"
+            if not r["fax_detect"]:
+                return 0, "Detect faxes is off for this number"
             w = int(r["fax_wait"] or 4)
-    except (sqlite3.OperationalError, IndexError, KeyError, ValueError):
-        return 0
-    return w if w in WAIT_CHOICES else 4
+            who = recipients(c, r)
+            note = ""
+            if who and not any(fax_allowed(c, u) for u in who):
+                note = (" (nobody it rings has Fax in their plan: the fax goes to admin Faxes"
+                        " and the number's email addresses only)")
+    except (sqlite3.OperationalError, IndexError, KeyError, ValueError) as e:
+        return 0, f"lookup failed: {e}"
+    return (w if w in WAIT_CHOICES else 4), note
+
+
+def fax_wait(did) -> int:
+    """Seconds to listen for a fax on this number; 0 = fax detection off."""
+    return fax_check(did)[0]
 
 
 def recipients(c, route):

@@ -34,7 +34,10 @@ SENT = []
 mailer.send = lambda cfg, to, subj, text, html=None, attachment=None, timeout=20: SENT.append((to, subj, text, attachment))
 
 # Faxing is a plan feature: without it the number isn't listened on.
-check("no fax in plan: no listening", fax.fax_wait("15550001111") == 0)
+# Detect faxes always listens (the admin ticked it); the plan only decides
+# who gets the fax. The log says so.
+w, why = fax.fax_check("15550001111")
+check("no fax in plan: still listens, and says who won't get it", w == 5 and "admin Faxes" in why, (w, why))
 d.execute("INSERT OR REPLACE INTO kv_settings (key,value) VALUES ('default_quota_fax','1')"); d.commit()
 check("listening time per number", fax.fax_wait("15550001111") == 5 and fax.fax_wait("+15550001111") == 5 and fax.fax_wait("5550001111") == 5)
 check("off for a number without detection", fax.fax_wait("15550002222") == 0 and fax.fax_wait("19999999999") == 0)
