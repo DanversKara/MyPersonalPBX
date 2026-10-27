@@ -132,8 +132,8 @@ def _safe_path(p):
 
 
 def serve(request: Request, fid: int):
-    """The fax PDF, inline (or ?download=1)."""
-    s = M._sess(request)
+    """The fax PDF, inline (or ?download=1). Web session or the app's token."""
+    s, _me = M.ucp._me(request)
     if not s:
         raise HTTPException(401)
     f = _fax(fid)
@@ -222,8 +222,22 @@ def admin_page(request: Request):
 <button class="btn ghost danger" form="faxdel" name="all" value="1" onclick="return confirm('Delete all {total} faxes?')">Delete all</button></div>
 <div class="scrollbox"><table><tr><th><input type="checkbox" id="faxdel-all" aria-label="Select all"></th><th>Received</th><th>Number</th><th>From</th><th>Pages</th><th>For</th><th></th></tr>
 {_rows(faxes, True, "faxdel") or '<tr><td colspan="7" class="muted">No faxes yet.</td></tr>'}</table></div>
-{M.ucp._bulk_js("faxdel")}"""
+{M.ucp._bulk_js("faxdel")}{_admin_sent()}"""
     return HTMLResponse(M.page("Faxes", body, s["username"], s["role"], "faxes"))
+
+
+def _admin_sent():
+    with M.db() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT f.*, f.pdf_path != '' AS has_pdf, COALESCE(NULLIF(l.display_name,''), l.username) AS who, l.exten"
+            " FROM fax_outbox f JOIN logins l ON l.id=f.login_id WHERE f.status != 'deleted' ORDER BY f.id DESC LIMIT 200")]
+    tr = "".join(
+        f"<tr><td>{esc(M.fmt_ts(r['created_at']))}</td><td>{esc(r['who'])} ({esc(r['exten'])})</td>"
+        f"<td>{esc(r['to_number'])}<br><span class='muted'>from {esc(r['from_did'])}</span></td><td>{r['pages']}</td>"
+        f"<td>{_sent_status(r)}</td><td>{('<a class=btn href=/ucp/faxes/sent/' + str(r['id']) + ' target=_blank>View</a>') if r['has_pdf'] else ''}</td></tr>"
+        for r in rows)
+    return (f'<h3 style="margin-top:22px">Sent</h3><div class="scrollbox"><table><tr><th>Queued</th><th>By</th><th>To</th>'
+            f'<th>Pages</th><th>Status</th><th></th></tr>{tr or "<tr><td colspan=6 class=muted>Nothing sent yet.</td></tr>"}</table></div>')
 
 
 async def admin_delete(request: Request):
@@ -264,13 +278,179 @@ def user_page(request: Request):
     except Exception:
         pass
     csrf = M._csrf_field(s)
-    body = f"""<p class="muted">Faxes sent to the phone numbers that ring you. Tap View to open one; they're kept until you delete them.</p>
+    can, why = M.fax_send.send_status(me)
+    nums = M.fax_send.allowed_numbers(me)
+    flash = ""
+    if request.query_params.get("sent"):
+        flash = '<div class="flash ok">Fax queued. It\'s sent in a moment; the status is below (busy lines are retried).</div>'
+    if request.query_params.get("err"):
+        flash = f'<div class="flash bad">{esc(request.query_params["err"])}</div>'
+    if can:
+        opts = "".join(f'<option value="{esc(n)}">{esc(n)}</option>' for n in nums)
+        send = f"""<details class="panel" {'open' if request.query_params.get("err") else ''}><summary><b>Send a fax</b></summary>
+<form method="post" action="/ucp/faxes/send" enctype="multipart/form-data">{csrf}
+<label>File (PDF or picture)<br><input type="file" name="file" accept=".pdf,image/*" required></label>
+<label>Fax number<br><input name="to_number" inputmode="tel" placeholder="e.g. 3105550100" required></label>
+<label>Send from<br><select name="from_did">{opts}</select></label>
+<label><input type="checkbox" name="cover" value="1" checked> Add a cover page</label>
+<label>To (name)<br><input name="to_name" maxlength="60"></label>
+<label>Subject<br><input name="subject" maxlength="80"></label>
+<label>Message on the cover<br><textarea name="note" rows="3" maxlength="2000"></textarea></label>
+<button class="btn">Send fax</button>
+<p class="muted">Uses outside-call minutes from your plan. Busy or unanswered lines are tried again (3 tries).</p>
+</form></details>"""
+    else:
+        send = f'<p class="muted">Sending: {esc(why)}</p>'
+    sent = M.fax_send.sent_for(me)
+    srows = "".join(
+        f"<tr><td><input type='checkbox' class='sel' name='ids' value='{r['id']}' form='usent' aria-label='Select'></td>"
+        f"<td>{esc(M.fmt_ts(r['created_at']))}</td><td>{esc(r['to_name'] + ' ' if r['to_name'] else '')}{esc(r['to_number'])}"
+        f"<br><span class='muted'>from {esc(r['from_did'])}</span></td><td>{r['pages']}</td>"
+        f"<td>{_sent_status(r)}</td><td>{('<a class=\'btn ghost\' href=\'/ucp/faxes/sent/' + str(r['id']) + '\' target=\'_blank\'>View</a>') if r['has_pdf'] else ''}</td></tr>"
+        for r in sent)
+    sent_html = f"""<h3 style="margin-top:20px">Sent</h3>
+<form id="usent" method="post" action="/ucp/faxes/sent/delete">{csrf}</form>
+<div class="bulkbar"><button class="btn ghost" form="usent">Cancel / delete selected</button></div>
+<div class="scrollbox"><table><tr><th><input type="checkbox" id="usent-all" aria-label="Select all"></th><th>Queued</th><th>To</th><th>Pages</th><th>Status</th><th></th></tr>
+{srows or '<tr><td colspan="6" class="muted">Nothing sent yet.</td></tr>'}</table></div>{M.ucp._bulk_js("usent")}"""
+    body = f"""{flash}{send}<h3 style="margin-top:16px">Received</h3>
+<p class="muted">Faxes sent to the phone numbers that ring you. Tap View to open one; they're kept until you delete them.</p>
 <form id="ufax" method="post" action="/ucp/faxes/delete">{csrf}</form>
 <div class="bulkbar"><button class="btn ghost" form="ufax">Delete selected</button></div>
 <div class="scrollbox"><table><tr><th><input type="checkbox" id="ufax-all" aria-label="Select all"></th><th>Received</th><th>Number</th><th>From</th><th>Pages</th><th></th></tr>
 {_rows(faxes, False, "ufax") or '<tr><td colspan="6" class="muted">No faxes yet.</td></tr>'}</table></div>
-{M.ucp._bulk_js("ufax")}"""
+{M.ucp._bulk_js("ufax")}{sent_html}"""
     return M.ucp._render(request, s, me, "ucp-fax", "Faxes", body)
+
+
+SENT_LABEL = {"queued": ("Waiting to send", "warn"), "sending": ("Sending…", "warn"),
+              "retry": ("Will try again", "warn"), "sent": ("Sent", "ok"), "failed": ("Failed", "bad")}
+
+
+def _sent_status(r):
+    label, cls = SENT_LABEL.get(r["status"], (r["status"], ""))
+    extra = ""
+    if r["status"] in ("retry", "failed") and r["last_error"]:
+        extra = f'<br><span class="muted">{esc(r["last_error"])}</span>'
+    if r["status"] == "retry":
+        extra += f'<br><span class="muted">try {r["attempts"]} of {M.fax_send.MAX_ATTEMPTS_HINT}</span>'
+    return f'<span class="pill {cls}">{esc(label)}</span>{extra}'
+
+
+async def user_send(request: Request):
+    s, me = M.ucp._me(request)
+    if not s:
+        raise HTTPException(401)
+    await M._check_csrf(request, s)
+    if M.ucp._locked():
+        return RedirectResponse("/ucp/faxes?err=" + urllib.parse.quote("Changes are disabled right now."), status_code=303)
+    f = await request.form()
+    up = f.get("file")
+    data = await up.read(M.fax_send.MAX_UPLOAD + 1) if hasattr(up, "read") else b""
+    fid, err = M.fax_send.queue(me, data, getattr(up, "filename", "") or "", f.get("to_number") or "",
+                                f.get("from_did") or "", to_name=f.get("to_name") or "",
+                                subject=f.get("subject") or "", note=f.get("note") or "",
+                                cover=bool(f.get("cover")))
+    if err:
+        return RedirectResponse("/ucp/faxes?err=" + urllib.parse.quote(err), status_code=303)
+    M.ucp._audit(me, "fax.send", f"id={fid} to={f.get('to_number')}")
+    return RedirectResponse("/ucp/faxes?sent=1", status_code=303)
+
+
+async def user_sent_delete(request: Request):
+    s, me = M.ucp._me(request)
+    if not s:
+        raise HTTPException(401)
+    await M._check_csrf(request, s)
+    f = await request.form()
+    ids = [int(x) for x in f.getlist("ids") if str(x).isdigit()]
+    M.fax_send.cancel_or_delete(me, ids)
+    return RedirectResponse("/ucp/faxes", status_code=303)
+
+
+def sent_view(request: Request, fid: int):
+    """The PDF of a fax this login sent (admins: any)."""
+    s, me = M.ucp._me(request)
+    if not s:
+        raise HTTPException(401)
+    p = M.fax_send.sent_pdf(me, fid, admin=s["role"] == "admin")
+    if not p:
+        raise HTTPException(404)
+    disp = "attachment" if request.query_params.get("download") else "inline"
+    return FileResponse(p, media_type="application/pdf",
+                        headers={"Content-Disposition": f'{disp}; filename="fax-sent-{fid}.pdf"'})
+
+
+# ------------------------------------------------------------------ the app (JSON)
+
+def _received_json(me):
+    with M.db() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT f.id, f.did, f.caller, f.remote_station, f.pages, f.status, f.error, f.received_at,"
+            " f.path != '' AS has_pdf, r.seen FROM faxes f JOIN fax_recipients r ON r.fax_id=f.id"
+            " WHERE r.login_id=? ORDER BY f.id DESC LIMIT 300", (me["id"],))]
+    try:
+        names = M.contacts.names_for(me["id"])
+        for r in rows:
+            r["caller_name"] = names.get(M.contacts.norm_number(r["caller"] or ""), "")
+    except Exception:
+        pass
+    for r in rows:
+        r["has_pdf"] = bool(r["has_pdf"])
+        r["seen"] = bool(r["seen"])
+    return rows
+
+
+def latest_received_id(me):
+    try:
+        with M.db() as c:
+            return c.execute("SELECT COALESCE(MAX(r.fax_id), 0) FROM fax_recipients r JOIN faxes f ON f.id=r.fax_id"
+                             " WHERE r.login_id=? AND f.status='ok'", (me["id"],)).fetchone()[0]
+    except Exception:
+        return 0
+
+
+def api_list(request: Request):
+    me = M.app_api._need(request)
+    can, why = M.fax_send.send_status(me)
+    sent = M.fax_send.sent_for(me)
+    for r in sent:
+        r["has_pdf"] = bool(r["has_pdf"])
+    return {"received": _received_json(me), "sent": sent, "numbers": M.fax_send.allowed_numbers(me),
+            "can_send": can, "why_not": why, "max_mb": M.fax_send.MAX_UPLOAD // (1024 * 1024)}
+
+
+async def api_send(request: Request):
+    me = M.app_api._need(request)
+    if M.ucp._locked():
+        return {"ok": False, "code": "locked", "message": "Changes are disabled right now."}
+    f = await request.form()
+    up = f.get("file")
+    data = await up.read(M.fax_send.MAX_UPLOAD + 1) if hasattr(up, "read") else b""
+    fid, err = M.fax_send.queue(me, data, getattr(up, "filename", "") or "", f.get("to_number") or "",
+                                f.get("from_did") or "", to_name=f.get("to_name") or "",
+                                subject=f.get("subject") or "", note=f.get("note") or "",
+                                cover=(f.get("cover") or "1") == "1")
+    if err:
+        return {"ok": False, "code": "invalid", "message": err}
+    M.ucp._audit(me, "fax.send", f"id={fid} to={f.get('to_number')} (app)")
+    return {"ok": True, "code": "ok", "message": "Fax queued. Busy lines are tried again.", "id": fid}
+
+
+async def api_delete(request: Request):
+    me = M.app_api._need(request)
+    f = await request.form()
+    ids = [int(x) for x in f.getlist("ids") if str(x).isdigit()]
+    _remove_received(me, ids)
+    return {"ok": True, "code": "ok", "message": f"{len(ids)} fax(es) deleted."}
+
+
+async def api_sent_delete(request: Request):
+    me = M.app_api._need(request)
+    f = await request.form()
+    ids = [int(x) for x in f.getlist("ids") if str(x).isdigit()]
+    n = M.fax_send.cancel_or_delete(me, ids)
+    return {"ok": True, "code": "ok", "message": f"{n} fax(es) removed."}
 
 
 async def user_delete(request: Request):
@@ -282,6 +462,12 @@ async def user_delete(request: Request):
         return RedirectResponse("/ucp/faxes", status_code=303)
     f = await request.form()
     ids = [int(x) for x in f.getlist("ids") if str(x).isdigit()]
+    _remove_received(me, ids)
+    M.ucp._audit(me, "fax.delete", f"{len(ids)} faxes")
+    return RedirectResponse("/ucp/faxes", status_code=303)
+
+
+def _remove_received(me, ids):
     with M.db() as c:
         for i in ids:
             c.execute("DELETE FROM fax_recipients WHERE fax_id=? AND login_id=?", (i, me["id"]))
@@ -292,8 +478,6 @@ async def user_delete(request: Request):
         for r in rows:
             c.execute("UPDATE faxes SET path='', bytes=0, error='Deleted by the recipient' WHERE id=?", (r["id"],))
         c.commit()
-    M.ucp._audit(me, "fax.delete", f"{len(ids)} faxes")
-    return RedirectResponse("/ucp/faxes", status_code=303)
 
 
 def install(app_module):
@@ -305,3 +489,12 @@ def install(app_module):
     app.get("/ucp/faxes", response_class=HTMLResponse)(user_page)
     app.post("/ucp/faxes/delete")(user_delete)
     app.get("/api/fax/{fid}")(serve)
+    app.post("/ucp/faxes/send")(user_send)
+    app.post("/ucp/faxes/sent/delete")(user_sent_delete)
+    app.get("/ucp/faxes/sent/{fid}")(sent_view)
+    app.get("/api/v1/me/faxes")(api_list)
+    app.post("/api/v1/me/faxes/send")(api_send)
+    app.post("/api/v1/me/faxes/delete")(api_delete)
+    app.post("/api/v1/me/faxes/sent/delete")(api_sent_delete)
+    app.get("/api/v1/me/faxes/{fid}/pdf")(serve)
+    app.get("/api/v1/me/faxes/sent/{fid}/pdf")(sent_view)

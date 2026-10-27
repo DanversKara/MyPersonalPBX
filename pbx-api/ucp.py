@@ -281,9 +281,12 @@ def _render(request, s, me, tab, title, body):
     # shown to every user, not just admins: these are all per-user pages.
     tabs = list(SUBTABS)
     # Faxes only for people a fax number rings (or who already have faxes).
-    if tab == "ucp-fax" or M.fax_ui.user_has_faxes(me):
-        n = M.fax_ui.unseen_count(me)
-        tabs.insert(3, ("ucp-fax", "/ucp/faxes", "Faxes" + (f" ({n})" if n else "")))
+    try:
+        if tab == "ucp-fax" or M.fax_ui.user_has_faxes(me) or M.fax_send.send_status(me)[0]:
+            n = M.fax_ui.unseen_count(me)
+            tabs.insert(3, ("ucp-fax", "/ucp/faxes", "Faxes" + (f" ({n})" if n else "")))
+    except Exception:
+        pass        # never let the fax tab break a My Phone page
     sub = '<div class="subtabs">' + "".join(
         f'<a href="{href}" class="{"on" if key == tab else ""}">{esc(label)}</a>'
         for key, href, label in tabs) + "</div>"

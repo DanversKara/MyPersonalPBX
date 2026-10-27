@@ -62,6 +62,9 @@ data class Overview(
     val registered: Boolean? = null,
     val latest_message_id: Long = 0,
     val locked: Boolean = false,
+    /** Faxes tab: a fax number rings this user, they have faxes, or they can send. */
+    val fax_enabled: Boolean = false,
+    val new_faxes: Int = 0,
 )
 
 /** One quota'd feature on the Plan & usage screen. Null quota/left = unlimited. */
@@ -186,7 +189,52 @@ data class WaitResp(
     val msg: Long = 0,
     val call: Long = 0,
     val vm: Long = 0,
+    val fax: Long = 0,
     val changed: Boolean = false,
+)
+
+/** A fax received on one of the user's numbers. */
+@Serializable
+data class FaxIn(
+    val id: Long,
+    val did: String = "",
+    val caller: String = "",
+    val caller_name: String = "",
+    val remote_station: String = "",
+    val pages: Int = 0,
+    val status: String = "ok",
+    val error: String = "",
+    val received_at: String = "",
+    val has_pdf: Boolean = false,
+    val seen: Boolean = true,
+)
+
+/** A fax this user sent (or is sending). status: queued | sending | retry | sent | failed. */
+@Serializable
+data class FaxOut(
+    val id: Long,
+    val from_did: String = "",
+    val to_number: String = "",
+    val to_name: String = "",
+    val subject: String = "",
+    val pages: Int = 0,
+    val status: String = "",
+    val attempts: Int = 0,
+    val last_error: String = "",
+    val created_at: String = "",
+    val sent_at: String? = null,
+    val has_pdf: Boolean = false,
+)
+
+@Serializable
+data class FaxList(
+    val received: List<FaxIn> = emptyList(),
+    val sent: List<FaxOut> = emptyList(),
+    /** Numbers this user may send from. */
+    val numbers: List<String> = emptyList(),
+    val can_send: Boolean = false,
+    val why_not: String = "",
+    val max_mb: Int = 20,
 )
 
 @Serializable
@@ -343,7 +391,7 @@ class Api(base: String, private val token: String?) {
 
     // ---- reads
     /** Long poll: returns when something newer than these ids exists, or after [timeout] s. */
-    suspend fun wait(msg: Long, call: Long, vm: Long, timeout: Int = 50): WaitResp =
+    suspend fun wait(msg: Long, call: Long, vm: Long, timeout: Int = 50, fax: Long = -1): WaitResp =
         withContext(Dispatchers.IO) {
             val u =
                 url("/me/wait")
@@ -353,6 +401,7 @@ class Api(base: String, private val token: String?) {
                     .addQueryParameter("call", call.toString())
                     .addQueryParameter("vm", vm.toString())
                     .addQueryParameter("timeout", timeout.toString())
+                    .apply { if (fax >= 0) addQueryParameter("fax", fax.toString()) }
                     .build()
             val b = Request.Builder().url(u)
             authHeaders().forEach { (k, v) -> b.header(k, v) }
@@ -411,6 +460,67 @@ class Api(base: String, private val token: String?) {
         }
 
     fun recordingAudioUrl(id: Long) = url("/me/recordings/$id/audio")
+
+    // ---- faxes
+    suspend fun faxes(): FaxList = get("/me/faxes")
+
+    /** A received fax's PDF ([sent] = false) or a sent one's, saved to [dest]. */
+    suspend fun downloadFax(id: Long, sent: Boolean, dest: java.io.File) =
+        withContext(Dispatchers.IO) {
+            val b = Request.Builder().url(url(if (sent) "/me/faxes/sent/$id/pdf" else "/me/faxes/$id/pdf"))
+            authHeaders().forEach { (k, v) -> b.header(k, v) }
+            http.newCall(b.build()).execute().use { r ->
+                if (!r.isSuccessful)
+                    throw ApiException(r.code, errorText(r.body?.string() ?: "", r.code))
+                val tmp = java.io.File(dest.path + ".part")
+                r.body!!.byteStream().use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
+                if (!tmp.renameTo(dest)) {
+                    tmp.copyTo(dest, overwrite = true)
+                    tmp.delete()
+                }
+            }
+            dest
+        }
+
+    /** Queue a fax: the file plus where it goes and the cover page details. */
+    suspend fun sendFax(
+        data: ByteArray,
+        filename: String,
+        mime: String,
+        toNumber: String,
+        fromDid: String,
+        toName: String,
+        subject: String,
+        note: String,
+        cover: Boolean,
+    ): Result =
+        withContext(Dispatchers.IO) {
+            val body =
+                okhttp3.MultipartBody.Builder()
+                    .setType(okhttp3.MultipartBody.FORM)
+                    .addFormDataPart("file", filename, data.toRequestBody(mime.toMediaType()))
+                    .addFormDataPart("to_number", toNumber)
+                    .addFormDataPart("from_did", fromDid)
+                    .addFormDataPart("to_name", toName)
+                    .addFormDataPart("subject", subject)
+                    .addFormDataPart("note", note)
+                    .addFormDataPart("cover", if (cover) "1" else "0")
+                    .build()
+            val b = Request.Builder().url(url("/me/faxes/send")).post(body)
+            authHeaders().forEach { (k, v) -> b.header(k, v) }
+            // Converting a long document on the PBX can take a while.
+            http.newBuilder().readTimeout(150, TimeUnit.SECONDS).writeTimeout(120, TimeUnit.SECONDS).build()
+                .newCall(b.build()).execute().use { r ->
+                    val text = r.body?.string() ?: ""
+                    if (!r.isSuccessful) throw ApiException(r.code, errorText(text, r.code))
+                    json.decodeFromString<Result>(text)
+                }
+        }
+
+    suspend fun deleteFaxes(ids: List<Long>) = form("/me/faxes/delete", ids.map { "ids" to it.toString() })
+
+    suspend fun deleteSentFaxes(ids: List<Long>) =
+        form("/me/faxes/sent/delete", ids.map { "ids" to it.toString() })
 
     suspend fun deleteDevice(id: Long) {
         exec(Request.Builder().url(url("/me/devices/$id")).delete())

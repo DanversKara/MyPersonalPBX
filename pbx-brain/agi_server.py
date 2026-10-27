@@ -303,6 +303,30 @@ def handle_fax_check(conn, f, agi_vars):
         log.info("fax-check: listening %ss for a fax on %s", wait, did)
 
 
+def handle_fax_sent(agi_vars):
+    """Hangup handler after SendFAX: record whether the pages went through.
+    pbx-brain (faxout.py) decides sent / retry / failed when the call ends."""
+    try:
+        fid = int(_arg(agi_vars, "agi_arg_1") or 0)
+    except ValueError:
+        return
+    status = (_arg(agi_vars, "agi_arg_2") or "").upper()
+    try:
+        pages = int(_arg(agi_vars, "agi_arg_3") or 0)
+    except ValueError:
+        pages = 0
+    err = _arg(agi_vars, "agi_arg_4")
+    with db() as c:
+        if status == "SUCCESS":
+            c.execute("UPDATE fax_outbox SET status='sent', pages_sent=?, sent_at=datetime('now'), last_error=''"
+                      " WHERE id=? AND status='sending'", (pages, fid))
+        else:
+            c.execute("UPDATE fax_outbox SET pages_sent=?, last_error=? WHERE id=? AND status='sending'",
+                      (pages, ("The fax didn't go through: " + (err or status or "no fax tone")).strip()[:200], fid))
+        c.commit()
+    log.info("fax-sent: fax %s %s (%d pages) %s", fid, status, pages, err or "")
+
+
 def handle_fax_done(agi_vars):
     """Hangup handler after ReceiveFAX: store, convert and email the fax."""
     a = lambda i: _arg(agi_vars, f"agi_arg_{i}")
@@ -329,6 +353,8 @@ def agi_session(conn):
             handle_msg_route(agi_vars)
         elif script == "fax-check":
             handle_fax_check(conn, f, agi_vars)
+        elif script == "fax-sent":
+            handle_fax_sent(agi_vars)      # before answering: pbx-brain reads it right after
         elif script == "fax-done":
             conn.sendall(b"200 result=0\n")    # let the dead channel go first
             handle_fax_done(agi_vars)

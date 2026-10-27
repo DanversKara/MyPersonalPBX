@@ -36,11 +36,13 @@ object Notifier {
     const val CH_CALLS = "missed_calls"
     const val CH_VOICEMAIL = "voicemail"
     const val CH_UPDATES = "updates"
-    const val EXTRA_OPEN = "org.ownpbx.myphone.OPEN" // "messages" | "calls" | "voicemail"
+    const val CH_FAX = "faxes"
+    const val EXTRA_OPEN = "org.ownpbx.myphone.OPEN" // "messages" | "calls" | "voicemail" | "faxes"
     const val EXTRA_PEER = "org.ownpbx.myphone.PEER"
     private const val ID_CALLS = 2
     private const val ID_VOICEMAIL = 3
     private const val ID_UPDATE = 4
+    private const val ID_FAX = 5
     private const val ID_TEST = 9
     private const val ID_MSG_BASE = 1000
     private const val GROUP_MESSAGES = "messages"
@@ -77,6 +79,8 @@ object Notifier {
                         NotificationManager.IMPORTANCE_DEFAULT,
                     )
                     .apply { description = "A newer My Phone release is available" },
+                NotificationChannel(CH_FAX, "Faxes", NotificationManager.IMPORTANCE_DEFAULT)
+                    .apply { description = "Faxes received on your numbers" },
             )
         )
     }
@@ -105,7 +109,7 @@ object Notifier {
      * The app showed the user items up to these ids: don't notify them later. (Only moves forward,
      * and only once a first check has set a baseline.)
      */
-    fun seen(store: Store, msgId: Long = 0, missedCallId: Long = 0, vmId: Long = 0) {
+    fun seen(store: Store, msgId: Long = 0, missedCallId: Long = 0, vmId: Long = 0, faxId: Long = 0) {
         // Screens keep refreshing for a while after the app goes to the
         // background; that must not count as the user seeing anything (it
         // used to swallow every new text before it could be notified).
@@ -114,6 +118,7 @@ object Notifier {
         if (missedCallId > store.notifCallId && store.notifCallId != 0L)
             store.notifCallId = missedCallId
         if (vmId > store.notifVmId && store.notifVmId != 0L) store.notifVmId = vmId
+        if (faxId > store.notifFaxId && store.notifFaxId != 0L) store.notifFaxId = faxId
     }
 
     fun stop(ctx: Context) {
@@ -128,6 +133,7 @@ object Notifier {
         when (what) {
             "calls" -> nm.cancel(ID_CALLS)
             "voicemail" -> nm.cancel(ID_VOICEMAIL)
+            "faxes" -> nm.cancel(ID_FAX)
             "messages" ->
                 if (peer != null) nm.cancel(msgId(peer))
                 else
@@ -298,6 +304,45 @@ object Notifier {
                         )
                         .build(),
                 )
+            }
+        }
+        // ---- faxes (only on PBXes with fax, and only for users a fax number rings)
+        if (ov.fax_enabled) {
+            try {
+                val got = api.faxes().received
+                val topFax = got.maxOfOrNull { it.id } ?: 0
+                if (store.notifFaxId == 0L) {
+                    store.notifFaxId = topFax.coerceAtLeast(1)
+                } else {
+                    val fresh = got.filter { it.id > store.notifFaxId && !it.seen && it.status == "ok" }
+                    store.notifFaxId = maxOf(store.notifFaxId, topFax)
+                    found += fresh.size
+                    if (!quiet && fresh.isNotEmpty()) {
+                        posted++
+                        val n = maxOf(got.count { !it.seen && it.status == "ok" }, fresh.size)
+                        val first = fresh.maxBy { it.id }
+                        val from =
+                            first.caller_name.ifBlank {
+                                first.remote_station.ifBlank { prettyNumber(first.caller.ifEmpty { "Unknown sender" }) }
+                            }
+                        val pages = if (first.pages == 1) "1 page" else "${first.pages} pages"
+                        nm.notify(
+                            ID_FAX,
+                            base(ctx, CH_FAX)
+                                .setContentTitle(if (n == 1) "New fax" else "$n new faxes")
+                                .setContentText(if (n == 1) "From $from · $pages" else "Latest from $from")
+                                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                                .setNumber(n)
+                                .setContentIntent(open(ctx, "faxes", null, ID_FAX))
+                                .setPublicVersion(
+                                    base(ctx, CH_FAX).setContentTitle("My Phone").setContentText("New fax").build()
+                                )
+                                .build(),
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                // An older PBX without fax sending: no fax notifications.
             }
         }
         val status =

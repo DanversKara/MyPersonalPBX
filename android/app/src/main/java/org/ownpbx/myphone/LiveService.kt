@@ -213,7 +213,7 @@ class LiveService : Service() {
                         Notifier.run(this, seenOnly = false)
                     }
                     val w =
-                        store.api().wait(store.notifMsgId, store.notifCallId, store.notifVmId, 50)
+                        store.api().wait(store.notifMsgId, store.notifCallId, store.notifVmId, 50, fax = store.notifFaxId.takeIf { it > 0 } ?: -1)
                     if (w.changed) {
                         Notifier.run(this, seenOnly = false)
                         delay(1_000) // never spin, even if ids disagree
