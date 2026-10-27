@@ -202,13 +202,28 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 color = MaterialTheme.colorScheme.error,
             )
 
-        ClickRow(
-            Icons.Filled.DataUsage,
-            "Plan & usage",
-            "Minutes and texts left, and what your plan includes",
-        ) {
-            showUsage = true
+        // App store mode (set by the admin): no plan / usage / billing in the app,
+        // just where to find account details. Hidden until the PBX has said which.
+        when {
+            overview == null -> {}
+            overview.hide_billing ->
+                ListItem(
+                    leadingContent = { Icon(Icons.Filled.AccountCircle, null) },
+                    headlineContent = { Text("Account") },
+                    supportingContent = {
+                        Text(overview.account_note.ifBlank { "For account details, contact your administrator." })
+                    },
+                )
+            else ->
+                ClickRow(
+                    Icons.Filled.DataUsage,
+                    "Plan & usage",
+                    "Minutes and texts left, and what your plan includes",
+                ) {
+                    showUsage = true
+                }
         }
+        val notIncluded = if (overview?.hide_billing == true) "Not available on your account" else "Not included in your plan"
 
         val st = s
         if (st == null) {
@@ -258,7 +273,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 Icons.Filled.FiberManualRecord,
                 "Record my calls",
                 if (st.record_allowed) "You must follow call-recording laws"
-                else "Not included in your plan",
+                else notIncluded,
                 st.user_record,
                 enabled = st.record_allowed,
             ) {
@@ -272,7 +287,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 "Push-to-talk",
                 if (st.ptt_allowed)
                     "Pages chirp first and only connect when you accept; you hold to talk"
-                else "Not included in your plan",
+                else notIncluded,
                 st.user_ptt,
                 enabled = st.ptt_allowed,
             ) {

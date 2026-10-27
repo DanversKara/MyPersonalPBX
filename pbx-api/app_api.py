@@ -95,6 +95,55 @@ def device_session(row: dict) -> dict:
             "pwsig": M._pw_sig(row["pwhash"]), "device_id": row["device_id"]}
 
 
+# ---------------------------------------------------------------- app store mode
+# For phones running the app from Google Play (or any store): the app gets no
+# plan / billing / usage information and no "not in your plan" wording, so it
+# never looks like it sells or upsells anything. Limits still apply the same;
+# what's unavailable is just "not available on this account". Per login
+# (logins.app_hide_billing) or for everyone (Billing -> App store mode).
+NEUTRAL = "This isn't available on your account."
+
+
+def account_site():
+    """Where store-mode users are told to look for account details
+    (Billing -> App store mode), e.g. myphone.example.com."""
+    try:
+        with M.db() as c:
+            r = c.execute("SELECT value FROM kv_settings WHERE key='app_account_site'").fetchone()
+            return (r[0] if r else "").strip()
+    except Exception:
+        return ""
+
+
+def account_note():
+    site = account_site()
+    return f"For account details, visit {site}" if site else "For account details, contact your administrator."
+_PLANNY = ("plan", "upgrade", "billing", "subscri", "purchase", "price", "minutes left", "texts left")
+
+
+def hide_billing(me) -> bool:
+    try:
+        with M.db() as c:
+            r = c.execute("SELECT value FROM kv_settings WHERE key='app_hide_billing_all'").fetchone()
+            if r and r[0] == "1":
+                return True
+            r = c.execute("SELECT app_hide_billing FROM logins WHERE id=?", (me["id"],)).fetchone()
+            return bool(r and r[0])
+    except Exception:
+        return False
+
+
+def neutral(me, text, hidden=None):
+    """Text for the app: plan/billing wording becomes a plain 'not available'."""
+    if not text:
+        return text
+    if hidden is None:
+        hidden = hide_billing(me)
+    if hidden and any(w in text.lower() for w in _PLANNY):
+        return NEUTRAL + " " + account_note() + ("" if account_note().endswith(".") else ".")
+    return text
+
+
 def _need(request: Request):
     row = device_login(request)
     if not row:
@@ -200,16 +249,20 @@ def me_overview(request: Request):
     with M.db() as c:
         new_vm = c.execute("SELECT COUNT(*) FROM voicemail_messages WHERE mailbox=? AND folder='INBOX'"
                            " AND is_read=0", (box or "\x00",)).fetchone()[0]
-    hidden = _hidden_calls(me["id"])
+    hidden_calls = _hidden_calls(me["id"])
+    hidden = hide_billing(me)
     missed_new = [x for x in U._my_calls(me, limit=200, missed_only=True)
-                  if x["id"] > (me.get("calls_seen_id") or 0) and x["id"] not in hidden]
+                  if x["id"] > (me.get("calls_seen_id") or 0) and x["id"] not in hidden_calls]
     missed = [x for x in missed_new
               if x.get("started_at", "") >= time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))]
     devs = U._device_status(me)
     msgs = U._my_messages(me, limit=1)
     return {"me": _who(me), "dnd": bool(p["dnd"]), "new_voicemail": new_vm,
             "missed_24h": len(missed), "missed_new": len(missed_new),
-            "texts_left": U._left(me, "messages"),
+            "texts_left": None if hidden else U._left(me, "messages"),
+            # App store mode: no plan / usage / billing anywhere in the app.
+            "hide_billing": hidden,
+            "account_note": account_note() if hidden else "",
             "registered": None if devs is None else len(devs) > 0,
             "latest_message_id": msgs[0]["id"] if msgs else 0,
             "locked": U._locked(),
@@ -530,6 +583,8 @@ def me_usage(request: Request):
     of 0 means the feature isn't in the plan at all.
     """
     me = _need(request)
+    if hide_billing(me):
+        raise HTTPException(404, "Not available on this account.")
     U = M.ucp
     import entitlements as ent
 
@@ -682,11 +737,19 @@ def _flash_json(resp):
 
 def _wrap(handler):
     async def route(request: Request, **kw):
-        _need(request)
+        me = _need(request)
         r = await handler(request, **kw)
         if isinstance(r, RedirectResponse):
-            return _flash_json(r)
+            r = _flash_json(r)
+            if hide_billing(me):
+                import json as _json
+                d = _json.loads(r.body)
+                d["message"] = neutral(me, d.get("message", ""), True)
+                return JSONResponse(d, status_code=r.status_code)
+            return r
         if isinstance(r, dict):
+            if "message" in r:
+                r["message"] = neutral(me, r.get("message") or "")
             return r
         if isinstance(r, HTMLResponse):
             # A ucp handler answered with a page (e.g. safety lock); say so plainly.
