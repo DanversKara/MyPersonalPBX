@@ -84,6 +84,12 @@ match={{ t.registrar | replace('sip:', '') }}
 type=aor
 max_contacts=1
 remove_existing=yes
+; Desk phones ask for long registrations (often an hour) and many don't
+; re-register when the PBX restarts or reloads, so they'd stay unreachable
+; until then. Cap it at 5 minutes: a phone is never gone for longer.
+maximum_expiration=300
+minimum_expiration=60
+default_expiration=300
 ; Ping the phone every 60 s (SIP OPTIONS): the dashboard shows Avail/Unavail
 ; and the response time, and calls skip phones that stopped answering. For
 ; remote phones the ping goes through the edge over the phone's open TLS
