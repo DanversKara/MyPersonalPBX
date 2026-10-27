@@ -39,8 +39,8 @@ fi
 
 # Faxes (Routes -> Detect faxes): Asterisk (root) writes the TIFF, pbx-agi
 # (pbx user) turns it into a PDF with tiff2pdf and the panel serves it.
-mkdir -p /var/spool/pbx/fax
-chown "$PBX_USER" /var/spool/pbx/fax
+mkdir -p /var/spool/pbx/fax /var/spool/pbx/fax/out
+chown "$PBX_USER" /var/spool/pbx/fax /var/spool/pbx/fax/out
 chmod 750 /var/spool/pbx/fax
 if ! command -v tiff2pdf >/dev/null 2>&1; then
     apt-get install -y -qq libtiff-tools || echo "NOTE: couldn't install libtiff-tools; faxes stay as TIFF files."
@@ -54,6 +54,11 @@ chown "$PBX_USER" /var/spool/asterisk/recording
 # --- Python packages added after install.sh (existing servers get them here) ---
 # segno (pure Python, BSD): QR codes for app pairing. Optional: without it
 # the App page just shows the code as text.
+# Pillow (HPND license): pictures (JPG/PNG/TIFF) turned into fax pages. Optional:
+# without it only PDFs can be faxed.
+if ! /opt/pbx/api-venv/bin/python -c "import PIL" 2>/dev/null; then
+    /opt/pbx/api-venv/bin/pip install -q pillow || echo "NOTE: couldn't install Pillow; only PDFs can be faxed."
+fi
 if ! /opt/pbx/api-venv/bin/python -c "import segno" 2>/dev/null; then
     /opt/pbx/api-venv/bin/pip install -q segno || echo "NOTE: couldn't install segno; pairing QR codes stay off."
 fi

@@ -46,6 +46,7 @@ import network_ui
 import sso_ui
 import store_ui
 import fax_ui
+import fax_send
 import entitlements
 import security
 import e911_ui
@@ -4286,6 +4287,7 @@ network_ui.install(_sys.modules[__name__])
 sso_ui.install(_sys.modules[__name__])
 store_ui.install(_sys.modules[__name__], billing)
 fax_ui.install(_sys.modules[__name__])
+fax_send.install(_sys.modules[__name__])
 security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])

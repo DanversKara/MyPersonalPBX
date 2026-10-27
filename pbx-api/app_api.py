@@ -212,7 +212,17 @@ def me_overview(request: Request):
             "texts_left": U._left(me, "messages"),
             "registered": None if devs is None else len(devs) > 0,
             "latest_message_id": msgs[0]["id"] if msgs else 0,
-            "locked": U._locked()}
+            "locked": U._locked(),
+            # Faxes tab: shown when a fax number rings them, they have faxes, or they can send.
+            "fax_enabled": _fax_enabled(me),
+            "new_faxes": M.fax_ui.unseen_count(me)}
+
+
+def _fax_enabled(me):
+    try:
+        return bool(M.fax_ui.user_has_faxes(me) or M.fax_send.send_status(me)[0])
+    except Exception:
+        return False
 
 
 def _peer(me, m):
@@ -292,14 +302,15 @@ def _latest(me) -> dict:
                            (box,)).fetchone()[0]
     notes = M.contacts.latest_note_id(me["id"])
     return {"msg": msgs[0]["id"] if msgs else 0, "call": max(missed, default=0), "vm": vm,
-            "notes": notes}
+            "notes": notes, "fax": M.fax_ui.latest_received_id(me)}
 
 
 WAIT_MAX = 55          # under Cloudflare's 100 s idle limit
 WAIT_STEP = 2.0        # seconds between DB looks while waiting
 
 
-async def me_wait(request: Request, msg: int = 0, call: int = 0, vm: int = 0, timeout: int = 50):
+async def me_wait(request: Request, msg: int = 0, call: int = 0, vm: int = 0, timeout: int = 50,
+                  fax: int = -1):
     """Long poll for the app's "Instant" mode: answers as soon as there is a
     text, missed call or Inbox voicemail newer than the ids given, or after
     `timeout` seconds. Cheap: a few indexed queries every 2 s per waiting phone."""
@@ -309,7 +320,8 @@ async def me_wait(request: Request, msg: int = 0, call: int = 0, vm: int = 0, ti
     deadline = time.monotonic() + timeout
     while True:
         cur = await asyncio.to_thread(_latest, me)
-        changed = cur["msg"] > msg or cur["call"] > call or cur["vm"] > vm
+        changed = (cur["msg"] > msg or cur["call"] > call or cur["vm"] > vm
+                   or (fax >= 0 and cur["fax"] > fax))    # older apps don't send fax=
         if changed or time.monotonic() >= deadline or await request.is_disconnected():
             return cur | {"changed": changed}
         await asyncio.sleep(WAIT_STEP)

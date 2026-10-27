@@ -26,6 +26,11 @@ class Channel:
         self._client.delete("channels/%s" % self.id,
                             **({"params": {"reason": reason}} if reason else {}))
 
+    def continue_in_dialplan(self, context, extension, priority=1):
+        """Leave Stasis and carry on in the dialplan (e.g. SendFAX)."""
+        self._client.post("channels/%s/continue" % self.id,
+                          params={"context": context, "extension": extension, "priority": priority})
+
     def answer(self):
         self._client.post("channels/%s/answer" % self.id)
 

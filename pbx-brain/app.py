@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler
 from ari_client import ARIClient
 import e911
 import voipms_sms
+import faxout
+import sys
 
 # One canonical number normalizer, shared with pbx-api (shared/phone.py,
 # deployed flat into this dir by scripts/deploy.sh).
@@ -3194,6 +3196,9 @@ def on_stasis_start(channel, event):
         elif kind == "legb":
             # Originated B leg: wait for answer (ChannelStateChange -> Up).
             log.info("b leg in Stasis: %s", channel.id)
+        elif kind == "faxout":
+            # A fax we're sending: the far end answered (faxout.py).
+            faxout.on_answer(channel, target)
         elif kind == "spy":
             # Snoop channel for *555: bridge with the spy.
             spy_id = target
@@ -3229,7 +3234,12 @@ def on_channel_state_change(channel, event):
 
 def on_channel_destroyed(channel, event):
     """A ringing B leg went away without answering (declined, busy,
-    unreachable, or our timeout hung it up): run no-answer handling."""
+    unreachable, or our timeout hung it up): run no-answer handling.
+    Also ends a fax call we were sending (faxout.py)."""
+    try:
+        faxout.on_destroyed(channel.id, event.get("cause_txt", ""))
+    except Exception:
+        log.exception("faxout cleanup failed")
     with LEG_LOCK:
         if channel.id in PENDING:
             log.info("b leg %s ended unanswered (%s)", channel.id,
@@ -3652,6 +3662,7 @@ def main():
     CLIENT.on_event("ChannelDtmfReceived", on_dtmf)
     CLIENT.on_event("ChannelDestroyed", on_channel_destroyed)
     CLIENT.on_event("PlaybackFinished", on_playback_finished)
+    faxout.install(sys.modules[__name__])   # sends queued faxes
     log.info("pbx-brain connected to %s as %s", ARI_URL, ARI_USER)
     CLIENT.run(APP)
 

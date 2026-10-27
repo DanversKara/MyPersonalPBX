@@ -522,3 +522,31 @@ CREATE TABLE IF NOT EXISTS fax_recipients (
   seen INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (fax_id, login_id)
 );
+
+-- Faxes being sent / sent (My Phone or the app -> Send a fax). pbx-brain
+-- (faxout.py) dials them over the outbound routes and retries a busy or
+-- unanswered line. Files live in /var/spool/pbx/fax/out/<job>/.
+CREATE TABLE IF NOT EXISTS fax_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  from_did TEXT NOT NULL,                    -- caller ID (one of the sender's numbers)
+  to_number TEXT NOT NULL,
+  to_name TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  cover INTEGER NOT NULL DEFAULT 1,
+  filename TEXT NOT NULL DEFAULT '',
+  pages INTEGER NOT NULL DEFAULT 0,          -- including the cover
+  pages_sent INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'queued',     -- queued | sending | retry | sent | failed | deleted
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_try INTEGER NOT NULL DEFAULT 0,       -- epoch seconds
+  last_error TEXT NOT NULL DEFAULT '',
+  channel_id TEXT NOT NULL DEFAULT '',
+  answered_at INTEGER NOT NULL DEFAULT 0,
+  tif_path TEXT NOT NULL DEFAULT '',
+  pdf_path TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  sent_at TEXT DEFAULT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fax_outbox_status ON fax_outbox(status, next_try);
