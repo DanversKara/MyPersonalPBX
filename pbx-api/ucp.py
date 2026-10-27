@@ -282,7 +282,7 @@ def _render(request, s, me, tab, title, body):
     tabs = list(SUBTABS)
     # Faxes only for people a fax number rings (or who already have faxes).
     try:
-        if tab == "ucp-fax" or M.fax_ui.user_has_faxes(me) or M.fax_send.send_status(me)[0]:
+        if tab == "ucp-fax" or M.fax_ui.show_tab(me):
             n = M.fax_ui.unseen_count(me)
             tabs.insert(3, ("ucp-fax", "/ucp/faxes", "Faxes" + (f" ({n})" if n else "")))
     except Exception:

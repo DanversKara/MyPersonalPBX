@@ -220,7 +220,7 @@ def me_overview(request: Request):
 
 def _fax_enabled(me):
     try:
-        return bool(M.fax_ui.user_has_faxes(me) or M.fax_send.send_status(me)[0])
+        return M.fax_ui.show_tab(me)
     except Exception:
         return False
 
