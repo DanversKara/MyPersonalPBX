@@ -531,7 +531,21 @@ down, calls skip the listening and ring normally.
 On an existing PBX run **`pbx-update --with-fax`** when the phones are quiet: it
 compiles Asterisk with fax (about 10-20 minutes; calls keep working) and
 restarts it once no call is in progress. The Routes and Faxes pages say if it's
-still missing. Sending faxes is planned next.
+still missing.
+
+**Sending faxes** (My Phone → Faxes → *Send a fax*, or the app's Faxes tab):
+upload a PDF or a photo (up to 20 MB, 50 pages), enter the fax number, pick
+which of your numbers it comes from (numbers whose route rings you; admins can
+use any), and optionally add a cover page with *To*, *Subject* and a message.
+Faxes go out one at a time over your outbound route with a header line on each
+page. A busy line or no answer is tried again (3 attempts, 3 minutes apart).
+The **Sent** list shows waiting / sending / will retry / sent / failed, and the
+sender is emailed the result. Answered time counts toward the plan's outside
+minutes (30 faxes a day per user at most).
+
+**In the app:** a **Faxes** tab appears for anyone a fax number rings or who
+can send faxes: received and sent faxes, an in-app viewer (zoom, share, open in
+another app), a new-fax notification, and the send form above.
 
 ### Ring groups
 ![Ring groups](docs/screenshots/07-ring-groups.png) ![Edit ring group](docs/screenshots/08-ring-group-edit.png)
