@@ -230,6 +230,10 @@ class Store(context: Context) {
         get() = prefs.getString("local_missed", "") ?: ""
         set(v) = prefs.edit().putString("local_missed", v).apply()
 
+    /** Newest received fax already notified (0 = not set yet). */
+    var notifFaxId: Long
+        get() = prefs.getLong("notif_fax", 0)
+        set(v) = prefs.edit().putLong("notif_fax", v).apply()
     var notifVmId: Long
         get() = prefs.getLong("notif_vm", 0)
         set(v) = prefs.edit().putLong("notif_vm", v).apply()

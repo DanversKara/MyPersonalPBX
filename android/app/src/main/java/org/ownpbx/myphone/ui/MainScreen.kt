@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.Fax
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Voicemail
 import androidx.compose.material3.*
@@ -34,6 +35,8 @@ enum class Tab(val label: String, val icon: ImageVector) {
     Calls("Calls", Icons.Filled.Call),
     Contacts("Contacts", Icons.Filled.Contacts),
     Voicemail("Voicemail", Icons.Filled.Voicemail),
+    /** Only shown when the PBX says faxing is on for this user. */
+    Faxes("Faxes", Icons.Filled.Fax),
     Settings("Settings", Icons.Filled.Settings),
 }
 
@@ -192,6 +195,10 @@ fun MainScreen(model: AppModel) {
                 tab = Tab.Messages
                 chatWith = who
             }
+            "faxes" -> {
+                chatWith = null
+                tab = Tab.Faxes
+            }
         }
     }
     // What's on screen no longer needs a notification.
@@ -201,6 +208,7 @@ fun MainScreen(model: AppModel) {
             tab == Tab.Messages -> Notifier.clear(ctx, "messages")
             tab == Tab.Calls -> Notifier.clear(ctx, "calls")
             tab == Tab.Voicemail -> Notifier.clear(ctx, "voicemail")
+            tab == Tab.Faxes -> Notifier.clear(ctx, "faxes")
             else -> {}
         }
     }
@@ -295,18 +303,23 @@ fun MainScreen(model: AppModel) {
     Scaffold(
         snackbarHost = { SnackbarHost(snack) },
         bottomBar = {
+            // Faxes only for users a fax number rings (or who can send faxes).
+            val tabs = Tab.entries.filter { it != Tab.Faxes || overview?.fax_enabled == true || tab == Tab.Faxes }
             NavigationBar {
-                Tab.entries.forEach { t ->
+                tabs.forEach { t ->
                     val badge =
                         when (t) {
                             Tab.Calls -> overview?.let { it.missed_new ?: it.missed_24h } ?: 0
                             Tab.Voicemail -> overview?.new_voicemail ?: 0
+                            Tab.Faxes -> overview?.new_faxes ?: 0
                             else -> 0
                         }
                     NavigationBarItem(
                         selected = tab == t,
                         onClick = { tab = t },
-                        label = { Text(t.label) },
+                        label = { Text(t.label, maxLines = 1, softWrap = false) },
+                        // Six tabs: labels only under the selected one, so they fit.
+                        alwaysShowLabel = tabs.size <= 5,
                         icon = {
                             BadgedBox(badge = { if (badge > 0) Badge { Text("$badge") } }) {
                                 Icon(t.icon, t.label)
@@ -323,6 +336,7 @@ fun MainScreen(model: AppModel) {
             Tab.Calls -> CallsScreen(model, snack, m) { chatWith = it }
             Tab.Contacts -> ContactsScreen(model, snack, m)
             Tab.Voicemail -> VoicemailScreen(model, snack, m) { chatWith = it }
+            Tab.Faxes -> FaxScreen(model, snack, m)
             Tab.Settings -> SettingsScreen(model, overview, m)
         }
     }

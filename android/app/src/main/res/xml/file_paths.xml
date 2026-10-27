@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Paths the FileProvider may share: only the self-update download folder. -->
+<!-- Paths the FileProvider may share: the self-update download folder, and
+     faxes the user chose to share or open in another app. -->
 <paths>
     <cache-path name="updates" path="updates/" />
+    <cache-path name="faxes" path="faxes/" />
 </paths>
