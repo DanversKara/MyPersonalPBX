@@ -27,6 +27,13 @@ outbound_auth=auth-trunk-{{ t.name }}
 server_uri={{ t.registrar }}
 client_uri=sip:{{ t.username }}@{{ t.registrar | replace('sip:', '') }}
 retry_interval=30
+; Re-register every 5 minutes (not ~an hour): incoming calls are sent to the
+; address the router showed at the last registration, and home routers
+; forget idle UDP mappings in minutes. A stale mapping = provider rings a
+; dead address and no incoming calls arrive.
+expiration=300
+forbidden_retry_interval=60
+max_retries=10000
 
 [auth-trunk-{{ t.name }}]
 type=auth
@@ -37,6 +44,9 @@ password={{ t.secret }}
 [aor-trunk-{{ t.name }}]
 type=aor
 contact={{ t.registrar }}
+; OPTIONS ping every 25 s: keeps the router's NAT mapping to the provider
+; open between registrations (and shows the trunk as reachable).
+qualify_frequency=25
 
 [ep-trunk-{{ t.name }}]
 type=endpoint
