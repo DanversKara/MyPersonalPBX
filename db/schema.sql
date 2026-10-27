@@ -71,7 +71,11 @@ CREATE TABLE IF NOT EXISTS inbound_routes (
   ring_extens TEXT NOT NULL DEFAULT '[]',  -- JSON array of extensions to ring, e.g. ["8800","8801"]
   timeout_sec INTEGER NOT NULL DEFAULT 30, -- ring timeout before voicemail
   enabled INTEGER NOT NULL DEFAULT 1,
-  ivr_id INTEGER DEFAULT NULL              -- send callers to this IVR instead
+  ivr_id INTEGER DEFAULT NULL,             -- send callers to this IVR instead
+  fax_detect INTEGER NOT NULL DEFAULT 0,   -- answer and listen for a fax first
+  fax_wait INTEGER NOT NULL DEFAULT 4,     -- seconds to listen (3-8)
+  fax_email TEXT NOT NULL DEFAULT '',      -- also email faxes here (comma-separated)
+  fax_email_users INTEGER NOT NULL DEFAULT 1 -- email the people this number rings
 );
 -- No-answer goes to the first ring extension's login voicemail box.
 -- Each login has its own box (voicemail_boxes); no shared fallback.
@@ -496,3 +500,25 @@ CREATE TABLE IF NOT EXISTS app_devices (
   calls_seen_id INTEGER NOT NULL DEFAULT 0   -- newest call shown in the app (missed-call badge)
 );
 CREATE INDEX IF NOT EXISTS idx_app_devices_hash ON app_devices(token_hash);
+
+-- Faxes received on ordinary numbers (Routes -> Detect faxes). path is the PDF
+-- (or the raw TIFF if conversion failed). Kept until deleted.
+CREATE TABLE IF NOT EXISTS faxes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  did TEXT NOT NULL DEFAULT '',
+  caller TEXT NOT NULL DEFAULT '',
+  remote_station TEXT NOT NULL DEFAULT '',   -- the sender's fax ID (TSI), if sent
+  pages INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ok',         -- ok | failed
+  error TEXT NOT NULL DEFAULT '',
+  path TEXT NOT NULL DEFAULT '',
+  bytes INTEGER NOT NULL DEFAULT 0,
+  received_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Who sees a fax in My Phone: the logins the number rang when it arrived.
+CREATE TABLE IF NOT EXISTS fax_recipients (
+  fax_id INTEGER NOT NULL REFERENCES faxes(id) ON DELETE CASCADE,
+  login_id INTEGER NOT NULL REFERENCES logins(id) ON DELETE CASCADE,
+  seen INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (fax_id, login_id)
+);

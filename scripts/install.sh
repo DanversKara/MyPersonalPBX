@@ -10,7 +10,8 @@ PBX_USER="pbx"
 apt-get update
 apt-get install -y build-essential wget libssl-dev libxml2-dev libsqlite3-dev \
     uuid-dev libjansson-dev libedit-dev libsrtp2-dev libopus-dev \
-    python3 python3-venv python3-pip sqlite3 sudo sox libsox-fmt-mp3
+    python3 python3-venv python3-pip sqlite3 sudo sox libsox-fmt-mp3 \
+    libspandsp-dev libtiff-dev libtiff-tools ghostscript   # fax: res_fax_spandsp, TIFF -> PDF
 
 # --- Asterisk ---
 cd /usr/src
@@ -26,6 +27,8 @@ set -o pipefail
 tar xzf "$AST_TARBALL"
 cd "$AST_SRC_DIR"
 ./configure --with-pjproject-bundled --with-srtp
+make menuselect.makeopts
+menuselect/menuselect --enable res_fax --enable res_fax_spandsp menuselect.makeopts
 make -j"$(nproc)"
 make install
 make config

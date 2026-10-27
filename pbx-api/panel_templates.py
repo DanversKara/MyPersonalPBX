@@ -383,6 +383,7 @@ def page(title, body, username="", role="", tab=""):
         <a href="/ring-groups" class="{grp}">Ring groups</a>
         <a href="/cdr" class="{c}">CDR</a>
         <a href="/voicemail" class="{v}">Voicemail</a>
+        <a href="/faxes" class="{fax}">Faxes</a>
         <a href="/recordings" class="{rec}">Recordings</a>
         <a href="/messages" class="{msgs}">Messages</a>
         <a href="/sms-routes" class="{sms}">SMS</a>
@@ -409,6 +410,7 @@ def page(title, body, username="", role="", tab=""):
             email="on" if tab == "email" else "",
             net="on" if tab == "network" else "",
             sso="on" if tab == "sso" else "",
+            fax="on" if tab == "faxes" else "",
             e911="on" if tab == "e911" else "",
             grp="on" if tab == "groups" else "",
             rep="on" if tab == "reports" else "",

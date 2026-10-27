@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""FastAGI server for pbx-brain: handles out-of-dialog SIP MESSAGE routing.
+"""FastAGI server for pbx-brain: out-of-dialog SIP MESSAGE routing, and fax
+on ordinary numbers (fax-check / fax-done, see fax.py).
 
 Listens on 127.0.0.1:4573. The dialplan [pbx-msg] context calls
 AGI(agi://127.0.0.1/msg-route,${EXTEN}) for each incoming MESSAGE.
@@ -19,6 +20,7 @@ import socket
 import sqlite3
 import threading
 import voipms_sms
+import fax
 
 DB = os.environ.get("PBX_DB", "/var/lib/pbx/pbx.db")
 log = logging.getLogger("pbx-agi")
@@ -286,6 +288,27 @@ def _handle_external_outbound(from_exten: str, dest_number: str, body: str):
     log.info("msg external queued: %s -> %s via DID %s", from_exten, dest_e164, sender_did)
 
 
+def _agi_cmd(conn, f, cmd):
+    """Send one AGI command and read Asterisk's reply line."""
+    conn.sendall((cmd + "\n").encode())
+    return (f.readline() or "").strip()
+
+
+def handle_fax_check(conn, f, agi_vars):
+    """[trunk-in]: FAXWAIT = seconds to listen for a fax on this DID (0 = off)."""
+    did = _arg(agi_vars, "agi_arg_1")
+    wait = fax.fax_wait(did) if re.fullmatch(r"\+?\d{3,20}", did or "") else 0
+    _agi_cmd(conn, f, f'SET VARIABLE FAXWAIT "{int(wait)}"')
+    if wait:
+        log.info("fax-check: listening %ss for a fax on %s", wait, did)
+
+
+def handle_fax_done(agi_vars):
+    """Hangup handler after ReceiveFAX: store, convert and email the fax."""
+    a = lambda i: _arg(agi_vars, f"agi_arg_{i}")
+    fax.fax_done(tif=a(1), status=a(2), pages=a(3), error=a(4), did=a(5), caller=a(6), station=a(7))
+
+
 def agi_session(conn):
     """Handle one AGI connection."""
     try:
@@ -304,6 +327,12 @@ def agi_session(conn):
                  {k: v for k, v in agi_vars.items() if k.startswith("agi_arg")})
         if script == "msg-route":
             handle_msg_route(agi_vars)
+        elif script == "fax-check":
+            handle_fax_check(conn, f, agi_vars)
+        elif script == "fax-done":
+            conn.sendall(b"200 result=0\n")    # let the dead channel go first
+            handle_fax_done(agi_vars)
+            return
         # Always answer OK
         conn.sendall(b"200 result=0\n")
     except Exception:

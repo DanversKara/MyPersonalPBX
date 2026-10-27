@@ -45,6 +45,7 @@ import mailer
 import network_ui
 import sso_ui
 import store_ui
+import fax_ui
 import entitlements
 import security
 import e911_ui
@@ -200,6 +201,11 @@ def _migrate(c):
         c.execute("ALTER TABLE logins ADD COLUMN guest_sms_mode TEXT NOT NULL DEFAULT 'off'")
         c.execute("UPDATE logins SET guest_sms_mode='all' WHERE is_guest AND guest_sms")
     # Single sign-on: "<issuer>|<subject>" of the provider account linked to this login.
+    # Fax on ordinary numbers.
+    for col, ddl in (("fax_detect", "INTEGER NOT NULL DEFAULT 0"), ("fax_wait", "INTEGER NOT NULL DEFAULT 4"),
+                     ("fax_email", "TEXT NOT NULL DEFAULT ''"), ("fax_email_users", "INTEGER NOT NULL DEFAULT 1")):
+        if col not in cols("inbound_routes"):
+            c.execute(f"ALTER TABLE inbound_routes ADD COLUMN {col} {ddl}")
     if "sso_subject" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN sso_subject TEXT NOT NULL DEFAULT ''")
     # One-time: the previous build seeded 3 free IVR menus per user; paid
@@ -504,7 +510,7 @@ REMOTE_ALLOWED_PREFIXES = (
     "/ucp", "/login", "/logout", "/auth/login", "/auth/logout", "/auth/me",
     "/stripe/webhook", "/healthz", "/api/vm-greeting", "/api/voicemail-audio/",
     "/api/recording-audio/", "/api/ivr-greeting/", "/api/v1/me", "/favicon",
-    "/hooks/voipms-sms", "/invite/", "/api/v1/app/", "/store",
+    "/hooks/voipms-sms", "/invite/", "/api/v1/app/", "/store", "/api/fax/",
 )
 
 
@@ -1795,17 +1801,18 @@ def routes_page(request: Request):
     if not s or s["role"] != "admin":
         return RedirectResponse("/login")
     with db() as c:
-        inb = c.execute("SELECT r.id, r.did, r.ring_extens, r.timeout_sec, r.enabled, r.ivr_id, m.name AS ivr_name,"
+        inb = c.execute("SELECT r.id, r.did, r.ring_extens, r.timeout_sec, r.enabled, r.ivr_id, m.name AS ivr_name, r.fax_detect,"
                         " r.group_id, g.name AS group_name, g.ring_seconds AS group_secs"
                         " FROM inbound_routes r LEFT JOIN ivr_menus m ON m.id=r.ivr_id"
                         " LEFT JOIN ring_groups g ON g.id=r.group_id ORDER BY r.did").fetchall()
         outb = c.execute("SELECT r.name, r.patterns, t.name as trunk, r.priority, r.enabled FROM outbound_routes r LEFT JOIN trunks t ON r.trunk_id=t.id ORDER BY r.priority").fetchall()
     def _dest(r):
+        fax = ' <span class="pill">+ fax</span>' if r['fax_detect'] else ''
         if r['ivr_id']:
-            return 'IVR: ' + esc(r['ivr_name'])
+            return 'IVR: ' + esc(r['ivr_name']) + fax
         if r['group_id']:
-            return 'Ring group: ' + esc(r['group_name'] or '(deleted)')
-        return 'Ring ' + esc(r['ring_extens'])
+            return 'Ring group: ' + esc(r['group_name'] or '(deleted)') + fax
+        return 'Ring ' + esc(r['ring_extens']) + fax
     def _secs(r):
         if r['ivr_id']:
             return '-'
@@ -1867,6 +1874,7 @@ def inbound_edit_page(request: Request, rid: str):
 <label>Timeout (seconds)<br><input name="timeout_sec" value="{v('timeout_sec','30')}" size="6"></label><br>
 <p><small>With an IVR menu selected, the menu answers and the ring list is only used if the menu is switched off.
 A number that rings a single user uses that user's own ring time and "answer with IVR" setting.</small></p>
+{fax_ui.route_fields(t)}
 <label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
 <button class="btn" type="submit">Save</button>
 <a class="btn ghost" href="/routes">Cancel</a>
@@ -1960,14 +1968,26 @@ async def inbound_edit_save(request: Request, rid: str,
             if c.execute("SELECT 1 FROM ivr_menus WHERE id=?", (int(ivr_id),)).fetchone():
                 ivr = int(ivr_id)
     timeout_sec = max(5, min(int(timeout_sec or 30), 300))
+    fax_vals, fax_err = fax_ui.parse_route_fields(await request.form())
+    if fax_err:
+        return HTMLResponse(page("Edit inbound route", f"<p class='bad'>{esc(fax_err)}</p>"
+                                 "<p><a href='javascript:history.back()'>Back</a></p>", s["username"], s["role"], "routes"), status_code=400)
     with db() as c:
+        fax_before = c.execute("SELECT COUNT(*) FROM inbound_routes WHERE fax_detect=1 AND enabled=1").fetchone()[0] > 0
         if rid == "new":
-            c.execute("INSERT INTO inbound_routes (did, ring_extens, timeout_sec, enabled, ivr_id, group_id) VALUES (?,?,?,?,?,?)",
-                      (did.strip(), ring_extens, timeout_sec, en, ivr, grp))
+            route_id = c.execute("INSERT INTO inbound_routes (did, ring_extens, timeout_sec, enabled, ivr_id, group_id) VALUES (?,?,?,?,?,?)",
+                                 (did.strip(), ring_extens, timeout_sec, en, ivr, grp)).lastrowid
         else:
             c.execute("UPDATE inbound_routes SET did=?, ring_extens=?, timeout_sec=?, enabled=?, ivr_id=?, group_id=? WHERE id=?",
                       (did.strip(), ring_extens, timeout_sec, en, ivr, grp, rid))
+            route_id = int(rid)
+        fax_ui.save_route_fields(c, route_id, fax_vals)
+        fax_after = c.execute("SELECT COUNT(*) FROM inbound_routes WHERE fax_detect=1 AND enabled=1").fetchone()[0] > 0
+        c.execute("INSERT INTO audit (actor, action, detail) VALUES (?,?,?)",
+                  (s["username"], "route.inbound.save", f"{did} fax={fax_vals['fax_detect']}"))
         c.commit()
+    if fax_before != fax_after:
+        _best_effort_apply()      # T.38 on the trunks follows whether any number listens for faxes
     return RedirectResponse("/routes", status_code=302)
 
 
@@ -4265,6 +4285,7 @@ email_ui.install(_sys.modules[__name__])
 network_ui.install(_sys.modules[__name__])
 sso_ui.install(_sys.modules[__name__])
 store_ui.install(_sys.modules[__name__], billing)
+fax_ui.install(_sys.modules[__name__])
 security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])
