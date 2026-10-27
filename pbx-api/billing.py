@@ -716,7 +716,7 @@ and renewals/cancellations update when anyone opens the billing pages or you pre
 <p><a class="btn" href="/billing/plans/new/edit">New plan</a></p>
 <h3>Subscribers</h3>
 <table><tr><th>User</th><th>Plan</th><th>Status</th><th>Renews / ends</th><th></th></tr>{srow}</table>
-{access_section(s)}"""
+{access_section(s)}{store_mode_section(s)}"""
     return HTMLResponse(M.page("Billing", body, s["username"], s["role"], "billing"))
 
 
@@ -730,6 +730,56 @@ def _onoff_select(name, value):
     cur = "" if value is None else ("1" if value else "0")
     return f'<select name="{name}">' + "".join(
         f'<option value="{k}" {"selected" if k == cur else ""}>{t}</option>' for k, t in opts) + "</select>"
+
+
+def store_mode_section(s):
+    """App store mode: which users' My Phone app shows no plan/billing info."""
+    csrf = M._csrf_field(s)
+    with M.db() as c:
+        r = c.execute("SELECT value FROM kv_settings WHERE key='app_hide_billing_all'").fetchone()
+        allon = bool(r and r[0] == "1")
+        site = M.app_api.account_site()
+        users = [dict(x) for x in c.execute(
+            "SELECT id, username, exten, display_name, app_hide_billing FROM logins WHERE role='user'"
+            " ORDER BY exten, username")]
+    boxes = "".join(
+        f'<label class="inline-chk" style="display:inline-block;margin:4px 18px 4px 0"><input type="checkbox" '
+        f'name="ids" value="{u["id"]}" {"checked" if u["app_hide_billing"] else ""}> {esc(u["display_name"] or u["username"])}'
+        f' <span class="muted">{esc(u["exten"] or "")}</span></label>' for u in users) or '<span class="muted">No users</span>'
+    return f"""<h3 id="store-mode">App store mode</h3>
+<p class="muted">For people using the My Phone app from Google Play (or another store). Their app shows <b>no</b> plan,
+usage, texts/minutes left, prices or "not in your plan" wording; anything unavailable just says
+"This isn't available on your account." Limits, minutes and plans still apply exactly the same, and
+the web My Phone portal is unchanged.</p>
+<form method="post" action="/billing/app-store-mode" class="panel">{csrf}
+<label class="switch"><input type="checkbox" name="all" value="1" {"checked" if allon else ""}> <span><b>All users</b> (every app, including new accounts)</span></label>
+<p style="margin:10px 0 4px"><b>Or only these users:</b></p>
+<div>{boxes}</div>
+<label style="display:block;margin-top:10px">Where to send them for account details<br>
+<input name="site" value="{esc(site)}" maxlength="80" placeholder="myphone.example.com" style="max-width:340px"></label>
+<p class="muted">The app shows "For account details, visit &lt;this&gt;" (plain text, not a button) in Settings and wherever
+something isn't available. Empty: "contact your administrator".</p>
+<p class="muted">Also on each login's edit page: <em>Hide plans &amp; billing in the My Phone app</em>. Apps pick it up within a minute.</p>
+<button class="btn ghost">Save</button>
+</form>"""
+
+
+async def admin_store_mode(request: Request):
+    s = await _admin_post(request)
+    if M._admin_locked():
+        return M._panel_locked(s, "billing")
+    f = await request.form()
+    ids = {int(x) for x in f.getlist("ids") if str(x).isdigit()}
+    with M.db() as c:
+        c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('app_hide_billing_all', ?)",
+                  ("1" if f.get("all") else "0",))
+        site = "".join(ch for ch in (f.get("site") or "").strip() if ch.isprintable() and ch not in "<>\"\'")[:80]
+        c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('app_account_site', ?)", (site,))
+        for (lid,) in c.execute("SELECT id FROM logins WHERE role='user'").fetchall():
+            c.execute("UPDATE logins SET app_hide_billing=? WHERE id=?", (1 if lid in ids else 0, lid))
+        c.commit()
+    _audit(s["username"], "billing.app_store_mode", f"all={1 if f.get('all') else 0} users={sorted(ids)}")
+    return _admin_back(msg="App store mode saved.")
 
 
 def access_section(s):
@@ -1073,6 +1123,7 @@ def install(app_module):
     app.post("/billing/test")(admin_test)
     app.post("/billing/sync")(admin_sync)
     app.post("/billing/access-defaults")(admin_access_defaults)
+    app.post("/billing/app-store-mode")(admin_store_mode)
     app.post("/billing/access/{login_id}")(admin_access_user)
     app.get("/billing/plans/{plan_id}/edit", **html)(admin_plan_edit)
     app.post("/billing/plans/{plan_id}/edit")(admin_plan_save)

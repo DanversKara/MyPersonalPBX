@@ -439,9 +439,12 @@ def api_list(request: Request):
     sent = M.fax_send.sent_for(me)
     for r in sent:
         r["has_pdf"] = bool(r["has_pdf"])
+    hidden = M.app_api.hide_billing(me)
+    for r in sent:
+        r["last_error"] = M.app_api.neutral(me, r.get("last_error") or "", hidden)
     return {"received": _received_json(me), "sent": sent, "numbers": M.fax_send.allowed_numbers(me),
             "branding": M.fax_brand.summary(me),
-            "can_send": can, "why_not": why, "max_mb": M.fax_send.MAX_UPLOAD // (1024 * 1024)}
+            "can_send": can, "why_not": M.app_api.neutral(me, why, hidden), "max_mb": M.fax_send.MAX_UPLOAD // (1024 * 1024)}
 
 
 async def api_send(request: Request):
@@ -456,7 +459,7 @@ async def api_send(request: Request):
                                 subject=f.get("subject") or "", note=f.get("note") or "",
                                 cover=(f.get("cover") or "1") == "1")
     if err:
-        return {"ok": False, "code": "invalid", "message": err}
+        return {"ok": False, "code": "invalid", "message": M.app_api.neutral(me, err)}
     M.ucp._audit(me, "fax.send", f"id={fid} to={f.get('to_number')} (app)")
     return {"ok": True, "code": "ok", "message": "Fax queued. Busy lines are tried again.", "id": fid}
 

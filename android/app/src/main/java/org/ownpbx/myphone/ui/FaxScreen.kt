@@ -986,7 +986,7 @@ private fun FaxSendScreen(
             }
             Text(
                 "Faxes go out one at a time. A busy line is tried again a few times; you'll see the result " +
-                    "under Sent (and by email if your account has one). Pages count toward your plan's minutes.",
+                    "under Sent (and by email if your account has one).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

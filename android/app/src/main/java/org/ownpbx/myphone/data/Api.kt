@@ -65,6 +65,10 @@ data class Overview(
     /** Faxes tab: a fax number rings this user, they have faxes, or they can send. */
     val fax_enabled: Boolean = false,
     val new_faxes: Int = 0,
+    /** App store mode: show no plan, usage or billing info anywhere. */
+    val hide_billing: Boolean = false,
+    /** Shown instead, e.g. "For account details, visit myphone.example.com". */
+    val account_note: String = "",
 )
 
 /** One quota'd feature on the Plan & usage screen. Null quota/left = unlimited. */
