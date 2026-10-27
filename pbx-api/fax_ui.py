@@ -96,6 +96,16 @@ def _is_recipient(login_id, fid):
                          (fid, login_id)).fetchone() is not None
 
 
+def show_tab(me):
+    """Faxes tab (web and app): they have faxes, a fax number rings them, or
+    they have a number to send from. Shown even before the PBX is ready to
+    send, so the page can say what's missing instead of the tab being absent."""
+    try:
+        return bool(user_has_faxes(me) or M.fax_send.allowed_numbers(me))
+    except Exception:
+        return False
+
+
 def user_has_faxes(me):
     """Show My Phone -> Faxes: they have faxes, or a fax number rings them."""
     try:
