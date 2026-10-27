@@ -37,6 +37,15 @@ if ! command -v sox >/dev/null 2>&1; then
     apt-get install -y -qq sox libsox-fmt-mp3 || echo "WARNING: sox install failed; only 8kHz mono WAV greetings will be accepted"
 fi
 
+# Faxes (Routes -> Detect faxes): Asterisk (root) writes the TIFF, pbx-agi
+# (pbx user) turns it into a PDF with tiff2pdf and the panel serves it.
+mkdir -p /var/spool/pbx/fax
+chown "$PBX_USER" /var/spool/pbx/fax
+chmod 750 /var/spool/pbx/fax
+if ! command -v tiff2pdf >/dev/null 2>&1; then
+    apt-get install -y -qq libtiff-tools || echo "NOTE: couldn't install libtiff-tools; faxes stay as TIFF files."
+fi
+
 # ARI recording spool must be writable by the brain (pbx user) so it can
 # move finished recordings out. Asterisk runs as root and can still write in.
 mkdir -p /var/spool/asterisk/recording
@@ -152,3 +161,20 @@ echo "Deploy done. Check:"
 echo "  systemctl status pbx-brain pbx-api pbx-agi"
 echo "  curl -s http://127.0.0.1:8001/healthz"
 echo "  asterisk -rx 'pjsip show endpoints'"
+
+# Fax detection is on for a number but this Asterisk can't receive faxes yet.
+if PBX_DB=/var/lib/pbx/pbx.db /opt/pbx/api-venv/bin/python - <<'PY' 2>/dev/null
+import os, sqlite3, sys
+c = sqlite3.connect(os.environ["PBX_DB"])
+try:
+    sys.exit(0 if c.execute("SELECT 1 FROM inbound_routes WHERE fax_detect=1 LIMIT 1").fetchone() else 1)
+except sqlite3.OperationalError:
+    sys.exit(1)
+PY
+then
+    if ! asterisk -rx "module show like res_fax_spandsp" 2>/dev/null | grep -q "1 modules loaded"; then
+        echo
+        echo "NOTE: a number has 'Detect faxes' on, but this Asterisk was built without fax support."
+        echo "      Run 'pbx-update --with-fax' when the phones are quiet (about 15 minutes, then a short restart)."
+    fi
+fi

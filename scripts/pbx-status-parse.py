@@ -3,6 +3,7 @@
 """Parse `pjsip show contacts` into JSON. Reads Asterisk CLI output on stdin,
 writes {"contacts": [...]} on stdout. Called by pbx-status.sh (root)."""
 import json
+import os
 import math
 import re
 import sys
@@ -35,7 +36,8 @@ def main():
         contacts.append({"aor": aor, "ip": ip, "port": port,
                          "transport": transport, "status": status,
                          "rtt_ms": rtt_ms})
-    print(json.dumps({"contacts": contacts}))
+    print(json.dumps({"contacts": contacts,
+                      "fax_ready": os.environ.get("PBX_FAX_READY", "0").strip() == "1"}))
 
 
 if __name__ == "__main__":

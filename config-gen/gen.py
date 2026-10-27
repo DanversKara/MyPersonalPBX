@@ -72,7 +72,12 @@ def render_pjsip():
     else:
         extensions = _clean_rows(q("SELECT * FROM logins WHERE enabled=1 AND exten!='' ORDER BY exten"))
         trunks = _clean_rows(q("SELECT * FROM trunks WHERE enabled=1 ORDER BY name"))
-    out = tpl.render(extensions=extensions, trunks=trunks)
+    # T.38 on the trunks only once some number listens for faxes.
+    try:
+        fax_on = bool(q("SELECT 1 FROM inbound_routes WHERE fax_detect=1 AND enabled=1 LIMIT 1"))
+    except Exception:
+        fax_on = False
+    out = tpl.render(extensions=extensions, trunks=trunks, fax_on=fax_on)
     atomic_write(os.path.join(AST_DIR, "pjsip.conf"), out)
 
 

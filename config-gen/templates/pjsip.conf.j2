@@ -48,6 +48,13 @@ outbound_auth=auth-trunk-{{ t.name }}
 aors=aor-trunk-{{ t.name }}
 from_user={{ t.from_user or t.username }}
 direct_media=no
+{% if fax_on %}
+; Fax on ordinary numbers (Routes -> Detect faxes): accept T.38 from the
+; provider; ReceiveFAX falls back to audio (G.711) when T.38 isn't offered.
+t38_udptl=yes
+t38_udptl_ec=redundancy
+t38_udptl_nat=yes
+{% endif %}
 
 [identify-trunk-{{ t.name }}]
 type=identify

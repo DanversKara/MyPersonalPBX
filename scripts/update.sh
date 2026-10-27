@@ -6,6 +6,8 @@
 #
 #   pbx-update          (deploy.sh installs this shortcut)
 #   pbx-update --edge   also update the edge even if kamailio/ didn't change
+#   pbx-update --with-fax  also rebuild Asterisk with fax support (one time,
+#                          ~15 min compile, then a short restart between calls)
 #
 # The edge's address is asked for once and kept in /etc/pbx/edge-host.
 set -euo pipefail
@@ -17,7 +19,13 @@ main() {
 SRC_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 EDGE_FILE=/etc/pbx/edge-host
 FORCE_EDGE=0
-[ "${1:-}" = "--edge" ] && FORCE_EDGE=1
+WITH_FAX=0
+for arg in "$@"; do
+    case "$arg" in
+        --edge) FORCE_EDGE=1 ;;
+        --with-fax) WITH_FAX=1 ;;
+    esac
+done
 
 cd "$SRC_DIR"
 command -v git >/dev/null || apt-get install -y -qq git
@@ -34,6 +42,11 @@ fi
 
 echo "== 2/3 Updating the PBX =="
 bash "$SRC_DIR/scripts/deploy.sh"
+
+if [ "$WITH_FAX" -eq 1 ]; then
+    echo "== Fax support (one-time Asterisk rebuild) =="
+    bash "$SRC_DIR/scripts/enable-fax.sh"
+fi
 
 echo "== 3/3 Edge server =="
 if [ "$FORCE_EDGE" -eq 0 ] && git diff --quiet "$OLD" "$NEW" -- kamailio/; then

@@ -509,6 +509,29 @@ Your SIP provider(s): registrar, username, secret and codecs.
 - **Outside line prefix**: *Off* (default), *Optional* (9 + number and the
   number alone both work) or *Required*, with the digit 9 or 8. The prefix is
   removed before dialing out; 911 never needs it.
+- **Detect faxes** (per number): receive faxes on an ordinary number, no
+  separate fax line. See *Faxes* below.
+
+### Faxes
+Turn on **Routes → (a number) → Detect faxes**. Calls to that number are then
+answered at once and the caller hears ringing while the PBX listens for a fax
+machine's tone (3-8 seconds, 4 by default). A fax is received (G.711, or T.38
+when the provider offers it), turned into a PDF and:
+
+- **emailed** to the addresses you list for the number and, optionally, to the
+  people the number rings (their notification email);
+- shown in **My Phone → Faxes** for those people (with a new-fax count), and
+  for the admin under **Faxes** (view, download, delete). Kept until deleted.
+
+Anything that isn't a fax carries on exactly as before (ring, menu, cells,
+voicemail). It works with an ordinary voip.ms DID. If the helper service is
+down, calls skip the listening and ring normally.
+
+**One-time setup:** Asterisk needs fax support (spandsp). New installs have it.
+On an existing PBX run **`pbx-update --with-fax`** when the phones are quiet: it
+compiles Asterisk with fax (about 10-20 minutes; calls keep working) and
+restarts it once no call is in progress. The Routes and Faxes pages say if it's
+still missing. Sending faxes is planned next.
 
 ### Ring groups
 ![Ring groups](docs/screenshots/07-ring-groups.png) ![Edit ring group](docs/screenshots/08-ring-group-edit.png)

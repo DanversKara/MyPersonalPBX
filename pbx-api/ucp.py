@@ -279,9 +279,14 @@ def _dur(sec):
 def _render(request, s, me, tab, title, body):
     # The sub-nav (Overview, Calls, Voicemail, ..., Contacts, Settings) is
     # shown to every user, not just admins: these are all per-user pages.
+    tabs = list(SUBTABS)
+    # Faxes only for people a fax number rings (or who already have faxes).
+    if tab == "ucp-fax" or M.fax_ui.user_has_faxes(me):
+        n = M.fax_ui.unseen_count(me)
+        tabs.insert(3, ("ucp-fax", "/ucp/faxes", "Faxes" + (f" ({n})" if n else "")))
     sub = '<div class="subtabs">' + "".join(
         f'<a href="{href}" class="{"on" if key == tab else ""}">{esc(label)}</a>'
-        for key, href, label in SUBTABS) + "</div>"
+        for key, href, label in tabs) + "</div>"
     head = (f'<div class="ucp-head"><div><h2>{esc(title)}</h2>'
             f'<div class="muted">{esc(me["display_name"] or me["username"])}'
             f'{" · ext " + esc(me["exten"]) if me["exten"] else ""}</div></div></div>')
