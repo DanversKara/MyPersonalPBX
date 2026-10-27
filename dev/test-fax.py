@@ -90,5 +90,16 @@ outside = tempfile.mktemp(suffix=".tif"); open(outside, "w").write("x")
 fid4 = fax.fax_done(outside, "SUCCESS", "1", "", "15550001111", "", "")
 row4 = tuple(d.execute("SELECT status, path FROM faxes WHERE id=?", (fid4,)).fetchone())
 check("a file outside the fax folder is never used", row4 == ("failed", "") and os.path.exists(outside), row4)
+# A fax that failed in the final handshake after a page arrived: keep it.
+SENT.clear()
+fidp = fax.fax_done(make_tif(), "FAILED", "0", "Unexpected command after page received", "15550001111", "18772333839", "")
+fp = d.execute("SELECT * FROM faxes WHERE id=?", (fidp,)).fetchone()
+check("partial fax kept as a PDF with a note", fp["status"] == "ok" and fp["pages"] == 1 and fp["path"].endswith(".pdf")
+      and "May be incomplete" in fp["error"], dict(fp))
+for _ in range(80):
+    if any("may be missing" in x[2] for x in SENT): break
+    time.sleep(0.1)
+check("its email attaches the PDF and says it may be incomplete",
+      any(x[3] and "may be missing" in x[2] for x in SENT), [(x[1], x[2][:200]) for x in SENT])
 print("ALL PASSED" if not fails else f"FAILED {fails}")
 sys.exit(1 if fails else 0)

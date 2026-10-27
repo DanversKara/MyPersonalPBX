@@ -133,6 +133,15 @@ def to_pdf(tif):
         return ""
 
 
+def tiff_pages(path):
+    """How many pages a TIFF holds (0 if none or unreadable)."""
+    try:
+        r = subprocess.run(["tiffinfo", path], capture_output=True, text=True, timeout=30)
+        return r.stdout.count("TIFF Directory")
+    except (OSError, subprocess.SubprocessError):
+        return 0
+
+
 def _inside(path):
     real = os.path.realpath(path or "")
     return real.startswith(os.path.realpath(FAX_DIR) + os.sep)
@@ -146,6 +155,15 @@ def fax_done(tif, status, pages, error, did, caller, station):
         pages_n = int(pages or 0)
     except ValueError:
         pages_n = 0
+    # Over internet lines a fax often fails in the final handshake after the
+    # pages arrived. Keep what came through instead of throwing it away.
+    if not ok and tif and _inside(tif) and os.path.isfile(tif) and os.path.getsize(tif) > 0:
+        got = tiff_pages(tif)
+        if got > 0:
+            ok = True
+            pages_n = max(pages_n, got)
+            error = ("May be incomplete (the call ended with: %s)" % (error or "an error"))[:200]
+            log.info("fax: kept %d page(s) from a fax that ended with an error", got)
     pdf = to_pdf(tif) if ok else ""
     if pdf:
         try:
@@ -199,6 +217,8 @@ def _email(fid, to):
         subject = f"Fax from {who} ({f['pages']} page{'s' if f['pages'] != 1 else ''})"
         text = (f"You received a fax on {f['did']}.\n\nFrom:     {who}\nReceived: {when}\n"
                 f"Pages:    {f['pages']}\n\n"
+                + (f"Note: {f['error']}. Some pages may be missing; ask the sender if anything looks short.\n\n"
+                   if f["error"] else "")
                 + (f"View it online: {link}/ucp/faxes\n" if link else "")
                 + "The fax is attached as a PDF.\n")
         attach = None
