@@ -61,7 +61,14 @@ import org.ownpbx.myphone.data.FaxList
 import org.ownpbx.myphone.data.FaxOut
 
 /** A fax open in the viewer. */
-private data class Viewing(val id: Long, val sent: Boolean, val title: String, val number: String)
+private data class Viewing(
+    val id: Long,
+    val sent: Boolean,
+    val title: String,
+    val number: String,
+    /** Set: a cover-page preview with these details instead of a stored fax. */
+    val preview: Map<String, String>? = null,
+)
 
 /** Prefill for the send form ("Send again"). */
 private data class Draft(
@@ -103,6 +110,7 @@ fun FaxScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier) {
             model,
             v,
             cacheDir,
+            modifier,
             onClose = { viewing = null },
             onDelete = {
                 viewing = null
@@ -123,6 +131,7 @@ fun FaxScreen(model: AppModel, snack: SnackbarHostState, modifier: Modifier) {
             model,
             data ?: FaxList(),
             d,
+            modifier,
             onClose = { draft = null },
             onSent = {
                 draft = null
@@ -498,12 +507,17 @@ private fun FaxViewer(
     model: AppModel,
     v: Viewing,
     cacheDir: File,
+    modifier: Modifier,
     onClose: () -> Unit,
     onDelete: () -> Unit,
     onOpened: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    val file = remember(v) { File(cacheDir, (if (v.sent) "s-" else "r-") + "${v.id}.pdf") }
+    val file =
+        remember(v) {
+            if (v.preview != null) File(cacheDir, "cover-preview.pdf")
+            else File(cacheDir, (if (v.sent) "s-" else "r-") + "${v.id}.pdf")
+        }
     var doc by remember { mutableStateOf<PdfDoc?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var zoom by remember { mutableFloatStateOf(1f) }
@@ -511,15 +525,22 @@ private fun FaxViewer(
 
     LaunchedEffect(v) {
         try {
-            if (!file.exists() || file.length() < 8) model.api().downloadFax(v.id, v.sent, file)
+            if (v.preview != null) model.api().coverPreview(file, v.preview)
+            else if (!file.exists() || file.length() < 8) model.api().downloadFax(v.id, v.sent, file)
             doc = withContext(Dispatchers.IO) { PdfDoc(file) }
-            if (!v.sent) onOpened()
+            if (!v.sent && v.preview == null) onOpened()
         } catch (e: ApiException) {
             if (e.status == 401) {
                 model.signedOut("You were signed out. Please sign in again.")
                 return@LaunchedEffect
             }
-            error = if (e.status == 404) "This fax isn't on the PBX any more." else "Couldn't download the fax (error ${e.status})."
+            error =
+                when {
+                    v.preview != null && e.status == 404 -> "Your PBX needs an update (pbx-update) for cover previews."
+                    v.preview != null -> e.message ?: "Couldn't draw the preview (error ${e.status})."
+                    e.status == 404 -> "This fax isn't on the PBX any more."
+                    else -> "Couldn't download the fax (error ${e.status})."
+                }
         } catch (e: Exception) {
             file.delete()
             error = "Couldn't open the fax. Check your connection and try again."
@@ -546,7 +567,9 @@ private fun FaxViewer(
         }
     }
 
+    // modifier: stays clear of the tab bar at the bottom.
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = {
@@ -580,7 +603,7 @@ private fun FaxViewer(
                                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, null) },
                                 enabled = doc != null,
                             )
-                            if (!v.sent && v.number.count { it.isDigit() } >= 7)
+                            if (v.preview == null && !v.sent && v.number.count { it.isDigit() } >= 7)
                                 DropdownMenuItem(
                                     { Text("Call back") },
                                     {
@@ -590,14 +613,15 @@ private fun FaxViewer(
                                     },
                                     leadingIcon = { Icon(Icons.Filled.Call, null) },
                                 )
-                            DropdownMenuItem(
-                                { Text("Delete") },
-                                {
-                                    menu = false
-                                    onDelete()
-                                },
-                                leadingIcon = { Icon(Icons.Filled.Delete, null) },
-                            )
+                            if (v.preview == null)
+                                DropdownMenuItem(
+                                    { Text("Delete") },
+                                    {
+                                        menu = false
+                                        onDelete()
+                                    },
+                                    leadingIcon = { Icon(Icons.Filled.Delete, null) },
+                                )
                         }
                     }
                 },
@@ -669,6 +693,7 @@ private fun FaxSendScreen(
     model: AppModel,
     data: FaxList,
     start: Draft,
+    modifier: Modifier,
     onClose: () -> Unit,
     onSent: () -> Unit,
 ) {
@@ -684,6 +709,14 @@ private fun FaxSendScreen(
     var fromOpen by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
+    var preview by remember { mutableStateOf<Viewing?>(null) }
+    val cacheDir = remember { File(ctx.cacheDir, "faxes").apply { mkdirs() } }
+
+    preview?.let { p ->
+        BackHandler { preview = null }
+        FaxViewer(model, p, cacheDir, modifier, onClose = { preview = null }, onDelete = {}, onOpened = {})
+        return
+    }
 
     val pick =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -758,6 +791,7 @@ private fun FaxSendScreen(
     }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text("Send a fax") },
@@ -766,7 +800,8 @@ private fun FaxSendScreen(
         }
     ) { pad ->
         Column(
-            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.padding(pad).fillMaxSize().imePadding().verticalScroll(rememberScrollState())
+                .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // 1. the document
@@ -864,6 +899,48 @@ private fun FaxSendScreen(
                     )
                 }
                 Switch(cover, { cover = it })
+            }
+            if (cover) {
+                val brand = data.branding
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Badge, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            when {
+                                brand == null || (brand.name.isBlank() && !brand.logo) -> "Plain cover page"
+                                brand.own -> "Your branding: " + brand.name.ifBlank { "logo" }
+                                else -> "Branding: " + brand.name.ifBlank { "logo" }
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (brand?.editable == true)
+                            Text(
+                                "Change your logo and company details in My Phone (web) → Faxes → My fax branding",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                    }
+                    TextButton({
+                        preview =
+                            Viewing(
+                                0,
+                                false,
+                                "Cover page preview",
+                                "",
+                                preview =
+                                    mapOf(
+                                        "to_name" to toName.trim(),
+                                        "to_number" to to.filter { it.isDigit() },
+                                        "from_did" to from,
+                                        "subject" to subject.trim(),
+                                        "note" to note.trim(),
+                                    ),
+                            )
+                    }) {
+                        Text("Preview")
+                    }
+                }
             }
             OutlinedTextField(
                 toName,

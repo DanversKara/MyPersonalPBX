@@ -48,8 +48,9 @@ th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border)}
 th{background:var(--th-bg)}
 .btn{background:var(--accent);color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer}
 .btn:hover{background:var(--accent-hover)}
-input,select{padding:8px;border:1px solid var(--input-border);border-radius:4px;margin:4px 0;background:var(--input-bg);color:var(--fg)}
-input::placeholder{color:var(--muted2)}
+input,select,textarea{padding:8px;border:1px solid var(--input-border);border-radius:4px;margin:4px 0;background:var(--input-bg);color:var(--fg)}
+input::placeholder,textarea::placeholder{color:var(--muted2)}
+textarea{font:inherit;resize:vertical}
 .tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
 .tabs a{padding:8px 16px;background:var(--card);border-radius:4px;text-decoration:none;color:var(--fg)}
 .tabs a.on{background:var(--accent);color:#fff}
@@ -97,7 +98,7 @@ tr.unread td{font-weight:600}
 .panel{border:1px solid var(--border);border-radius:8px;padding:16px}
 .panel h3{margin-top:0}
 .panel label{display:block;margin:10px 0;font-size:14px}
-.panel input[type=text],.panel input:not([type]),.panel input[type=email],.panel input[type=password]{width:100%;box-sizing:border-box}
+.panel input[type=text],.panel input:not([type]),.panel input[type=email],.panel input[type=password],.panel textarea{width:100%;box-sizing:border-box}
 .switch{display:flex!important;align-items:center;gap:8px;font-weight:600}
 .switch input{width:18px;height:18px}
 table.kv td:first-child{color:var(--muted-fg);width:110px}

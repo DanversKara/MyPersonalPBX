@@ -51,12 +51,33 @@ def route_for(c, did):
     return None
 
 
+def fax_allowed(c, login) -> bool:
+    """Faxing is a plan feature (mirrors pbx-api entitlements.quota 'fax').
+    Admins always may."""
+    try:
+        if login["role"] == "admin":
+            return True
+        q = c.execute("SELECT quota FROM user_entitlements WHERE login_id=? AND feature='fax'",
+                      (login["id"],)).fetchone()
+        if q is not None:
+            return int(q[0]) != 0
+        d = c.execute("SELECT value FROM kv_settings WHERE key='default_quota_fax'").fetchone()
+        return bool(d and str(d[0]).strip() not in ("", "0"))
+    except (sqlite3.OperationalError, IndexError, KeyError, ValueError):
+        return False
+
+
 def fax_wait(did) -> int:
-    """Seconds to listen for a fax on this number; 0 = fax detection off."""
+    """Seconds to listen for a fax on this number; 0 = fax detection off.
+    Off too when the people the number rings have no fax in their plan (a
+    number that rings no one, e.g. a menu run by the admin, still gets it)."""
     try:
         with db() as c:
             r = route_for(c, did)
             if not r or not r["fax_detect"]:
+                return 0
+            who = recipients(c, r)
+            if who and not any(fax_allowed(c, u) for u in who):
                 return 0
             w = int(r["fax_wait"] or 4)
     except (sqlite3.OperationalError, IndexError, KeyError, ValueError):
@@ -126,7 +147,7 @@ def fax_done(tif, status, pages, error, did, caller, station):
     size = os.path.getsize(keep) if keep else 0
     with db() as c:
         route = route_for(c, did)
-        who = recipients(c, route)
+        who = [u for u in recipients(c, route) if fax_allowed(c, u)]
         fid = c.execute(
             "INSERT INTO faxes (did, caller, remote_station, pages, status, error, path, bytes)"
             " VALUES (?,?,?,?,?,?,?,?)",

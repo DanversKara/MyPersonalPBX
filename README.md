@@ -543,6 +543,18 @@ The **Sent** list shows waiting / sending / will retry / sent / failed, and the
 sender is emailed the result. Answered time counts toward the plan's outside
 minutes (30 faxes a day per user at most).
 
+**Fax is a plan feature** (Billing → plan → *Fax*, like push-to-talk): new
+accounts have it off; plans that include it turn it on, and you can make a
+per-user exception. Without it a user has no Faxes tab, can't send, and a fax
+number that only rings them isn't listened on. Admins always can.
+
+**Branding:** under **Faxes → Fax branding** set the PBX's logo (turned into
+crisp fax black & white), logo text / company name, address, phone, email,
+website, a footer notice (e.g. confidentiality) and the header line printed on
+every page; *Preview cover page* shows exactly what's sent. Tick *Let users use
+their own branding* and each user can set theirs under **My Phone → Faxes → My
+fax branding**. With nothing set the cover page is plain (no PBX name on it).
+
 **In the app:** a **Faxes** tab appears for anyone a fax number rings or who
 can send faxes: received and sent faxes, an in-app viewer (zoom, share, open in
 another app), a new-fax notification, and the send form above.

@@ -101,9 +101,16 @@ def show_tab(me):
     they have a number to send from. Shown even before the PBX is ready to
     send, so the page can say what's missing instead of the tab being absent."""
     try:
-        return bool(user_has_faxes(me) or M.fax_send.allowed_numbers(me))
+        if _has_received(me):
+            return True          # keep access to faxes already received
+        return M.fax_send.entitled(me) and bool(user_has_faxes(me) or M.fax_send.allowed_numbers(me))
     except Exception:
         return False
+
+
+def _has_received(me):
+    with M.db() as c:
+        return c.execute("SELECT 1 FROM fax_recipients WHERE login_id=? LIMIT 1", (me["id"],)).fetchone() is not None
 
 
 def user_has_faxes(me):
@@ -221,6 +228,10 @@ def admin_page(request: Request):
         notes.append('<div class="flash bad">This Asterisk can\'t receive faxes yet: run <code>pbx-update --with-fax</code> '
                      'on the PBX when the phones are quiet (about 15 minutes, then a short restart).</div>')
     nums = ", ".join(esc(r["did"]) for r in on) or "none yet"
+    if request.query_params.get("brand_saved"):
+        notes.append('<div class="flash ok">Fax branding saved.</div>')
+    if request.query_params.get("brand_err"):
+        notes.append(f'<div class="flash bad">{esc(request.query_params["brand_err"])}</div>')
     msg = request.query_params.get("deleted")
     if msg and msg.isdigit():
         notes.append(f'<div class="flash ok">Deleted {int(msg)} fax{"es" if int(msg) != 1 else ""}.</div>')
@@ -232,7 +243,7 @@ def admin_page(request: Request):
 <button class="btn ghost danger" form="faxdel" name="all" value="1" onclick="return confirm('Delete all {total} faxes?')">Delete all</button></div>
 <div class="scrollbox"><table><tr><th><input type="checkbox" id="faxdel-all" aria-label="Select all"></th><th>Received</th><th>Number</th><th>From</th><th>Pages</th><th>For</th><th></th></tr>
 {_rows(faxes, True, "faxdel") or '<tr><td colspan="7" class="muted">No faxes yet.</td></tr>'}</table></div>
-{M.ucp._bulk_js("faxdel")}{_admin_sent()}"""
+{M.ucp._bulk_js("faxdel")}{_admin_sent()}{M.fax_brand.admin_section(s)}"""
     return HTMLResponse(M.page("Faxes", body, s["username"], s["role"], "faxes"))
 
 
@@ -295,6 +306,8 @@ def user_page(request: Request):
         flash = '<div class="flash ok">Fax queued. It\'s sent in a moment; the status is below (busy lines are retried).</div>'
     if request.query_params.get("err"):
         flash = f'<div class="flash bad">{esc(request.query_params["err"])}</div>'
+    if request.query_params.get("brand_saved"):
+        flash = '<div class="flash ok">Fax branding saved. Use Preview to see your cover page.</div>'
     if can:
         opts = "".join(f'<option value="{esc(n)}">{esc(n)}</option>' for n in nums)
         send = f"""<details class="panel" {'open' if request.query_params.get("err") else ''}><summary><b>Send a fax</b></summary>
@@ -329,7 +342,7 @@ def user_page(request: Request):
 <div class="bulkbar"><button class="btn ghost" form="ufax">Delete selected</button></div>
 <div class="scrollbox"><table><tr><th><input type="checkbox" id="ufax-all" aria-label="Select all"></th><th>Received</th><th>Number</th><th>From</th><th>Pages</th><th></th></tr>
 {_rows(faxes, False, "ufax") or '<tr><td colspan="6" class="muted">No faxes yet.</td></tr>'}</table></div>
-{M.ucp._bulk_js("ufax")}{sent_html}"""
+{M.ucp._bulk_js("ufax")}{sent_html}{M.fax_brand.user_section(s, me) if M.fax_send.entitled(me) else ""}"""
     return M.ucp._render(request, s, me, "ucp-fax", "Faxes", body)
 
 
@@ -427,6 +440,7 @@ def api_list(request: Request):
     for r in sent:
         r["has_pdf"] = bool(r["has_pdf"])
     return {"received": _received_json(me), "sent": sent, "numbers": M.fax_send.allowed_numbers(me),
+            "branding": M.fax_brand.summary(me),
             "can_send": can, "why_not": why, "max_mb": M.fax_send.MAX_UPLOAD // (1024 * 1024)}
 
 

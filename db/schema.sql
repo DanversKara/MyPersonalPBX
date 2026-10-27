@@ -269,6 +269,8 @@ INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_call_minut
 INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_voicemail', '0');
 INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_messages', '0');
 INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_recording', '0');
+-- No plan = no faxing (send or receive).
+INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_fax', '0');
 
 -- Stripe billing (monthly plans). Keys live in kv_settings:
 --   stripe_secret, stripe_webhook_secret, billing_public_url (optional).
@@ -283,6 +285,7 @@ CREATE TABLE IF NOT EXISTS billing_plans (
   messages INTEGER NOT NULL DEFAULT 0,       -- texts sent / month (-1 = unlimited)
   recording INTEGER NOT NULL DEFAULT 0,      -- 1 = "record my calls" included
   push_to_talk INTEGER NOT NULL DEFAULT 0,   -- 1 = push-to-talk (*88) included
+  fax INTEGER NOT NULL DEFAULT 0,            -- 1 = send and receive faxes
   price_cents INTEGER NOT NULL,              -- per month
   currency TEXT NOT NULL DEFAULT 'usd',
   stripe_mode TEXT NOT NULL DEFAULT '',      -- test | live: which account the ids belong to
@@ -546,7 +549,24 @@ CREATE TABLE IF NOT EXISTS fax_outbox (
   answered_at INTEGER NOT NULL DEFAULT 0,
   tif_path TEXT NOT NULL DEFAULT '',
   pdf_path TEXT NOT NULL DEFAULT '',
+  header TEXT NOT NULL DEFAULT '',           -- top line on every page (from the branding)
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   sent_at TEXT DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fax_outbox_status ON fax_outbox(status, next_try);
+-- Fax branding (cover page + header line). login_id 0 = the PBX's (admin,
+-- Faxes page); a user's own row is used when use_own=1 and the admin allows
+-- it (kv fax_brand_users, default '1'). Logos: /var/lib/pbx/fax-brand/.
+CREATE TABLE IF NOT EXISTS fax_branding (
+  login_id INTEGER PRIMARY KEY,
+  use_own INTEGER NOT NULL DEFAULT 0,
+  company TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  website TEXT NOT NULL DEFAULT '',
+  footer TEXT NOT NULL DEFAULT '',
+  header TEXT NOT NULL DEFAULT '',
+  logo TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

@@ -16,6 +16,7 @@ Features (quota meaning):
   voicemail     callers can leave messages                 (0 = off, 1 = on)
   messages      texts the user may send per month          (0 = none, -1 = unlimited)
   recording     "record my calls" available                (0 = off, 1 = on)
+  fax           send and receive faxes                     (0 = off, 1 = on)
 
 Internal (extension-to-extension) calls are always free. Admin logins are
 never limited. Monthly counters reset on the 1st (server local time).
@@ -32,6 +33,7 @@ FEATURES = {
     "recording": ("Call recording", "bool"),
     "ivr_menus": ("IVR menus", "count"),
     "push_to_talk": ("Push-to-talk", "bool"),
+    "fax": ("Fax (send & receive)", "bool"),
 }
 
 # Shown to users before they can turn on "Record my calls". Bump the
