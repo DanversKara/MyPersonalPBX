@@ -559,6 +559,14 @@ fax branding**. With nothing set the cover page is plain (no PBX name on it).
 can send faxes: received and sent faxes, an in-app viewer (zoom, share, open in
 another app), a new-fax notification, and the send form above.
 
+### App store mode (Google Play)
+**Billing → App store mode** (or *Logins → Edit → Hide plans & billing in the
+My Phone app*): for all users or the ones you tick, the app shows no plan,
+usage, texts/minutes left, prices or "not in your plan" wording. Settings shows
+"For account details, visit <your site>" (plain text) and unavailable features
+say "This isn't available on your account." The PBX enforces it as well; plans
+and limits still apply, and the web portal is unchanged.
+
 ### Ring groups
 ![Ring groups](docs/screenshots/07-ring-groups.png) ![Edit ring group](docs/screenshots/08-ring-group-edit.png)
 - **Name** and an optional **internal number** that phones can dial.
