@@ -41,6 +41,18 @@ def norm(v):
 
 # ------------------------------------------------------------------ who may send
 
+def entitled(me):
+    """Faxing (send and receive) is a plan feature (Billing: Fax). Admins always."""
+    if (me["role"] if "role" in me.keys() else "") == "admin":
+        return True
+    try:
+        import entitlements as ent
+        with M.db() as c:
+            return ent.quota(c, me["id"], "fax") != 0
+    except Exception:
+        return False
+
+
 def allowed_numbers(me):
     """DIDs this login may send from: numbers that ring them (all, for admins)."""
     ext = me["exten"] or ""
@@ -80,6 +92,8 @@ def minutes_ok(me):
 
 def send_status(me):
     """(can_send, reason if not)."""
+    if not entitled(me):
+        return False, "Faxing isn't included in your plan. Choose a plan with fax to send and receive faxes."
     if not allowed_numbers(me):
         return False, "No phone number is set up for you to send from. Ask the admin."
     if not fax_ready():
@@ -98,51 +112,9 @@ def fax_ready():
 
 # ------------------------------------------------------------------ building the pages
 
-def _ps_text(s):
-    s = str(s or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    return "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in s)
-
-
-def _wrap(text, width=78, max_lines=28):
-    lines = []
-    for para in str(text or "").splitlines() or [""]:
-        words, cur = para.split(), ""
-        if not words:
-            lines.append("")
-        for w in words:
-            if len(cur) + len(w) + 1 > width:
-                lines.append(cur)
-                cur = w[:width]
-            else:
-                cur = (cur + " " + w).strip()
-        if words:
-            lines.append(cur)
-    return lines[:max_lines]
-
-
-def cover_ps(path, c):
-    """A plain cover page (PostScript) from the details in dict c."""
-    y, out = 700, ["%!PS", "/H {/Helvetica findfont exch scalefont setfont} def",
-                   "/HB {/Helvetica-Bold findfont exch scalefont setfont} def",
-                   "48 HB 72 700 moveto (FAX) show"]
-    y = 640
-    rows = [("To", c.get("to_name")), ("Fax", c.get("to_number")), ("From", c.get("from_name")),
-            ("Phone", c.get("from_number")), ("Date", time.strftime("%B %d, %Y  %I:%M %p")),
-            ("Pages", f"{c.get('pages', '?')} including this cover"), ("Subject", c.get("subject"))]
-    for k, v in rows:
-        if not v:
-            continue
-        out.append(f"14 HB 72 {y} moveto ({_ps_text(k)}:) show 14 H 160 {y} moveto ({_ps_text(v)[:70]}) show")
-        y -= 26
-    if c.get("note"):
-        y -= 14
-        out.append(f"1 setlinewidth 72 {y + 16} moveto 540 {y + 16} lineto stroke")
-        for line in _wrap(c["note"]):
-            out.append(f"12 H 72 {y} moveto ({_ps_text(line)}) show")
-            y -= 17
-    out.append("showpage")
-    with open(path, "w") as f:
-        f.write("\n".join(out) + "\n")
+def cover_ps(path, c, brand=None):
+    """The cover page; layout and branding live in fax_brand.py."""
+    M.fax_brand.cover_ps(path, c, brand)
 
 
 def _image_to_pdf(src, dst):
@@ -180,7 +152,7 @@ def _tiff_pages(path):
         return max(1, r.stdout.count("TIFF Directory"))
 
 
-def build(job, data, filename, cover):
+def build(job, data, filename, cover, brand=None):
     """Write job/fax.tif (what is sent) and job/fax.pdf (to look at).
     Returns the page count. Raises ValueError with a readable reason."""
     ext = os.path.splitext(filename or "")[1].lower()
@@ -208,7 +180,7 @@ def build(job, data, filename, cover):
     if cover:
         cover = dict(cover, pages=pages + 1)
         ps = os.path.join(job, "cover.ps")
-        cover_ps(ps, cover)
+        M.fax_brand.cover_ps(ps, cover, brand)
         _gs(base + [f"-sOutputFile={tif}", ps, doc])
         pages += 1
         os.remove(body_tif)
@@ -250,6 +222,9 @@ def queue(me, data, filename, to_number, from_did, to_name="", subject="", note=
                           (me["id"],)).fetchone()[0]
     if today >= DAILY_LIMIT and me["role"] != "admin":
         return None, f"That's {DAILY_LIMIT} faxes in a day; try again tomorrow."
+    with M.db() as c:
+        brand = M.fax_brand.for_login(c, me)
+    header = M.fax_brand.header_text(brand, me)
     os.makedirs(out_dir(), exist_ok=True)
     job = tempfile.mkdtemp(prefix="job-", dir=out_dir())
     os.chmod(job, 0o755)      # Asterisk (root) reads it; nothing secret beyond the fax itself
@@ -257,7 +232,7 @@ def queue(me, data, filename, to_number, from_did, to_name="", subject="", note=
         pages = build(job, data, filename, {
             "to_name": to_name.strip()[:60], "to_number": to, "subject": subject.strip()[:80],
             "note": note.strip()[:2000], "from_name": (me["display_name"] or me["username"] or "")[:60],
-            "from_number": did} if cover else None)
+            "from_number": did} if cover else None, brand)
     except ValueError as e:
         shutil.rmtree(job, ignore_errors=True)
         return None, str(e)
@@ -268,10 +243,10 @@ def queue(me, data, filename, to_number, from_did, to_name="", subject="", note=
     with M.db() as c:
         fid = c.execute(
             "INSERT INTO fax_outbox (login_id, from_did, to_number, to_name, subject, note, cover, pages,"
-            " status, tif_path, pdf_path, filename) VALUES (?,?,?,?,?,?,?,?,'queued',?,?,?)",
+            " status, tif_path, pdf_path, filename, header) VALUES (?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
             (me["id"], did, to, to_name.strip()[:60], subject.strip()[:80], note.strip()[:2000],
              1 if cover else 0, pages, os.path.join(job, "fax.tif"), pdf if os.path.isfile(pdf) else "",
-             os.path.basename(filename or "")[:120])).lastrowid
+             os.path.basename(filename or "")[:120], header)).lastrowid
         c.commit()
     return fid, ""
 

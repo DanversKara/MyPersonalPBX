@@ -79,7 +79,8 @@ def _send(row):
     if not ep:
         return _finish(row, False, "No outbound route matches that number.")
     name = (row["display_name"] or row["username"] or "Fax").replace('"', "")[:40]
-    header = f"{name} {row['from_did']}"[:50]
+    # The sender's branding header (pbx-api fax_brand); older rows: name + number.
+    header = ((row.get("header") or "").strip() or f"{name} {row['from_did']}")[:50]
     try:
         with _lock:
             ch = M.CLIENT.channels.originate(

@@ -25,6 +25,7 @@ for u, pw in (("phone8800", "pw-8800-x"), ("phone8801", "pw-8801-x")):
     d.execute("UPDATE logins SET pwhash=? WHERE username=?", (bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode(), u))
 adm = d.execute("SELECT username FROM logins WHERE role='admin' LIMIT 1").fetchone()[0]
 d.execute("UPDATE logins SET pwhash=? WHERE username=?", (bcrypt.hashpw(b"pw-admin-1", bcrypt.gensalt()).decode(), adm))
+d.execute("INSERT OR REPLACE INTO kv_settings (key,value) VALUES ('default_quota_fax','1')")  # fax in everyone's plan
 d.commit()
 A._asterisk_status = lambda: {"contacts": [], "fax_ready": False}
 A._best_effort_apply = lambda: APPLIED.append(1)

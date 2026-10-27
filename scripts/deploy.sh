@@ -42,6 +42,9 @@ fi
 mkdir -p /var/spool/pbx/fax /var/spool/pbx/fax/out
 chown "$PBX_USER" /var/spool/pbx/fax /var/spool/pbx/fax/out
 chmod 750 /var/spool/pbx/fax
+# Fax branding logos (Faxes -> Fax branding, My Phone -> My fax branding).
+mkdir -p /var/lib/pbx/fax-brand
+chown "$PBX_USER" /var/lib/pbx/fax-brand
 if ! command -v tiff2pdf >/dev/null 2>&1; then
     apt-get install -y -qq libtiff-tools || echo "NOTE: couldn't install libtiff-tools; faxes stay as TIFF files."
 fi

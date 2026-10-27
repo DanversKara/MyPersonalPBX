@@ -226,6 +226,16 @@ data class FaxOut(
     val has_pdf: Boolean = false,
 )
 
+/** Which branding the user's cover pages use (PBX's or their own). */
+@Serializable
+data class FaxBrand(
+    val name: String = "",
+    val own: Boolean = false,
+    val logo: Boolean = false,
+    /** The admin lets users set their own (in My Phone on the web). */
+    val editable: Boolean = false,
+)
+
 @Serializable
 data class FaxList(
     val received: List<FaxIn> = emptyList(),
@@ -235,6 +245,7 @@ data class FaxList(
     val can_send: Boolean = false,
     val why_not: String = "",
     val max_mb: Int = 20,
+    val branding: FaxBrand? = null,
 )
 
 @Serializable
@@ -478,6 +489,21 @@ class Api(base: String, private val token: String?) {
                     tmp.copyTo(dest, overwrite = true)
                     tmp.delete()
                 }
+            }
+            dest
+        }
+
+    /** The cover page this user's faxes get, with these details, as a PDF in [dest]. */
+    suspend fun coverPreview(dest: java.io.File, fields: Map<String, String>) =
+        withContext(Dispatchers.IO) {
+            val u = url("/me/faxes/cover-preview").toHttpUrl().newBuilder()
+            // note is always sent (empty = no message), so the preview never shows sample text.
+            fields.forEach { (k, v) -> if (v.isNotBlank() || k == "note") u.addQueryParameter(k, v) }
+            val b = Request.Builder().url(u.build())
+            authHeaders().forEach { (k, v) -> b.header(k, v) }
+            http.newCall(b.build()).execute().use { r ->
+                if (!r.isSuccessful) throw ApiException(r.code, errorText(r.body?.string() ?: "", r.code))
+                r.body!!.byteStream().use { inp -> dest.outputStream().use { inp.copyTo(it) } }
             }
             dest
         }

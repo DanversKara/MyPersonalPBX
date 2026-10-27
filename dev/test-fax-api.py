@@ -33,6 +33,13 @@ c = TestClient(A.app)
 H = {"Authorization": "Bearer " + c.post("/api/v1/app/pair", json={"code": app_api._new_pair_code(lid("phone8800"))}).json()["token"]}
 H2 = {"Authorization": "Bearer " + c.post("/api/v1/app/pair", json={"code": app_api._new_pair_code(lid("phone8801"))}).json()["token"]}
 
+# Faxing is a plan feature: no plan, no Faxes tab and no sending.
+ov = c.get("/api/v1/me/overview", headers=H).json()
+check("no fax in plan: tab hidden", ov.get("fax_enabled") is False, ov)
+r = c.get("/api/v1/me/faxes", headers=H).json()
+check("no fax in plan: can't send, says why", r["can_send"] is False and "plan" in r["why_not"], r)
+d.execute("INSERT OR REPLACE INTO kv_settings (key,value) VALUES ('default_quota_fax','1')"); d.commit()
+
 r = c.get("/api/v1/me/faxes", headers=H).json()
 check("list: can send, from my number only", r["can_send"] is True and r["numbers"] == ["5550001111"], r)
 ov = c.get("/api/v1/me/overview", headers=H).json()

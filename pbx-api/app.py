@@ -47,6 +47,7 @@ import sso_ui
 import store_ui
 import fax_ui
 import fax_send
+import fax_brand
 import entitlements
 import security
 import e911_ui
@@ -106,9 +107,11 @@ def _migrate(c):
         c.execute("ALTER TABLE user_prefs ADD COLUMN answer_ivr_id INTEGER DEFAULT NULL")
     for col, ddl in (("call_minutes", "INTEGER NOT NULL DEFAULT 0"), ("voicemail", "INTEGER NOT NULL DEFAULT 0"),
                      ("messages", "INTEGER NOT NULL DEFAULT 0"), ("recording", "INTEGER NOT NULL DEFAULT 0"),
-                     ("push_to_talk", "INTEGER NOT NULL DEFAULT 0")):
+                     ("push_to_talk", "INTEGER NOT NULL DEFAULT 0"), ("fax", "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols("billing_plans"):
             c.execute(f"ALTER TABLE billing_plans ADD COLUMN {col} {ddl}")
+    if "header" not in cols("fax_outbox"):
+        c.execute("ALTER TABLE fax_outbox ADD COLUMN header TEXT NOT NULL DEFAULT ''")
     if "recording_consent_at" not in cols("user_prefs"):
         c.execute("ALTER TABLE user_prefs ADD COLUMN recording_consent_at TEXT DEFAULT NULL")
         c.execute("ALTER TABLE user_prefs ADD COLUMN recording_consent_version INTEGER NOT NULL DEFAULT 0")
@@ -4288,6 +4291,7 @@ sso_ui.install(_sys.modules[__name__])
 store_ui.install(_sys.modules[__name__], billing)
 fax_ui.install(_sys.modules[__name__])
 fax_send.install(_sys.modules[__name__])
+fax_brand.install(_sys.modules[__name__])
 security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])

@@ -33,6 +33,9 @@ d.commit()
 SENT = []
 mailer.send = lambda cfg, to, subj, text, html=None, attachment=None, timeout=20: SENT.append((to, subj, text, attachment))
 
+# Faxing is a plan feature: without it the number isn't listened on.
+check("no fax in plan: no listening", fax.fax_wait("15550001111") == 0)
+d.execute("INSERT OR REPLACE INTO kv_settings (key,value) VALUES ('default_quota_fax','1')"); d.commit()
 check("listening time per number", fax.fax_wait("15550001111") == 5 and fax.fax_wait("+15550001111") == 5 and fax.fax_wait("5550001111") == 5)
 check("off for a number without detection", fax.fax_wait("15550002222") == 0 and fax.fax_wait("19999999999") == 0)
 
@@ -65,6 +68,13 @@ r = sorted(x[0] for x in d.execute("SELECT l.exten FROM fax_recipients r JOIN lo
 check("ring-group number: every member gets it", r == ["8800", "8801"], r)
 wait_mail(2)
 check("…and both are emailed", sorted(x[0] for x in SENT) == ["u8800@example.com", "u8801@example.com"])
+u8801 = d.execute("SELECT id FROM logins WHERE exten='8801'").fetchone()[0]
+d.execute("INSERT INTO user_entitlements (login_id, feature, quota) VALUES (?, 'fax', 0)", (u8801,)); d.commit()
+fid3 = fax.fax_done(make_tif(), "SUCCESS", "1", "", "15550003333", "", "")
+r = sorted(x[0] for x in d.execute("SELECT l.exten FROM fax_recipients r JOIN logins l ON l.id=r.login_id WHERE fax_id=?", (fid3,)))
+check("member without fax in their plan doesn't get it", r == ["8800"], r)
+d.execute("DELETE FROM user_entitlements WHERE login_id=? AND feature='fax'", (u8801,)); d.commit()
+wait_mail(1); time.sleep(0.5)     # its email goes out in the background
 
 SENT.clear()
 fid3 = fax.fax_done(os.path.join(FAXDIR, "missing.tif"), "FAILED", "0", "fax transmission not established", "15550001111", "3105550100", "")
