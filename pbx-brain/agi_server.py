@@ -297,10 +297,12 @@ def _agi_cmd(conn, f, cmd):
 def handle_fax_check(conn, f, agi_vars):
     """[trunk-in]: FAXWAIT = seconds to listen for a fax on this DID (0 = off)."""
     did = _arg(agi_vars, "agi_arg_1")
-    wait = fax.fax_wait(did) if re.fullmatch(r"\+?\d{3,20}", did or "") else 0
+    wait, why = fax.fax_check(did) if re.fullmatch(r"\+?\d{3,20}", did or "") else (0, "not a number")
     _agi_cmd(conn, f, f'SET VARIABLE FAXWAIT "{int(wait)}"')
     if wait:
-        log.info("fax-check: listening %ss for a fax on %s", wait, did)
+        log.info("fax-check: listening %ss for a fax on %s%s", wait, did, why)
+    else:
+        log.info("fax-check: not listening on %s: %s", did, why)
 
 
 def handle_fax_sent(agi_vars):

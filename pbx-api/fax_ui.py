@@ -56,7 +56,8 @@ listens for a fax machine's tone. A fax is received and saved as a PDF; anything
 <p class="muted" style="margin:4px 0">How long callers wait before it rings through. 4 seconds catches nearly every fax machine.</p>
 <label>Also email faxes to (optional)<br><input name="fax_email" value="{esc(t.get('fax_email') or '')}" placeholder="office@example.com, me@example.com" size="40"></label>
 <label><input type="checkbox" name="fax_email_users" value="1" {'checked' if users else ''}> Email them to the people this number rings (their notification email)</label>
-<p class="muted" style="margin:4px 0">Those people also see the faxes in My Phone &rarr; Faxes; every fax is under <a href="/faxes">Faxes</a>.</p>
+<p class="muted" style="margin:4px 0">Those people also see the faxes in My Phone &rarr; Faxes, if their plan includes <b>Fax</b>
+(Billing). The PBX always listens on a number with this ticked; every fax is under <a href="/faxes">Faxes</a>.</p>
 </fieldset>"""
 
 
