@@ -31,7 +31,7 @@ from stripe_api import Stripe, StripeError, mode_of, verify_webhook
 
 M = None
 ACTIVE = ("active", "trialing", "past_due")
-PLAN_FEATURES = ("call_minutes", "voicemail", "messages", "recording", "ivr_menus", "push_to_talk", "fax")
+PLAN_FEATURES = ("call_minutes", "voicemail", "messages", "recording", "ivr_menus", "push_to_talk", "fax", "faxes")
 SYNC_EVERY = 60
 STATUS_LABEL = {"active": ("Active", "ok"), "trialing": ("Trial", "ok"),
                 "past_due": ("Payment overdue", "warn"), "unpaid": ("Unpaid", "bad"),
@@ -265,7 +265,11 @@ def _sub_fields(sub):
 
 def plan_features(plan):
     """['500 outside call minutes / month', 'Voicemail', ...] for a plan."""
-    out = [d for d in (ent.describe(f, plan.get(f) or 0) for f in PLAN_FEATURES) if d]
+    out = [d for d in (ent.describe(f, plan.get(f) or 0) for f in PLAN_FEATURES if f != "faxes") if d]
+    if plan.get("fax"):
+        n = plan.get("faxes")
+        out[out.index(ent.describe("fax", 1))] = ("Fax: " + ent.describe("faxes", ent.UNLIMITED if n is None else n).lower()
+                                                   if (n is None or n != 0) else "Fax: receive only")
     codes = ent.split_codes(plan.get("feature_codes"))
     if codes:
         out.append("Star codes: " + ", ".join(codes))
@@ -513,14 +517,17 @@ def usage_panel(me):
     with M.db() as c:
         if ent.is_admin(c, me["id"]):
             return '<p class="muted">Admin account: no limits.</p>'
+        fax_on = ent.quota(c, me["id"], "fax") != 0
         for f in PLAN_FEATURES:
+            if f == "faxes" and not fax_on:
+                continue
             q = ent.quota(c, me["id"], f)
             label, kind = ent.FEATURES[f]
             if kind == "bool":
                 val = '<span class="ok">Included</span>' if q else '<span class="muted">Not included</span>'
             else:
                 used = ent.usage(c, me["id"], f)
-                unit = {"call_minutes": " min", "messages": "", "ivr_menus": ""}[f]
+                unit = {"call_minutes": " min"}.get(f, "")
                 if q == ent.UNLIMITED:
                     val = f"{used:,}{unit} used · unlimited"
                 elif q <= 0:
@@ -797,7 +804,7 @@ def access_section(s):
             admin_ov = {f: v for f, (v, src) in ov.items() if not str(src).startswith("plan:")}
             if plan_src:
                 pl = _plan(int(plan_src.split(":")[1]))
-                cells = f'<td colspan="7" class="muted">On plan <b>{esc(pl["name"] if pl else "?")}</b> (limits come from the plan)</td><td></td>'
+                cells = f'<td colspan="8" class="muted">On plan <b>{esc(pl["name"] if pl else "?")}</b> (limits come from the plan)</td><td></td>'
             else:
                 cells = (f'<td>{_lim_input("call_minutes", admin_ov.get("call_minutes"), "default")}</td>'
                          f'<td>{_onoff_select("voicemail", admin_ov.get("voicemail"))}</td>'
@@ -805,6 +812,7 @@ def access_section(s):
                          f'<td>{_onoff_select("recording", admin_ov.get("recording"))}</td>'
                          f'<td>{_onoff_select("push_to_talk", admin_ov.get("push_to_talk"))}</td>'
                          f'<td>{_onoff_select("fax", admin_ov.get("fax"))}</td>'
+                         f'<td>{_lim_input("faxes", admin_ov.get("faxes"), "default")}</td>'
                          f'<td>{_lim_input("ivr_menus", admin_ov.get("ivr_menus"), "default")}</td>'
                          f'<td><button class="link-btn">Save</button></td>')
             if not plan_src:
@@ -829,16 +837,17 @@ Empty = use the default. While a user has an active plan, the plan decides.</p>
 <label>Recording <select name="recording"><option value="1" {"selected" if d["recording"] else ""}>on</option><option value="0" {"" if d["recording"] else "selected"}>off</option></select></label>
 <label>Push-to-talk <select name="push_to_talk"><option value="1" {"selected" if d["push_to_talk"] else ""}>on</option><option value="0" {"" if d["push_to_talk"] else "selected"}>off</option></select></label>
 <label>Fax <select name="fax"><option value="1" {"selected" if d["fax"] else ""}>on</option><option value="0" {"" if d["fax"] else "selected"}>off</option></select></label>
+<label>Faxes/mo {_lim_input("faxes", d["faxes"], "unlimited")}</label>
 <label>IVR menus {_lim_input("ivr_menus", d["ivr_menus"], "0")}</label>
 <div style="flex-basis:100%"><b>Star codes (no plan):</b> <span class="muted">for codes set to "By plan" on the Features page; none ticked = new accounts get no star codes until they buy a plan that includes them.</span><br>
 {_codes_checkboxes("codes", dcodes)}</div>
 <button class="btn ghost">Save defaults</button>
 </form>
-<div class="scrollbox"><table class="access"><tr><th>User</th><th>Outside min/mo</th><th>Voicemail</th><th>Texts/mo</th><th>Recording</th><th>Push-to-talk</th><th>Fax</th><th>IVR menus</th><th></th></tr>
-{"".join(rows) or '<tr><td colspan="9" class="muted">No users</td></tr>'}</table></div>"""
+<div class="scrollbox"><table class="access"><tr><th>User</th><th>Outside min/mo</th><th>Voicemail</th><th>Texts/mo</th><th>Recording</th><th>Push-to-talk</th><th>Fax</th><th>Faxes/mo</th><th>IVR menus</th><th></th></tr>
+{"".join(rows) or '<tr><td colspan="10" class="muted">No users</td></tr>'}</table></div>"""
 
 
-_LIM_LABEL = {"call_minutes": "Outside minutes", "messages": "Texts", "ivr_menus": "IVR menus"}
+_LIM_LABEL = {"call_minutes": "Outside minutes", "messages": "Texts", "ivr_menus": "IVR menus", "faxes": "Faxes per month"}
 
 
 def _parse_lim(v, allow_unlimited=True, field=""):
@@ -854,6 +863,10 @@ def _parse_lim(v, allow_unlimited=True, field=""):
     raise ValueError(f"{_LIM_LABEL.get(field, field)}: \"{v}\" isn't a number or \"unlimited\"")
 
 
+def _or_unlimited(v):
+    return ent.UNLIMITED if v is None else v
+
+
 async def admin_access_defaults(request: Request):
     s = await _admin_post(request)
     if M._admin_locked():
@@ -866,7 +879,8 @@ async def admin_access_defaults(request: Request):
                 "voicemail": 1 if f.get("voicemail") == "1" else 0,
                 "recording": 1 if f.get("recording") == "1" else 0,
                 "push_to_talk": 1 if f.get("push_to_talk") == "1" else 0,
-                "fax": 1 if f.get("fax") == "1" else 0}
+                "fax": 1 if f.get("fax") == "1" else 0,
+                "faxes": _or_unlimited(_parse_lim(f.get("faxes"), field="faxes"))}
     except ValueError as e:
         return _admin_back(err=str(e))
     codes = _picked_codes(f, "codes")
@@ -891,7 +905,8 @@ async def admin_access_user(request: Request, login_id: int):
                 "voicemail": None if f.get("voicemail", "") == "" else (1 if f.get("voicemail") == "1" else 0),
                 "recording": None if f.get("recording", "") == "" else (1 if f.get("recording") == "1" else 0),
                 "push_to_talk": None if f.get("push_to_talk", "") == "" else (1 if f.get("push_to_talk") == "1" else 0),
-                "fax": None if f.get("fax", "") == "" else (1 if f.get("fax") == "1" else 0)}
+                "fax": None if f.get("fax", "") == "" else (1 if f.get("fax") == "1" else 0),
+                "faxes": _parse_lim(f.get("faxes"), field="faxes")}
     except ValueError as e:
         return _admin_back(err=str(e))
     with M.db() as c:
@@ -971,7 +986,7 @@ async def admin_sync(request: Request):
 
 def _plan_form(s, p, err=""):
     p = p or {"id": None, "name": "", "description": "", "ivr_menus": 0, "call_minutes": 500, "voicemail": 1,
-              "messages": 1000, "recording": 0, "push_to_talk": 0, "fax": 0, "price_cents": 500, "currency": "usd", "active": 1, "sort_order": 0}
+              "messages": 1000, "recording": 0, "push_to_talk": 0, "fax": 0, "faxes": -1, "price_cents": 500, "currency": "usd", "active": 1, "sort_order": 0}
     csrf = M._csrf_field(s)
 
     def num(name, label, hint):
@@ -994,6 +1009,7 @@ def _plan_form(s, p, err=""):
 {chk("recording", "Call recording (users must accept the recording-law notice)")}
 {chk("push_to_talk", "Push-to-talk (*88 intercom — subscribers can place/receive PTT calls; the login's Allow push-to-talk tick overrides this per user)")}
 {chk("fax", "Fax: send and receive faxes (My Phone and the app), with their own cover-page branding if allowed")}
+{num("faxes", "Faxes per month", "Faxes the user can send each month when Fax is ticked (receiving is never limited). 0 = receive only.")}
 <label>IVR menus<br><input name="ivr_menus" value="{int(p.get('ivr_menus') or 0)}" inputmode="numeric" style="width:120px"></label>
 <h3>Star codes included</h3>
 <p class="muted">Codes set to "By plan" on the Features page are on for subscribers of this plan and off otherwise.
@@ -1046,6 +1062,7 @@ async def admin_plan_save(request: Request, plan_id: str):
              "voicemail": 1 if f.get("voicemail") else 0, "recording": 1 if f.get("recording") else 0,
              "push_to_talk": 1 if f.get("push_to_talk") else 0,
              "fax": 1 if f.get("fax") else 0,
+             "faxes": lim("faxes"),
              "ivr_menus": menus}
     codes = _picked_codes(f, "codes")
     draft = dict({"id": old["id"] if old else None, "name": name, "description": desc, "feature_codes": codes,
@@ -1058,6 +1075,8 @@ async def admin_plan_save(request: Request, plan_id: str):
         err = "Outside call minutes must be a whole number (or tick Unlimited)."
     elif feats["messages"] < -1 or feats["messages"] > 1000000:
         err = "Text messages must be a whole number (or tick Unlimited)."
+    elif feats["faxes"] < -1 or feats["faxes"] > 1000000:
+        err = "Faxes per month must be a whole number (or tick Unlimited)."
     elif not 0 <= menus <= 100:
         err = "IVR menus must be between 0 and 100."
     elif not plan_features(draft):
@@ -1070,16 +1089,16 @@ async def admin_plan_save(request: Request, plan_id: str):
     with M.db() as c:
         if old:
             c.execute("UPDATE billing_plans SET name=?, description=?, ivr_menus=?, call_minutes=?, voicemail=?,"
-                      " messages=?, recording=?, push_to_talk=?, fax=?, price_cents=?, currency=?, active=?, sort_order=?, feature_codes=? WHERE id=?",
+                      " messages=?, recording=?, push_to_talk=?, fax=?, faxes=?, price_cents=?, currency=?, active=?, sort_order=?, feature_codes=? WHERE id=?",
                       (name, desc, menus, feats["call_minutes"], feats["voicemail"], feats["messages"],
-                       feats["recording"], feats["push_to_talk"], feats["fax"], cents, cur, draft["active"], sort, codes, old["id"]))
+                       feats["recording"], feats["push_to_talk"], feats["fax"], feats["faxes"], cents, cur, draft["active"], sort, codes, old["id"]))
             pid = old["id"]
         else:
             pid = c.execute("INSERT INTO billing_plans (name, description, ivr_menus, call_minutes, voicemail,"
-                            " messages, recording, push_to_talk, fax, price_cents, currency, active, sort_order, feature_codes)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            " messages, recording, push_to_talk, fax, faxes, price_cents, currency, active, sort_order, feature_codes)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (name, desc, menus, feats["call_minutes"], feats["voicemail"], feats["messages"],
-                             feats["recording"], feats["push_to_talk"], feats["fax"], cents, cur, draft["active"], sort, codes)).lastrowid
+                             feats["recording"], feats["push_to_talk"], feats["fax"], feats["faxes"], cents, cur, draft["active"], sort, codes)).lastrowid
         c.commit()
         # Current subscribers get the new allowances right away.
         if old and any(old.get(k) != v for k, v in feats.items()):

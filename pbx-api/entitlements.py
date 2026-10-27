@@ -17,6 +17,7 @@ Features (quota meaning):
   messages      texts the user may send per month          (0 = none, -1 = unlimited)
   recording     "record my calls" available                (0 = off, 1 = on)
   fax           send and receive faxes                     (0 = off, 1 = on)
+  faxes         faxes sent per month, when fax is on       (0 = none, -1 = unlimited)
 
 Internal (extension-to-extension) calls are always free. Admin logins are
 never limited. Monthly counters reset on the 1st (server local time).
@@ -34,6 +35,7 @@ FEATURES = {
     "ivr_menus": ("IVR menus", "count"),
     "push_to_talk": ("Push-to-talk", "bool"),
     "fax": ("Fax (send & receive)", "bool"),
+    "faxes": ("Faxes sent", "monthly"),
 }
 
 # Shown to users before they can turn on "Record my calls". Bump the
@@ -70,6 +72,18 @@ def usage(c, login_id, feature) -> int:
     if feature == "ivr_menus":
         return int(c.execute("SELECT COUNT(*) FROM ivr_menus WHERE owner_login_id=?",
                              (login_id,)).fetchone()[0])
+    if feature == "faxes":
+        # Queued, sending, retrying or sent this month (failed ones and
+        # ones cancelled before sending don't count).
+        try:
+            r = c.execute(
+                "SELECT COUNT(*) FROM fax_outbox WHERE login_id=?"
+                " AND created_at >= datetime('now', 'localtime', 'start of month', 'utc')"
+                " AND status != 'failed' AND (status != 'deleted' OR sent_at IS NOT NULL)",
+                (login_id,)).fetchone()
+            return int(r[0] or 0)
+        except Exception:
+            return 0
     return 0
 
 
@@ -85,13 +99,16 @@ def describe(feature, value) -> str:
     if kind == "bool":
         return label if v else ""
     if v == UNLIMITED:
-        return {"call_minutes": "Unlimited outside calls", "messages": "Unlimited texts"}.get(feature, f"Unlimited {label.lower()}")
+        return {"call_minutes": "Unlimited outside calls", "messages": "Unlimited texts",
+                "faxes": "Unlimited faxes"}.get(feature, f"Unlimited {label.lower()}")
     if v <= 0:
         return ""
     if feature == "call_minutes":
         return f"{v:,} outside call minutes / month"
     if feature == "messages":
         return f"{v:,} texts / month"
+    if feature == "faxes":
+        return f"{v:,} fax{'es' if v != 1 else ''} / month"
     if feature == "ivr_menus":
         return f"{v} IVR menu{'s' if v != 1 else ''}"
     return f"{v} {label}"

@@ -100,7 +100,21 @@ def send_status(me):
         return False, "This PBX can't send faxes yet (the admin needs to run pbx-update --with-fax)."
     if not minutes_ok(me):
         return False, "Sending a fax uses outside-call minutes, and your plan has none left."
+    left = faxes_left(me)
+    if left is not None and left <= 0:
+        return False, "You've sent all the faxes your plan includes this month (resets on the 1st)."
     return True, ""
+
+
+def faxes_left(me):
+    """Faxes this user can still send this month (None = unlimited)."""
+    if me["role"] == "admin":
+        return None
+    with M.db() as c:
+        q = ent.quota(c, me["id"], "faxes")
+        if q == ent.UNLIMITED:
+            return None
+        return max(0, q - ent.usage(c, me["id"], "faxes"))
 
 
 def fax_ready():

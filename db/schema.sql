@@ -272,6 +272,7 @@ INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_messages',
 INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_recording', '0');
 -- No plan = no faxing (send or receive).
 INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_fax', '0');
+INSERT OR IGNORE INTO kv_settings (key, value) VALUES ('default_quota_faxes', '-1');
 
 -- Stripe billing (monthly plans). Keys live in kv_settings:
 --   stripe_secret, stripe_webhook_secret, billing_public_url (optional).
@@ -287,6 +288,7 @@ CREATE TABLE IF NOT EXISTS billing_plans (
   recording INTEGER NOT NULL DEFAULT 0,      -- 1 = "record my calls" included
   push_to_talk INTEGER NOT NULL DEFAULT 0,   -- 1 = push-to-talk (*88) included
   fax INTEGER NOT NULL DEFAULT 0,            -- 1 = send and receive faxes
+  faxes INTEGER NOT NULL DEFAULT -1,         -- faxes sent / month when fax is on (-1 = unlimited)
   price_cents INTEGER NOT NULL,              -- per month
   currency TEXT NOT NULL DEFAULT 'usd',
   stripe_mode TEXT NOT NULL DEFAULT '',      -- test | live: which account the ids belong to
