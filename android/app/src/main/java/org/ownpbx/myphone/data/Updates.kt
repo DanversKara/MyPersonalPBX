@@ -31,7 +31,7 @@ object Updates {
     data class Offer(val version: String, val apkUrl: String)
 
     private const val RELEASES_URL =
-        "https://api.github.com/repos/DanversKara/MyPersonalPBX/releases?per_page=10"
+        "https://api.github.com/repos/DanversKara/OwnPBX.org/releases?per_page=10"
     private const val CHECK_INTERVAL_MS = 60 * 60_000L
 
     /** The running app's version, from the build (never hardcoded). */
