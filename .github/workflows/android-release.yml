@@ -118,5 +118,5 @@ jobs:
           name: My Phone ${{ env.APP_VERSION }}
           files: ${{ runner.temp }}/artifacts/*
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
           fail_on_unmatched_files: true
