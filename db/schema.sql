@@ -608,3 +608,27 @@ CREATE TABLE IF NOT EXISTS caller_rules (
   last_hit TEXT DEFAULT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Users' requests to delete their account (done within 90 days) or to get
+-- a copy of their data (a zip, emailed as a download link). Kept after the
+-- account is gone (login_id -> NULL) as the record that it was handled.
+CREATE TABLE IF NOT EXISTS privacy_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id INTEGER,                          -- NULL once the account is deleted
+  username TEXT NOT NULL DEFAULT '',
+  exten TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',            -- where to send the link / confirmation
+  kind TEXT NOT NULL,                        -- delete | export
+  status TEXT NOT NULL DEFAULT 'pending',    -- pending | done | cancelled | declined
+  reason TEXT NOT NULL DEFAULT '',           -- the user's optional note
+  admin_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  due_at TEXT NOT NULL DEFAULT '',           -- UTC deadline
+  done_at TEXT DEFAULT NULL,
+  done_by TEXT NOT NULL DEFAULT '',
+  export_path TEXT NOT NULL DEFAULT '',
+  export_bytes INTEGER NOT NULL DEFAULT 0,
+  token_hash TEXT NOT NULL DEFAULT '',       -- sha256 of the download link token
+  token_expires TEXT DEFAULT NULL,           -- UTC
+  downloads INTEGER NOT NULL DEFAULT 0
+);

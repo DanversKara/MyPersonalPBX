@@ -299,7 +299,7 @@ def next_param(v):
     """A safe place to return to after signing in (only the app's connect
     page), else ''."""
     v = v or ""
-    return v if M.app_api.connect_next_ok(v) else ""
+    return v if (v == "/ucp/delete" or M.app_api.connect_next_ok(v)) else ""
 
 
 def login_box(request: Request, err: str = "", force_form: bool = False, nxt: str | None = None):
