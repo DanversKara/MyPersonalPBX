@@ -17,13 +17,13 @@ fun versionCodeOf(name: String): Int {
 }
 
 android {
-    namespace = "org.ownpbx.myphone"
-    compileSdk = 34
+    namespace = "org.ownpbx"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "org.ownpbx.myphone"
+        applicationId = "org.ownpbx"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = versionCodeOf(APP_VERSION_NAME)
         versionName = APP_VERSION_NAME
         val defaultServer = (project.findProperty("myphone.defaultServer") as String?).orEmpty()

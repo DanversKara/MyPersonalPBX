@@ -727,7 +727,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
 
         Section("About")
         ListItem(
-            headlineContent = { Text("My Phone ${org.ownpbx.myphone.BuildConfig.VERSION_NAME}") },
+            headlineContent = { Text("My Phone ${org.ownpbx.BuildConfig.VERSION_NAME}") },
             supportingContent = {
                 Text("Free software (GPL-2.0-or-later). No ads, no tracking, no Google services.")
             },

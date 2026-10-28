@@ -553,7 +553,7 @@ object Phone {
             core
                 ?: f.createCore(null, null, ctx.applicationContext).also { c ->
                     c.addListener(listener)
-                    c.setUserAgent("MyPhone", org.ownpbx.myphone.BuildConfig.VERSION_NAME)
+                    c.setUserAgent("MyPhone", org.ownpbx.BuildConfig.VERSION_NAME)
                     systemCaBundle(ctx)?.let { c.rootCa = it }
                     // Local listening transports: TLS only (random port).
                     val t = c.transports

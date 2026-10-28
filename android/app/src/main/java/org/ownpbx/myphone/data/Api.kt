@@ -357,7 +357,7 @@ class Api(base: String, private val token: String?) {
      */
     fun authHeaders(): Map<String, String> = buildMap {
         token?.let { put("Authorization", "Bearer $it") }
-        put("X-MyPhone-Version", org.ownpbx.myphone.BuildConfig.VERSION_NAME)
+        put("X-MyPhone-Version", org.ownpbx.BuildConfig.VERSION_NAME)
     }
 
     private fun errorText(body: String, code: Int): String =

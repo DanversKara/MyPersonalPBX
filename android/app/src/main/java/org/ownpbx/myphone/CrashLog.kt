@@ -9,6 +9,7 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.ownpbx.BuildConfig
 
 /** Saves the last crash to a file so the next launch can show it (no adb
  *  needed to report a bug). Only the stack trace, app version and phone

@@ -35,7 +35,7 @@ object Updates {
     private const val CHECK_INTERVAL_MS = 60 * 60_000L
 
     /** The running app's version, from the build (never hardcoded). */
-    fun installedVersion(): String = org.ownpbx.myphone.BuildConfig.VERSION_NAME
+    fun installedVersion(): String = org.ownpbx.BuildConfig.VERSION_NAME
 
     /** Numeric component-wise compare: >0 when [a] is newer than [b]. */
     fun compareVersions(a: String, b: String): Int {

@@ -10,7 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import org.ownpbx.myphone.MainActivity
-import org.ownpbx.myphone.R
+import org.ownpbx.R
 import org.ownpbx.myphone.ui.prettyNumber
 
 /**

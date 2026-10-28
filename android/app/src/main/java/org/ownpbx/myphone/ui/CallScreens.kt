@@ -186,7 +186,7 @@ fun InCallScreen(c: CallUi) {
                 TextButton({
                     clip.setText(
                         androidx.compose.ui.text.AnnotatedString(
-                            "My Phone ${org.ownpbx.myphone.BuildConfig.VERSION_NAME} call to ${c.number}: ${c.status}\n${c.problem}"
+                            "My Phone ${org.ownpbx.BuildConfig.VERSION_NAME} call to ${c.number}: ${c.status}\n${c.problem}"
                         )
                     )
                 }) {
