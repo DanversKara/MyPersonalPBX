@@ -573,3 +573,37 @@ CREATE TABLE IF NOT EXISTS fax_branding (
   logo TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Time conditions (Call flow -> Time conditions): business hours, holidays
+-- and a manual Open/Closed switch, each state with its own destination
+-- (JSON like {"type":"rgroup","target":"3"}). Phone numbers, IVR keys and
+-- caller rules can send calls to one. See shared/callflow.py.
+CREATE TABLE IF NOT EXISTS time_conditions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  tz TEXT NOT NULL DEFAULT '',                 -- IANA zone; '' = server time
+  hours TEXT NOT NULL DEFAULT '{}',            -- {"mon":[["09:00","17:00"]],...}
+  holidays TEXT NOT NULL DEFAULT '[]',         -- [{"date":"2026-12-25","name":"Christmas"}]
+  open_dest TEXT NOT NULL DEFAULT '{"type":"hangup"}',
+  closed_dest TEXT NOT NULL DEFAULT '{"type":"hangup"}',
+  holiday_dest TEXT NOT NULL DEFAULT '',       -- '' = same as closed
+  override TEXT NOT NULL DEFAULT 'auto',       -- auto | open | closed
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Caller ID rules (Call flow -> Caller rules): checked before a number's
+-- normal route. First match wins (number-specific rules first).
+CREATE TABLE IF NOT EXISTS caller_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  did TEXT NOT NULL DEFAULT '',                -- '' = any of your numbers
+  match TEXT NOT NULL DEFAULT 'exact',         -- exact | prefix | anonymous
+  pattern TEXT NOT NULL DEFAULT '',
+  dest TEXT NOT NULL DEFAULT '{"type":"hangup"}',
+  note TEXT NOT NULL DEFAULT '',
+  sort INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  hits INTEGER NOT NULL DEFAULT 0,
+  last_hit TEXT DEFAULT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

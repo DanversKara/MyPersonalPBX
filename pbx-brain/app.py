@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover - deploy always ships phone.py
         d = "".join(ch for ch in str(v or "") if ch.isdigit())
         return d[1:] if len(d) == 11 and d.startswith("1") else d
 
+import callflow   # time conditions + caller ID rules (shared/callflow.py)
+
 ARI_URL = os.environ.get("ARI_URL", "http://127.0.0.1:8088/ari")
 ARI_USER = os.environ.get("ARI_USER", "pbxbrain")
 ARI_PASS = os.environ.get("ARI_PASS", "")
@@ -444,7 +446,14 @@ def forward_to(channel, me, callee, target, hops, **ring_kw):
     return False
 
 
-BLOCK_ACTIONS = ("disconnected", "voicemail", "forward")
+BLOCK_ACTIONS = ("disconnected", "voicemail", "forward", "ring_novm", "vip")
+# Not blocks: the caller still rings this user.
+#   ring_novm  rings as usual, but never reaches their voicemail (hang up)
+#   vip        always rings, even through Do Not Disturb
+RING_ACTIONS = ("ring_novm", "vip")
+# Calls that must never end in voicemail (caller rule "normal route, no
+# voicemail", or a user's ring_novm): start_voicemail hangs up instead.
+NO_VM = set()
 
 
 def contact_name_for(login_id, number):
@@ -493,8 +502,10 @@ def block_rule(login_id, number):
 
 
 def blocked_by(login_id, number):
-    """True if user `login_id` blocked calls/texts from `number`."""
-    return block_rule(login_id, number) is not None
+    """True if user `login_id` blocked calls/texts from `number`
+    (ring-but-no-voicemail and VIP entries aren't blocks)."""
+    r = block_rule(login_id, number)
+    return r is not None and r["action"] not in RING_ACTIONS
 
 
 def apply_block(channel, me, callee, rule, caller_label, hops=0, **ring_kw):
@@ -533,6 +544,14 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
     For a forwarded inbound call, `me` is the forwarding user and
     caller_label / caller_id carry the outside caller's number."""
     rule = block_rule(callee["id"], caller_label or me["exten"])
+    vip = False
+    if rule and rule["action"] in RING_ACTIONS:
+        if rule["action"] == "ring_novm":
+            log.info("%s: %s may ring but not leave voicemail", callee["exten"], caller_label or me["exten"])
+            NO_VM.add(channel.id)
+        else:
+            vip = True
+        rule = None
     if rule:
         apply_block(channel, me, callee, rule, caller_label or me["exten"], hops,
                     caller_id=caller_id, direction=direction, extra=extra)
@@ -569,7 +588,7 @@ def ring_local(channel, me, callee, hops=0, caller_label=None,
         route_to_voicemail(channel.id, callee["exten"])
         return
     prefs = get_prefs(callee["id"])
-    if prefs.get("dnd"):
+    if prefs.get("dnd") and not vip:
         log.info("%s is on DND: %s -> voicemail", callee["exten"], info["caller"])
         CALLS[channel.id] = info
         route_to_voicemail(channel.id, callee["exten"])
@@ -935,7 +954,7 @@ def try_forward_noanswer_inbound(a_id, info):
     """Inbound call not answered. Forward-on-no-answer only applies when the
     number rang a single user (a ring group falls through to voicemail)."""
     ring_ids = info.get("ring_ids") or []
-    if len(ring_ids) != 1:
+    if len(ring_ids) != 1 or a_id in NO_VM:
         return False
     callee = q1("SELECT * FROM logins WHERE id=? AND enabled=1", (ring_ids[0],))
     if not callee:
@@ -1986,6 +2005,10 @@ def _hangup(chan_or_id):
 
 def start_voicemail(chan, mailbox, caller):
     """Greeting, then record a message into mailbox."""
+    if getattr(chan, "id", None) in NO_VM:
+        log.info("no voicemail for this caller (call filtering): hanging up %s", chan.id)
+        _hangup(chan)
+        return
     owner = q1("SELECT login_id FROM voicemail_boxes WHERE mailbox=?", (mailbox,))
     if owner and not has_feature(owner["login_id"], "voicemail"):
         # Voicemail isn't in this user's plan: tell the caller, hang up.
@@ -2378,6 +2401,31 @@ def handle_inbound(channel, did):
     except Exception:
         ring_extens = []
     caller_num = channel.json["caller"]["number"] or "PSTN"
+    ctx = {"caller": caller_num, "caller_id": "PSTN <%s>" % caller_num, "did": did, "me": None}
+    # Caller ID rules (Call flow -> Caller rules) come first.
+    try:
+        rules = qall("SELECT * FROM caller_rules WHERE enabled=1")
+    except sqlite3.OperationalError:
+        rules = []
+    rule = callflow.match_rule(rules, did, caller_num) if rules else None
+    if rule:
+        d = callflow.jload(rule["dest"], {})
+        log.info("inbound %s from %s: caller rule %s (%s %s) -> %s", did, caller_num, rule["id"],
+                 rule["match"], rule["pattern"], callflow.describe_dest(d))
+        try:
+            with db() as c:
+                c.execute("UPDATE caller_rules SET hits=hits+1, last_hit=datetime('now') WHERE id=?", (rule["id"],))
+        except Exception:
+            pass
+        if d.get("type") == "route_novm":
+            NO_VM.add(channel.id)          # ring as usual below, but never voicemail
+        else:
+            go_dest(channel, d, ctx, where="caller rule %s" % rule["id"])
+            return
+    tc_id = dict(route).get("tc_id")
+    if tc_id:
+        go_dest(channel, {"type": "tc", "target": tc_id}, ctx, where="DID %s" % did)
+        return
     ivr_id = dict(route).get("ivr_id")
     if ivr_id:
         ivr = q1("SELECT * FROM ivr_menus WHERE id=? AND enabled=1", (ivr_id,))
@@ -2515,12 +2563,20 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
     # Who actually rings: skip users on DND, follow forward-always.
     targets, first_login = [], None
     first_block = None   # (callee, rule) of the first user who blocked the caller
+    novm_ids = set()     # rung users who said: this caller rings, but no voicemail
     for exten in ring_extens:
         callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1",
                     (exten,))
         if not callee:
             continue
         rule = block_rule(callee["id"], caller_num)
+        vip = False
+        if rule and rule["action"] in RING_ACTIONS:
+            if rule["action"] == "ring_novm":
+                novm_ids.add(callee["id"])
+            else:
+                vip = True
+            rule = None
         if rule:
             log.info("%s blocked %s: not rung", exten, caller_num)
             if first_block is None:
@@ -2535,7 +2591,7 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
             log.info("inbound %s: %s has no outside minutes, skipped", did, exten)
             continue
         prefs = get_prefs(callee["id"])
-        if prefs.get("dnd"):
+        if prefs.get("dnd") and not vip:
             log.info("inbound %s: %s on DND, skipped", did, exten)
             continue
         fwd = (prefs.get("forward_always") or "").strip()
@@ -2565,6 +2621,9 @@ def ring_group(channel, ring_extens, timeout, did, caller_num, caller_id=None,
         if all(t["id"] != callee["id"] for t in targets):
             targets.append(callee)
     vm_login, vm_copies = _group_vm(group, first_login)
+    if vm_login is not None and vm_login["id"] in novm_ids:
+        log.info("inbound %s: %s takes no voicemail from %s", did, vm_login["exten"], caller_num)
+        NO_VM.add(channel.id)
     if not targets and first_block and first_login is None:
         # Everyone this call would ring has blocked the caller: the first
         # one's Call filtering choice (not in service / voicemail / forward).
@@ -2992,14 +3051,36 @@ def _ivr_wait_for_key(sess):
                    lambda s: _ivr_retry(s, "timeout"))
 
 
+def _ivr_limits(ivr, why):
+    """(replays allowed, destination after) for 'timeout' (no key) or
+    'invalid' (wrong key). Wrong-key settings default to the no-key ones."""
+    import json
+    limit = int(ivr.get("max_retries") or 0)
+    dest = _ivr_fallback(ivr)
+    if why == "invalid":
+        inv = ivr.get("invalid_retries")
+        if inv is not None and int(inv) >= 0:
+            limit = int(inv)
+        try:
+            d = json.loads(ivr.get("invalid_fallback") or "{}")
+            if isinstance(d, dict) and d.get("type"):
+                dest = d
+        except Exception:
+            pass
+    return limit, dest
+
+
 def _ivr_retry(sess, why):
+    key = "tries_" + why
+    sess[key] = sess.get(key, 0) + 1
     sess["tries"] += 1
     ivr = sess["ivr"]
-    if sess["tries"] > int(ivr.get("max_retries") or 0):
-        log.info("IVR %s: %s, retries used up -> fallback", ivr["name"], why)
-        ivr_go(sess, _ivr_fallback(ivr))
+    limit, dest = _ivr_limits(ivr, why)
+    if sess[key] > limit:
+        log.info("IVR %s: %s, retries used up -> %s", ivr["name"], why, dest.get("type"))
+        ivr_go(sess, dest)
         return
-    log.info("IVR %s: %s (try %d)", ivr["name"], why, sess["tries"])
+    log.info("IVR %s: %s (try %d)", ivr["name"], why, sess[key])
     if why == "invalid":
         _ivr_play(sess, IVR_INVALID, _ivr_menu)
     else:
@@ -3063,44 +3144,86 @@ def ivr_end(channel_id):
 
 def ivr_go(sess, dest):
     """Send the caller to an IVR destination."""
-    chan, ctx = sess["chan"], sess["ctx"]
-    t = (dest or {}).get("type", "hangup")
-    target = str((dest or {}).get("target", "")).strip()
-    if t == "repeat":
+    if (dest or {}).get("type") == "repeat":
         _ivr_menu(sess)
         return
-    ivr_end(chan.id)
-    if t == "ivr":
-        nxt = q1("SELECT * FROM ivr_menus WHERE id=? AND enabled=1", (target,))
-        if nxt and start_ivr(chan, nxt, ctx):
+    ivr_end(sess["chan"].id)
+    go_dest(sess["chan"], dest, dict(sess["ctx"], from_ivr=True), where="IVR %s" % sess["ivr"]["name"])
+
+
+MAX_DEST_HOPS = 8     # time condition -> menu -> time condition ... loop guard
+
+
+def go_dest(chan, dest, ctx, where="call flow"):
+    """Send a caller to a destination dict ({"type": ..., "target": ...}):
+    a ring group, an extension, a list of extensions, a voicemail box, an
+    IVR menu, a time condition, "not in service" or hang up. Used by IVR
+    keys, time conditions and caller rules. ctx: caller, caller_id, did,
+    me (internal caller login or None), visits, hops."""
+    import json
+    t = (dest or {}).get("type") or "hangup"
+    target = str((dest or {}).get("target", "")).strip()
+    hops = int(ctx.get("hops") or 0) + 1
+    if hops > MAX_DEST_HOPS:
+        log.warning("%s: too many hops, hanging up %s", where, chan.id)
+        t = "hangup"
+    ctx = dict(ctx, hops=hops)
+    caller = ctx.get("caller", "")
+    did = ctx.get("did", "")
+    try:
+        if t == "tc":
+            tc = q1("SELECT * FROM time_conditions WHERE id=? AND enabled=1", (target,)) if target.isdigit() else None
+            if tc:
+                d, state, why = callflow.tc_dest(tc)
+                log.info("%s: time condition %s is %s (%s) -> %s", where, tc["name"], state, why,
+                         callflow.describe_dest(d))
+                go_dest(chan, d, ctx, where="time condition %s" % tc["name"])
+                return
+            log.warning("%s: time condition %s missing/disabled", where, target)
+        elif t == "ivr":
+            nxt = q1("SELECT * FROM ivr_menus WHERE id=? AND enabled=1", (target,))
+            if nxt and start_ivr(chan, nxt, ctx):
+                return
+            log.warning("%s: target menu %s missing", where, target)
+        elif t in ("ext", "vm"):
+            callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1", (target,))
+            if callee and t == "vm":
+                CALLS.setdefault(chan.id, {})["caller"] = caller
+                CALLS[chan.id].setdefault("did", did)
+                route_to_voicemail(chan.id, callee["exten"])
+                return
+            if callee:
+                if ctx.get("me"):
+                    ring_local(chan, ctx["me"], callee, from_ivr=bool(ctx.get("from_ivr")))
+                else:
+                    ring_local(chan, callee, callee, caller_label=caller,
+                               caller_id=ctx.get("caller_id"), direction="inbound",
+                               extra={"ring_ids": [callee["id"]], "vm_login_id": callee["id"], "did": did},
+                               from_ivr=bool(ctx.get("from_ivr")))
+                return
+            log.warning("%s: extension %s missing", where, target)
+        elif t == "group":
+            extens = [e.strip() for e in target.split(",") if e.strip()]
+            if extens:
+                ring_group(chan, extens, DEFAULT_RING, did, caller, ctx.get("caller_id"),
+                           from_ivr=bool(ctx.get("from_ivr")))
+                return
+        elif t == "rgroup":
+            g = q1("SELECT * FROM ring_groups WHERE id=? AND enabled=1", (target,)) if target.isdigit() else None
+            if g:
+                members = [str(x) for x in json.loads(g["members"] or "[]")]
+                if members:
+                    log.info("%s -> ring group %s", where, g["name"])
+                    ring_group(chan, members, g["ring_seconds"] or 30, did, caller, ctx.get("caller_id"),
+                               from_ivr=True, group=dict(g), internal=bool(ctx.get("me")))
+                    return
+            log.warning("%s: ring group %s missing/disabled/empty", where, target)
+        elif t == "disconnected":
+            deny_and_hangup(chan, DISCONNECTED_PROMPT, "%s: not in service for %s" % (where, caller))
             return
-        log.warning("IVR %s: target menu %s missing", sess["ivr"]["name"], target)
-    elif t in ("ext", "vm"):
-        callee = q1("SELECT * FROM logins WHERE exten=? AND enabled=1", (target,))
-        if callee and t == "vm":
-            CALLS.setdefault(chan.id, {})["caller"] = ctx.get("caller", "")
-            route_to_voicemail(chan.id, callee["exten"])
-            return
-        if callee:
-            if ctx.get("me"):
-                ring_local(chan, ctx["me"], callee, from_ivr=True)
-            else:
-                ring_local(chan, callee, callee, caller_label=ctx.get("caller"),
-                           caller_id=ctx.get("caller_id"), direction="inbound",
-                           extra={"ring_ids": [callee["id"]],
-                                  "vm_login_id": callee["id"],
-                                  "did": ctx.get("did", "")},
-                           from_ivr=True)
-            return
-        log.warning("IVR %s: extension %s missing", sess["ivr"]["name"], target)
-    elif t == "group":
-        extens = [e.strip() for e in target.split(",") if e.strip()]
-        if extens:
-            ring_group(chan, extens, DEFAULT_RING, ctx.get("did", ""),
-                       ctx.get("caller", ""), ctx.get("caller_id"),
-                       from_ivr=True)
-            return
-    log.info("IVR %s: hanging up %s", sess["ivr"]["name"], chan.id)
+    except Exception:
+        log.exception("%s: destination %s failed", where, dest)
+    log.info("%s: hanging up %s", where, chan.id)
     try:
         chan.hangup()
     except Exception:
@@ -3249,6 +3372,7 @@ def on_channel_destroyed(channel, event):
 
 
 def on_stasis_end(channel, event):
+    NO_VM.discard(channel.id)
     try:
         ivr_end(channel.id)
         vm_cleanup(channel.id)
@@ -3521,7 +3645,8 @@ def send_message_api(to_exten, from_exten, body):
         if not guest_can_text_internal(dest):
             return False, {"error": "recipient isn't accepting texts"}
         try:
-            blocked = c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?",
+            blocked = c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?"
+                         " AND action NOT IN ('ring_novm', 'vip')",
                                 (dest["id"], from_exten)).fetchone()
         except sqlite3.OperationalError:
             blocked = None

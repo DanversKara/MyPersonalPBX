@@ -75,6 +75,9 @@ cp "$SRC_DIR/pbx-api/"*.py /opt/pbx/pbx-api/
 # (cp takes a single destination: one line per dir).
 cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-brain/
 cp "$SRC_DIR/shared/phone.py" /opt/pbx/pbx-api/
+# Time conditions + caller ID rules (shared decision logic).
+cp "$SRC_DIR/shared/callflow.py" /opt/pbx/pbx-brain/
+cp "$SRC_DIR/shared/callflow.py" /opt/pbx/pbx-api/
 cp -r "$SRC_DIR/config-gen/"* /opt/pbx/config-gen/
 cp "$SRC_DIR/db/schema.sql" /opt/pbx/
 # Custom voice prompts (cell-leg "press 1" screening, etc.): Asterisk plays

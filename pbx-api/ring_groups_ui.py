@@ -294,6 +294,9 @@ async def delete(request: Request, gid: int):
         g = c.execute("SELECT name FROM ring_groups WHERE id=?", (gid,)).fetchone()
         if not g:
             return _back(err="No such ring group.")
+        used = M.callflow_ui._uses("rgroup", gid)
+        if used:
+            return _back(err=f"'{g['name']}' is still used by: {', '.join(used)} (Call flow). Change those first.")
         c.execute("UPDATE inbound_routes SET group_id=NULL WHERE group_id=?", (gid,))
         c.execute("UPDATE ring_groups SET vm_mode='member', noanswer_target='' WHERE vm_mode='group' AND noanswer_target=?",
                   (str(gid),))
