@@ -84,8 +84,7 @@ def redirect_uri(request: Request, c=None):
     c = c or cfg()
     if c["base_url"]:
         return c["base_url"] + CALLBACK
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
-    return ("https" if M.is_https(request) else "http") + "://" + host + CALLBACK
+    return M.public_base(request) + CALLBACK
 
 
 # ------------------------------------------------------------------ HTTP

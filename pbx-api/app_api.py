@@ -944,7 +944,7 @@ def app_page(request: Request, code: str = "", sip: bool = False):
     ) or "<tr><td colspan='4' class='muted'>No phones signed in.</td></tr>"
     shown = ""
     if code:
-        server = f"{'https' if M.is_https(request) else 'http'}://{request.headers.get('host', '')}"
+        server = M.public_base(request)
         qr = pair_qr_svg(server, code)
         qr_html = (f"<div style='background:#fff;padding:10px;border-radius:8px;display:inline-block;"
                    f"line-height:0'>{qr}</div>" if qr else "")
@@ -1070,7 +1070,7 @@ def app_connect(request: Request):
     esc = M.esc
     code = _new_pair_code(me["id"])
     M.ucp._audit(me, "app.pair_code", "browser sign-in")
-    server = f"{'https' if M.is_https(request) else 'http'}://{request.headers.get('host', '')}"
+    server = M.public_base(request)
     link = pair_link(server, code) + (f"&st={st}" if st else "")
     intent = android_link(link)
     body = f"""<h2>Signed in</h2>
