@@ -382,6 +382,7 @@ def page(title, body, username="", role="", tab=""):
         <a href="/trunks" class="{t}">Trunks</a>
         <a href="/routes" class="{r}">Routes</a>
         <a href="/ring-groups" class="{grp}">Ring groups</a>
+        <a href="/callflow" class="{cf}">Call flow</a>
         <a href="/cdr" class="{c}">CDR</a>
         <a href="/voicemail" class="{v}">Voicemail</a>
         <a href="/faxes" class="{fax}">Faxes</a>
@@ -414,6 +415,7 @@ def page(title, body, username="", role="", tab=""):
             fax="on" if tab == "faxes" else "",
             e911="on" if tab == "e911" else "",
             grp="on" if tab == "groups" else "",
+            cf="on" if tab == "callflow" else "",
             rep="on" if tab == "reports" else "",
             d="on" if tab=="dash" else "", l="on" if tab=="logins" else "",
             inv="on" if tab=="invites" else "",

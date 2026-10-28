@@ -33,9 +33,11 @@ KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "*", "#"]
 TIMEOUTS = [3, 5, 7, 10, 15]
 RETRIES = [0, 1, 2, 3, 5]
 EXT_RE = re.compile(r"^\d{2,6}$")
-DEST_LABEL = {"": "— not used —", "ext": "Ring extension", "group": "Ring group",
+DEST_LABEL = {"": "— not used —", "ext": "Ring extension", "group": "Ring extensions (list)",
               "vm": "Voicemail", "ivr": "Another menu", "repeat": "Repeat menu",
-              "hangup": "Hang up"}
+              "hangup": "Hang up", "rgroup": "Ring group", "tc": "Time condition",
+              "same": "— same as when no key is pressed —"}
+INV_RETRIES = [-1, 0, 1, 2, 3, 5]      # -1 = same as the no-key setting
 
 
 def esc(x):
@@ -79,9 +81,26 @@ def _extensions():
             " WHERE enabled=1 AND exten!='' ORDER BY exten")]
 
 
+def _rgroups():
+    with M.db() as c:
+        return [dict(r) for r in c.execute("SELECT id, name FROM ring_groups ORDER BY name")]
+
+
+def _tcs():
+    try:
+        with M.db() as c:
+            return [dict(r) for r in c.execute("SELECT id, name FROM time_conditions ORDER BY name")]
+    except Exception:
+        return []
+
+
 def _summ(dest, menus_by_id):
     t = (dest or {}).get("type", "")
     tg = (dest or {}).get("target", "")
+    if t == "rgroup":
+        return f'{DEST_LABEL[t]}: {esc({str(g["id"]): g["name"] for g in _rgroups()}.get(str(tg), "?"))}'
+    if t == "tc":
+        return f'{DEST_LABEL[t]}: {esc({str(x["id"]): x["name"] for x in _tcs()}.get(str(tg), "?"))}'
     if t == "ivr":
         return f'{DEST_LABEL[t]}: {esc(menus_by_id.get(str(tg), {}).get("name", "?"))}'
     if t in ("ext", "vm", "group"):
@@ -93,6 +112,14 @@ def _opts(menu):
     try:
         o = json.loads(menu.get("options") or "{}")
         return o if isinstance(o, dict) else {}
+    except Exception:
+        return {}
+
+
+def _ifb(menu):
+    try:
+        f = json.loads(menu.get("invalid_fallback") or "{}")
+        return f if isinstance(f, dict) and f.get("type") else {}
     except Exception:
         return {}
 
@@ -186,8 +213,18 @@ def _dest_picker(prefix, dest, exts, menus, restricted, me, self_id):
     t = (dest or {}).get("type", "")
     tg = str((dest or {}).get("target", ""))
     types = ["", "ext", "group", "vm", "ivr", "repeat", "hangup"]
-    if prefix == "fb":
+    if prefix in ("fb", "ifb"):
         types = ["hangup", "ext", "group", "vm", "ivr"]
+    if not restricted:
+        # System menus can also use the PBX's ring groups and time conditions.
+        types = types[:2] + ["rgroup"] + types[2:] + ["tc"]
+    if prefix == "ifb":
+        types = ["same"] + types
+        t = t or "same"
+    rg_opts = "".join(f'<option value="{g["id"]}" {"selected" if t == "rgroup" and tg == str(g["id"]) else ""}>'
+                      f'{esc(g["name"])}</option>' for g in _rgroups()) if not restricted else ""
+    tc_opts = "".join(f'<option value="{x["id"]}" {"selected" if t == "tc" and tg == str(x["id"]) else ""}>'
+                      f'{esc(x["name"])}</option>' for x in _tcs()) if not restricted else ""
     sel = "".join(f'<option value="{k}" {"selected" if k == t else ""}>{esc(DEST_LABEL[k])}</option>'
                   for k in types)
     ext_opts = "".join(
@@ -207,6 +244,8 @@ def _dest_picker(prefix, dest, exts, menus, restricted, me, self_id):
 <input name="{prefix}_group" class="dt dt-group" placeholder="e.g. 8800,8801" value="{esc(tg) if t == 'group' else ''}">
 <select name="{prefix}_vm" class="dt dt-vm">{vm_opts}</select>
 <select name="{prefix}_ivr" class="dt dt-ivr">{ivr_opts or '<option value="">(no other menus)</option>'}</select>
+<select name="{prefix}_rgroup" class="dt dt-rgroup">{rg_opts or '<option value="">(no ring groups yet)</option>'}</select>
+<select name="{prefix}_tc" class="dt dt-tc">{tc_opts or '<option value="">(no time conditions yet)</option>'}</select>
 </div>"""
 
 
@@ -254,6 +293,10 @@ def _editor(request, s, me, menu, restricted, action, cancel, error=""):
         f'<p class="muted">Lets phones dial this menu. Must not clash with an extension.</p>')
     sel = lambda name, vals, cur: "".join(
         f'<option value="{v}" {"selected" if int(cur or 0) == v else ""}>{v}</option>' for v in vals)
+    cur_inv = menu.get("invalid_retries")
+    cur_inv = -1 if cur_inv is None else int(cur_inv)
+    inv_sel = "".join(f'<option value="{v}" {"selected" if cur_inv == v else ""}>'
+                      f'{"same as no key" if v < 0 else str(v) + " times"}</option>' for v in INV_RETRIES)
     err = f'<div class="flash bad">{esc(error)}</div>' if error else ""
     return f"""{err}
 <form method="post" action="{action}" enctype="multipart/form-data" class="ivr-form">{csrf}
@@ -266,15 +309,18 @@ def _editor(request, s, me, menu, restricted, action, cancel, error=""):
 {greet}
 <p class="muted">Record something like: "Thanks for calling. For sales press 1, for support press 2, or dial an extension at any time."</p>
 <label>Wait for a key after the greeting<br><select name="timeout_sec">{sel("t", TIMEOUTS, menu["timeout_sec"])}</select> seconds</label>
-<label>Replay the menu if nothing / a wrong key is pressed<br><select name="max_retries">{sel("r", RETRIES, menu["max_retries"])}</select> times</label>
+<label>If no key is pressed, replay the menu<br><select name="max_retries">{sel("r", RETRIES, menu["max_retries"])}</select> times</label>
+<label>If a wrong key is pressed ("that option is invalid"), replay the menu<br><select name="invalid_retries">{inv_sel}</select></label>
 <label class="switch"><input type="checkbox" name="direct_dial" value="1" {"checked" if menu["direct_dial"] else ""}> <span>Callers may dial an extension number</span></label>
 <label class="switch"><input type="checkbox" name="enabled" value="1" {"checked" if menu["enabled"] else ""}> <span>Menu enabled</span></label>
 </section>
 <section class="panel">
 <h3>Keys</h3>
 <table class="keys">{rows}</table>
-<h3 style="margin-top:18px">When retries run out</h3>
+<h3 style="margin-top:18px">After the no-key replays run out</h3>
 {_dest_picker("fb", _fb(menu), exts, menus, restrict_dests, owner_me, menu["id"])}
+<h3 style="margin-top:18px">After the wrong-key replays run out</h3>
+{_dest_picker("ifb", _ifb(menu), exts, menus, restrict_dests, owner_me, menu["id"])}
 </section>
 </div>
 <p><button class="btn">Save menu</button> <a class="btn ghost" href="{cancel}">Cancel</a></p>
@@ -294,8 +340,16 @@ def _parse(form, restricted, owner, menu_id):
 
     def dest(prefix):
         t = form.get(prefix + "_type") or ""
-        if t in ("", "repeat", "hangup"):
-            return ({"type": t} if t else None), None
+        if t in ("", "repeat", "hangup", "same"):
+            return ({"type": t} if t and t != "same" else None), None
+        if t in ("rgroup", "tc"):
+            if restricted or owner:
+                return None, "Your menus can't use that destination."
+            v = form.get(prefix + "_" + t) or ""
+            ok = {str(x["id"]) for x in (_rgroups() if t == "rgroup" else _tcs())}
+            if v not in ok:
+                return None, "Pick a ring group." if t == "rgroup" else "Pick a time condition."
+            return {"type": t, "target": int(v)}, None
         if t == "ext":
             v = form.get(prefix + "_ext") or ""
             if v not in exts:
@@ -334,6 +388,17 @@ def _parse(form, restricted, owner, menu_id):
     fb = fb or {"type": "hangup"}
     if fb["type"] == "repeat":
         fb = {"type": "hangup"}
+    ifb, e = dest("ifb")
+    if e:
+        return None, f"After the wrong-key replays: {e}"
+    if ifb and ifb["type"] == "repeat":
+        ifb = None
+    try:
+        inv = int(form.get("invalid_retries") if form.get("invalid_retries") not in (None, "") else -1)
+    except ValueError:
+        inv = -1
+    if inv not in INV_RETRIES:
+        return None, "Bad wrong-key replays."
     exten = ""
     if not restricted and not owner:
         exten = (form.get("exten") or "").strip()
@@ -359,7 +424,8 @@ def _parse(form, restricted, owner, menu_id):
     return {"name": name, "exten": exten, "timeout_sec": timeout, "max_retries": retries,
             "direct_dial": 1 if form.get("direct_dial") else 0,
             "enabled": 1 if form.get("enabled") else 0,
-            "options": json.dumps(options), "fallback": json.dumps(fb)}, None
+            "options": json.dumps(options), "fallback": json.dumps(fb),
+            "invalid_retries": inv, "invalid_fallback": json.dumps(ifb) if ifb else ""}, None
 
 
 async def _save(request, s, menu_id, owner, restricted):
@@ -377,15 +443,18 @@ async def _save(request, s, menu_id, owner, restricted):
     with M.db() as c:
         if menu_id:
             c.execute("UPDATE ivr_menus SET name=?, exten=?, timeout_sec=?, max_retries=?, direct_dial=?,"
-                      " enabled=?, options=?, fallback=? WHERE id=?",
+                      " enabled=?, options=?, fallback=?, invalid_retries=?, invalid_fallback=? WHERE id=?",
                       (fields["name"], fields["exten"], fields["timeout_sec"], fields["max_retries"],
-                       fields["direct_dial"], fields["enabled"], fields["options"], fields["fallback"], menu_id))
+                       fields["direct_dial"], fields["enabled"], fields["options"], fields["fallback"],
+                       fields["invalid_retries"], fields["invalid_fallback"], menu_id))
         else:
             cur = c.execute("INSERT INTO ivr_menus (owner_login_id, name, exten, timeout_sec, max_retries,"
-                            " direct_dial, enabled, options, fallback) VALUES (?,?,?,?,?,?,?,?,?)",
+                            " direct_dial, enabled, options, fallback, invalid_retries, invalid_fallback)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                             (owner["id"] if owner else None, fields["name"], fields["exten"],
                              fields["timeout_sec"], fields["max_retries"], fields["direct_dial"],
-                             fields["enabled"], fields["options"], fields["fallback"]))
+                             fields["enabled"], fields["options"], fields["fallback"],
+                             fields["invalid_retries"], fields["invalid_fallback"]))
             menu_id = cur.lastrowid
         c.commit()
     up = form.get("greeting")
@@ -565,6 +634,8 @@ def admin_list(request: Request):
     flash = ""
     if request.query_params.get("msg") == "saved":
         flash = '<div class="flash ok">Saved.</div>'
+    if request.query_params.get("err"):
+        flash = f'<div class="flash bad">{esc(request.query_params["err"])}</div>'
     body = f"""{flash}<h2>IVR menus</h2>
 <p class="muted">System menus are yours to point inbound numbers at. User menus are built by users in their control panel.
 {("Inbound numbers using menus: " + used_by) if used_by else "No inbound numbers use a menu yet — set one under Routes."}</p>
@@ -637,6 +708,11 @@ async def admin_delete(request: Request, menu_id: int):
         return M._panel_locked(s, "ivr")
     m = _menu(menu_id)
     if m:
+        used = [u for u in M.callflow_ui._uses("ivr", menu_id) if not u.startswith("IVR menu ")]
+        if used:
+            from urllib.parse import quote
+            return RedirectResponse("/ivr?err=" + quote(f"'{m['name']}' is still used by: {', '.join(used)} "
+                                                       "(Call flow). Change those first."), status_code=303)
         _delete(m)
     return RedirectResponse("/ivr?msg=saved", status_code=303)
 

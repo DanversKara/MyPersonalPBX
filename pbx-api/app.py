@@ -48,6 +48,7 @@ import store_ui
 import fax_ui
 import fax_send
 import fax_brand
+import callflow_ui
 import entitlements
 import security
 import e911_ui
@@ -111,6 +112,12 @@ def _migrate(c):
                      ("faxes", "INTEGER NOT NULL DEFAULT -1")):
         if col not in cols("billing_plans"):
             c.execute(f"ALTER TABLE billing_plans ADD COLUMN {col} {ddl}")
+    # Call flow: a number can go to a time condition; IVR wrong-key handling.
+    if "tc_id" not in cols("inbound_routes"):
+        c.execute("ALTER TABLE inbound_routes ADD COLUMN tc_id INTEGER DEFAULT NULL")
+    if "invalid_retries" not in cols("ivr_menus"):
+        c.execute("ALTER TABLE ivr_menus ADD COLUMN invalid_retries INTEGER NOT NULL DEFAULT -1")
+        c.execute("ALTER TABLE ivr_menus ADD COLUMN invalid_fallback TEXT NOT NULL DEFAULT ''")
     if "header" not in cols("fax_outbox"):
         c.execute("ALTER TABLE fax_outbox ADD COLUMN header TEXT NOT NULL DEFAULT ''")
     if "recording_consent_at" not in cols("user_prefs"):
@@ -1815,19 +1822,22 @@ def routes_page(request: Request):
         return RedirectResponse("/login")
     with db() as c:
         inb = c.execute("SELECT r.id, r.did, r.ring_extens, r.timeout_sec, r.enabled, r.ivr_id, m.name AS ivr_name, r.fax_detect,"
-                        " r.group_id, g.name AS group_name, g.ring_seconds AS group_secs"
+                        " r.group_id, g.name AS group_name, g.ring_seconds AS group_secs, r.tc_id, tc.name AS tc_name"
                         " FROM inbound_routes r LEFT JOIN ivr_menus m ON m.id=r.ivr_id"
-                        " LEFT JOIN ring_groups g ON g.id=r.group_id ORDER BY r.did").fetchall()
+                        " LEFT JOIN ring_groups g ON g.id=r.group_id"
+                        " LEFT JOIN time_conditions tc ON tc.id=r.tc_id ORDER BY r.did").fetchall()
         outb = c.execute("SELECT r.name, r.patterns, t.name as trunk, r.priority, r.enabled FROM outbound_routes r LEFT JOIN trunks t ON r.trunk_id=t.id ORDER BY r.priority").fetchall()
     def _dest(r):
         fax = ' <span class="pill">+ fax</span>' if r['fax_detect'] else ''
+        if r['tc_id']:
+            return 'Time condition: ' + esc(r['tc_name'] or '(deleted)') + fax
         if r['ivr_id']:
             return 'IVR: ' + esc(r['ivr_name']) + fax
         if r['group_id']:
             return 'Ring group: ' + esc(r['group_name'] or '(deleted)') + fax
         return 'Ring ' + esc(r['ring_extens']) + fax
     def _secs(r):
-        if r['ivr_id']:
+        if r['ivr_id'] or r['tc_id']:
             return '-'
         return str(r['group_secs'] if r['group_id'] and r['group_secs'] else r['timeout_sec']) + 's'
     in_tr = "".join(f"<tr><td>{esc(r['did'])}</td><td>{_dest(r)}</td><td>{_secs(r)}</td><td>{'yes' if r['enabled'] else 'no'}</td><td><a class='btn ghost' href='/routes/inbound/{r['id']}/edit'>Edit</a></td></tr>" for r in inb)
@@ -1871,7 +1881,10 @@ def inbound_edit_page(request: Request, rid: str):
         return esc(t[k] if t and t[k] is not None else d)
     cur_ivr = dict(t).get("ivr_id") if t else None
     cur_grp = dict(t).get("group_id") if t else None
-    ivr_opts = '<option value="">Ring the extensions below</option>' + "".join(
+    cur_tc = dict(t).get("tc_id") if t else None
+    if cur_tc:
+        cur_ivr = cur_grp = None
+    ivr_opts = '<option value="">Ring the extensions below</option>' + callflow_ui.route_options(cur_tc) + "".join(
         f'<option value="g{g["id"]}" {"selected" if g["id"] == cur_grp and not cur_ivr else ""}>Ring group: {esc(g["name"])}</option>'
         for g in ring_groups_ui.all_groups()) + "".join(
         f'<option value="{m["id"]}" {"selected" if m["id"] == cur_ivr else ""}>IVR menu: {esc(m["name"])}'
@@ -1885,7 +1898,9 @@ def inbound_edit_page(request: Request, rid: str):
 <label>Send callers to<br><select name="ivr_id">{ivr_opts}</select></label><br>
 <label>Ring extensions (comma-separated, first answer wins)<br><input name="ring_extens" value="{v('ring_extens','[]')}" size="40" placeholder='["8800", "8801"] or 8800,8801'></label><br>
 <label>Timeout (seconds)<br><input name="timeout_sec" value="{v('timeout_sec','30')}" size="6"></label><br>
-<p><small>With an IVR menu selected, the menu answers and the ring list is only used if the menu is switched off.
+<p><small>A time condition sends calls one way in business hours and another after hours or on holidays
+(<a href="/callflow">Call flow</a>). Caller rules there are checked before any of this.
+With an IVR menu selected, the menu answers and the ring list is only used if the menu is switched off.
 A number that rings a single user uses that user's own ring time and "answer with IVR" setting.</small></p>
 {fax_ui.route_fields(t)}
 <label><input type="checkbox" name="enabled" {'checked' if not t or t['enabled'] else ''}> Enabled</label><br><br>
@@ -1972,7 +1987,12 @@ async def inbound_edit_save(request: Request, rid: str,
                     s["username"], s["role"], "routes"), status_code=400)
     ivr = None
     grp = None
-    if ivr_id.strip().startswith("g") and ivr_id.strip()[1:].isdigit():
+    tcid = None
+    if ivr_id.strip().startswith("t") and ivr_id.strip()[1:].isdigit():
+        with db() as c:
+            if c.execute("SELECT 1 FROM time_conditions WHERE id=?", (int(ivr_id.strip()[1:]),)).fetchone():
+                tcid = int(ivr_id.strip()[1:])
+    elif ivr_id.strip().startswith("g") and ivr_id.strip()[1:].isdigit():
         with db() as c:
             if c.execute("SELECT 1 FROM ring_groups WHERE id=?", (int(ivr_id.strip()[1:]),)).fetchone():
                 grp = int(ivr_id.strip()[1:])
@@ -1988,11 +2008,12 @@ async def inbound_edit_save(request: Request, rid: str,
     with db() as c:
         fax_before = c.execute("SELECT COUNT(*) FROM inbound_routes WHERE fax_detect=1 AND enabled=1").fetchone()[0] > 0
         if rid == "new":
-            route_id = c.execute("INSERT INTO inbound_routes (did, ring_extens, timeout_sec, enabled, ivr_id, group_id) VALUES (?,?,?,?,?,?)",
-                                 (did.strip(), ring_extens, timeout_sec, en, ivr, grp)).lastrowid
+            route_id = c.execute("INSERT INTO inbound_routes (did, ring_extens, timeout_sec, enabled, ivr_id, group_id, tc_id)"
+                                 " VALUES (?,?,?,?,?,?,?)",
+                                 (did.strip(), ring_extens, timeout_sec, en, ivr, grp, tcid)).lastrowid
         else:
-            c.execute("UPDATE inbound_routes SET did=?, ring_extens=?, timeout_sec=?, enabled=?, ivr_id=?, group_id=? WHERE id=?",
-                      (did.strip(), ring_extens, timeout_sec, en, ivr, grp, rid))
+            c.execute("UPDATE inbound_routes SET did=?, ring_extens=?, timeout_sec=?, enabled=?, ivr_id=?, group_id=?, tc_id=? WHERE id=?",
+                      (did.strip(), ring_extens, timeout_sec, en, ivr, grp, tcid, rid))
             route_id = int(rid)
         fax_ui.save_route_fields(c, route_id, fax_vals)
         fax_after = c.execute("SELECT COUNT(*) FROM inbound_routes WHERE fax_detect=1 AND enabled=1").fetchone()[0] > 0
@@ -4301,6 +4322,7 @@ store_ui.install(_sys.modules[__name__], billing)
 fax_ui.install(_sys.modules[__name__])
 fax_send.install(_sys.modules[__name__])
 fax_brand.install(_sys.modules[__name__])
+callflow_ui.install(_sys.modules[__name__])
 security.install(_sys.modules[__name__])
 e911_ui.install(_sys.modules[__name__])
 ring_groups_ui.install(_sys.modules[__name__])

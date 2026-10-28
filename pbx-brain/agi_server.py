@@ -174,7 +174,8 @@ def handle_msg_route(agi_vars):
             log.info("msg-route: %s is a guest extension with internal texting off", dest_exten)
             return
         try:
-            if c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?",
+            if c.execute("SELECT 1 FROM blocked_numbers WHERE login_id=? AND number=?"
+                         " AND action NOT IN ('ring_novm', 'vip')",
                          (dest["id"], from_exten)).fetchone():
                 log.info("msg-route: %s blocked %s", dest_exten, from_exten)
                 return

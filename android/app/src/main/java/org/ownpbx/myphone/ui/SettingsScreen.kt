@@ -408,17 +408,27 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 edit = "email"
             }
 
-            Section("Blocked numbers")
+            Section("Call filtering")
             if (st.blocked.isEmpty())
                 Text(
-                    "Nobody is blocked.",
+                    "No numbers yet.",
                     Modifier.padding(horizontal = 16.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             st.blocked.forEach { b ->
+                // What happens when this number calls (set here or in My Phone on the web).
+                val (icon, what) =
+                    when (b.action) {
+                        "voicemail" -> Icons.Filled.Voicemail to "Straight to voicemail"
+                        "forward" -> Icons.Filled.PhoneForwarded to "Forwarded to ${prettyNumber(b.target)}"
+                        "ring_novm" -> Icons.Filled.PhoneDisabled to "Rings you, no voicemail"
+                        "vip" -> Icons.Filled.Star to "Always rings you, even on Do Not Disturb"
+                        else -> Icons.Filled.Block to "Blocked (\"not in service\")"
+                    }
                 ListItem(
-                    leadingContent = { Icon(Icons.Filled.Block, null) },
+                    leadingContent = { Icon(icon, null) },
                     headlineContent = { Text(prettyNumber(b.number)) },
+                    supportingContent = { Text(what) },
                     trailingContent = {
                         TextButton({
                             scope.launch {
@@ -426,7 +436,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                                 load()
                             }
                         }) {
-                            Text("Unblock")
+                            Text("Remove")
                         }
                     },
                 )
