@@ -100,13 +100,30 @@ def _is_recipient(login_id, fid):
 def show_tab(me):
     """Faxes tab (web and app): they have faxes, a fax number rings them, or
     they have a number to send from. Shown even before the PBX is ready to
-    send, so the page can say what's missing instead of the tab being absent."""
+    send, so the page can say what's missing instead of the tab being absent.
+
+    An admin who turns Fax ON for this user (Billing -> User access, a
+    per-user 'admin' row, not a plan) always gets the tab shown, even with no
+    number routed to them yet: the admin asked for it, so the page appears
+    and says what's still missing. Works the same in App store mode."""
     try:
         if _has_received(me):
             return True          # keep access to faxes already received
-        return M.fax_send.entitled(me) and bool(user_has_faxes(me) or M.fax_send.allowed_numbers(me))
+        if not M.fax_send.entitled(me):
+            return False
+        if _admin_granted(me):
+            return True
+        return bool(user_has_faxes(me) or M.fax_send.allowed_numbers(me))
     except Exception:
         return False
+
+
+def _admin_granted(me):
+    """Fax turned on for this user by the admin (not by a plan or the default)."""
+    with M.db() as c:
+        r = c.execute("SELECT quota FROM user_entitlements WHERE login_id=? AND feature='fax' AND source='admin'",
+                      (me["id"],)).fetchone()
+        return bool(r and int(r[0]) != 0)
 
 
 def _has_received(me):
