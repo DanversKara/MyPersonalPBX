@@ -106,6 +106,14 @@ data class Usage(
     val includes: UsageIncludes = UsageIncludes(),
 )
 
+/** One service and whether it's on for this account (GET /api/v1/me/features). */
+@Serializable
+data class FeatureItem(val key: String = "", val label: String = "", val on: Boolean = false)
+
+/** GET /api/v1/me/features — on/off only: no counts, limits, plan name or prices (store-safe). */
+@Serializable
+data class Features(val features: List<FeatureItem> = emptyList(), val account_note: String = "")
+
 @Serializable
 data class Call(
     val id: Long,
@@ -450,6 +458,8 @@ class Api(base: String, private val token: String?) {
     suspend fun settings(): Settings = get("/me/settings")
 
     suspend fun usage(): Usage = get("/me/usage")
+
+    suspend fun features(): Features = get("/me/features")
 
     /** Phone settings for the built-in phone (edge TLS + SRTP). */
     suspend fun sip(): SipInfo = get("/me/sip")

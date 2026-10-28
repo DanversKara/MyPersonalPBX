@@ -676,6 +676,27 @@ def me_usage(request: Request):
     }
 
 
+
+def me_features(request: Request):
+    """Features for the app's "Features" screen: just which services are on
+    for this account, as on/off. No minutes, counts, limits, plan name or
+    prices, so it is safe in App store mode (the Settings row store-mode
+    users see instead of "Plan & usage"). Works for every user."""
+    me = _need(request)
+    U = M.ucp
+    on = lambda f: U._quota(me, f) != 0
+    items = [
+        ("calls", "Calling phone numbers", on("call_minutes")),
+        ("messages", "Texting", on("messages")),
+        ("voicemail", "Voicemail", on("voicemail")),
+        ("push_to_talk", "Push-to-talk", bool(me.get("ptt_allowed")) or on("push_to_talk")),
+        ("recording", "Call recording", on("recording")),
+        ("ivr_menus", "Call menus (IVR)", on("ivr_menus")),
+        ("fax", "Fax (send & receive)", M.fax_send.entitled(me)),
+    ]
+    return {"features": [{"key": k, "label": label, "on": bool(v)} for k, label, v in items],
+            "account_note": account_note() if hide_billing(me) else ""}
+
 def app_line(me) -> str:
     """SIP username of the user's My Phone app line."""
     return "%s-app" % me["sip_username"]
@@ -1090,6 +1111,7 @@ def install(app_module):
     app.get("/api/v1/me/timeline")(me_timeline)
     app.get("/api/v1/me/settings")(me_settings)
     app.get("/api/v1/me/usage")(me_usage)
+    app.get("/api/v1/me/features")(me_features)
     app.get("/api/v1/me/devices")(me_devices)
     app.delete("/api/v1/me/devices/{dev_id}")(me_device_delete)
     app.put("/api/v1/me/push")(me_push)
