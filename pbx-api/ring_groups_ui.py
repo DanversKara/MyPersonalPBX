@@ -154,9 +154,9 @@ def edit_page(request: Request, gid: str):
               f'<button class="btn ghost danger">Delete group</button></form>') if g else ""
     body = f"""{_flash(request)}<h2>{'Edit' if g else 'Add'} ring group</h2>
 <form method="post" action="/ring-groups/{gid}/edit">{csrf}
-<label>Name<br><input name="name" value="{esc(g['name'] if g else '')}" required maxlength="40" placeholder="Front office"></label>
-<label>Internal number <span class="muted">(optional - lets phones dial the group)</span><br><input name="exten" value="{esc((g['exten'] if g else '') or '')}" inputmode="numeric" size="8" placeholder="e.g. 600"></label>
-<label>Ring for (seconds)<br><input name="ring_seconds" value="{g['ring_seconds'] if g else 30}" inputmode="numeric" size="5"></label>
+<label class="rg-field">Name<br><input name="name" value="{esc(g['name'] if g else '')}" required maxlength="40" placeholder="Front office"></label>
+<label class="rg-field">Internal number <span class="muted">(optional - lets phones dial the group)</span><br><input name="exten" value="{esc((g['exten'] if g else '') or '')}" inputmode="numeric" size="8" placeholder="e.g. 600"></label>
+<label class="rg-field">Ring for (seconds)<br><input name="ring_seconds" value="{g['ring_seconds'] if g else 30}" inputmode="numeric" size="5"></label>
 <h3>Members</h3>
 <p class="muted">Tick who rings. "Order" decides who is first (the default voicemail box); everyone rings at the same time.</p>
 <table><tr><th>Rings</th><th>User</th><th>Order</th></tr>{rows}</table>
@@ -182,7 +182,7 @@ def edit_page(request: Request, gid: str):
   sel.addEventListener('change', show); show();
 }})();
 </script>
-<style>.rg-field{{margin:10px 0}}.rg-field select,.rg-field input{{min-width:240px}}</style>
+<style>.rg-field{{margin:10px 0}}label.rg-field{{display:block}}.rg-field select,.rg-field input{{min-width:240px}}</style>
 <label class="switch"><input type="checkbox" name="enabled" value="1" {"checked" if (not g or g['enabled']) else ""}> <span>Enabled</span></label>
 <button class="btn">Save</button> <a class="btn ghost" href="/ring-groups">Cancel</a>
 </form>
