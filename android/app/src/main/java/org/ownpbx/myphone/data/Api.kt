@@ -325,7 +325,7 @@ class ApiException(val status: Int, message: String) : Exception(message)
 
 /** Thin client for pbx-api's /api/v1/app and /api/v1/me endpoints. */
 class Api(base: String, private val token: String?) {
-    private val base = base.trim().trimEnd('/')
+    private val base = normalizeServer(base)
 
     companion object {
         val json = Json {
@@ -341,11 +341,18 @@ class Api(base: String, private val token: String?) {
         /** For /me/wait, which holds the request open up to ~55 s. */
         val httpLong: OkHttpClient = http.newBuilder().readTimeout(75, TimeUnit.SECONDS).build()
 
+        /**
+         * Just scheme://host[:port]: a pasted page address (".../ucp/app") keeps only the server,
+         * and a Cloudflare Worker's private "origin-" hostname becomes the public one.
+         */
         fun normalizeServer(s: String): String {
-            var u = s.trim().trimEnd('/')
-            if (u.isNotEmpty() && !u.startsWith("http://") && !u.startsWith("https://"))
-                u = "https://$u"
-            return u
+            var u = s.trim()
+            if (u.isEmpty()) return u
+            if (!u.startsWith("http://", true) && !u.startsWith("https://", true)) u = "https://$u"
+            val scheme = u.substringBefore("://").lowercase()
+            var host = u.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#')
+            if (host.startsWith("origin-", true)) host = host.substring("origin-".length)
+            return "$scheme://$host"
         }
     }
 
