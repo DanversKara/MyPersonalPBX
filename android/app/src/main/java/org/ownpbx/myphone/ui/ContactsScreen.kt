@@ -7,6 +7,7 @@
 package org.ownpbx.myphone.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -348,9 +349,28 @@ private fun ContactDetailScreen(model: AppModel, id: Long, onClose: () -> Unit) 
                                     if (cc.name.isNotBlank())
                                         Text(
                                             prettyNumber(cc.number),
+                                            // Tap the number to call it, like any phone's contacts.
+                                            Modifier.clickable(enabled = cc.number.isNotBlank()) {
+                                                model.callRequest = cc.number
+                                            },
                                             style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            color = MaterialTheme.colorScheme.primary,
                                         )
+                                }
+                            }
+                            if (cc.number.isNotBlank()) {
+                                Spacer(Modifier.height(12.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button({ model.callRequest = cc.number }) {
+                                        Icon(Icons.Filled.Call, null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Call")
+                                    }
+                                    FilledTonalButton({ model.chatWith = cc.number }) {
+                                        Icon(Icons.Filled.Chat, null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Text")
+                                    }
                                 }
                             }
                             if (cc.org.isNotBlank()) Text(cc.org, Modifier.padding(top = 8.dp))
