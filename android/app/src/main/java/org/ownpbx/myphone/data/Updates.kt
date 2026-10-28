@@ -69,10 +69,33 @@ object Updates {
     }
 
     /**
+     * True when this install came from Google Play (installer package com.android.vending). An
+     * unknown installer, or a lookup failure, means "not Play": sideloaded installs keep the GitHub
+     * check.
+     */
+    fun isPlayInstall(ctx: Context): Boolean {
+        return try {
+            val installer =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    ctx.packageManager.getInstallSourceInfo(ctx.packageName).installingPackageName
+                } else {
+                    @Suppress("DEPRECATION")
+                    ctx.packageManager.getInstallerPackageName(ctx.packageName)
+                }
+            installer == "com.android.vending"
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
      * Check GitHub (at most once a day unless [force]), remember the result, and return the current
      * offer if any. Network and parse errors are swallowed by design.
      */
     suspend fun refresh(ctx: Context, force: Boolean = false): Offer? {
+        // Google Play installs never self-update: Play delivers updates itself, and a
+        // GitHub .apk cannot install over a Play-signed app anyway.
+        if (isPlayInstall(ctx)) return null
         val store = Store(ctx)
         if (!store.updateCheck) return null
         val now = System.currentTimeMillis()

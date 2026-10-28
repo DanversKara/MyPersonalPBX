@@ -712,22 +712,29 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 Text("Free software (GPL-2.0-or-later). No ads, no tracking, no Google services.")
             },
         )
-        var updateCheck by remember { mutableStateOf(store.updateCheck) }
-        SwitchRow(
-            Icons.Filled.Update,
-            "Check for updates",
-            "Checks whenever the app opens — an update shows on screen right away",
-            updateCheck,
-        ) {
-            updateCheck = it
-            store.updateCheck = it
-        }
-        ClickRow(
-            Icons.Filled.SystemUpdate,
-            "Check for updates now",
-            "You have ${org.ownpbx.myphone.data.Updates.installedVersion()}",
-        ) {
-            model.checkUpdates(ctx, force = true)
+        if (org.ownpbx.myphone.data.Updates.isPlayInstall(ctx)) {
+            ListItem(
+                headlineContent = { Text("Updates") },
+                supportingContent = { Text("Delivered by Google Play") },
+            )
+        } else {
+            var updateCheck by remember { mutableStateOf(store.updateCheck) }
+            SwitchRow(
+                Icons.Filled.Update,
+                "Check for updates",
+                "Checks whenever the app opens — an update shows on screen right away",
+                updateCheck,
+            ) {
+                updateCheck = it
+                store.updateCheck = it
+            }
+            ClickRow(
+                Icons.Filled.SystemUpdate,
+                "Check for updates now",
+                "You have ${org.ownpbx.myphone.data.Updates.installedVersion()}",
+            ) {
+                model.checkUpdates(ctx, force = true)
+            }
         }
         Spacer(Modifier.height(32.dp))
     }
