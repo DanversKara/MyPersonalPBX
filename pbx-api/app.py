@@ -1479,6 +1479,16 @@ def public_base(request: Request) -> str:
     return f"{'https' if is_https(request) else 'http'}://{host}"
 
 
+def request_base(request: Request) -> str:
+    """The address the visitor is on right now (minus a Worker's private
+    "origin-" prefix). Used for the app's server: it must be where this
+    browser actually reached the panel, whatever the saved settings say."""
+    host = (request.headers.get("host") or request.url.netloc or "").strip()
+    if host.lower().startswith("origin-"):
+        host = host[len("origin-"):]
+    return f"{'https' if is_https(request) else 'http'}://{host}"
+
+
 def _invite_base_url(request: Request) -> str:
     return public_base(request)
 
