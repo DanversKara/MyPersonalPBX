@@ -133,6 +133,55 @@ def hide_billing(me) -> bool:
         return False
 
 
+def web_hide_billing(me) -> bool:
+    """App store mode, second switch: the WEB My Phone portal also hides the
+    Billing tab, the plan/usage box and plan wording, so a store reviewer's
+    test account looks like a plain phone / push-to-talk service.
+    Per login (logins.web_hide_billing) or for everyone
+    (kv web_hide_billing_all). Independent of the app switch above."""
+    try:
+        with M.db() as c:
+            r = c.execute("SELECT value FROM kv_settings WHERE key='web_hide_billing_all'").fetchone()
+            if r and r[0] == "1":
+                return True
+            r = c.execute("SELECT web_hide_billing FROM logins WHERE id=?", (me["id"],)).fetchone()
+            return bool(r and r[0])
+    except Exception:
+        return False
+
+
+# Plan / money wording in the web portal -> plain account wording. Applied to
+# the whole rendered My Phone page (ucp._render) for web-hidden users, so
+# every page (Calls, Voicemail, Messages, Settings, IVR, Faxes, ...) is
+# covered without threading a flag through each one. Order matters: the
+# specific sentences first, the generic "your plan" fallback last.
+_WEB_NEUTRAL = [
+    (re.compile(r'\s*<a\b[^>]*href="/ucp/billing[^"]*"[^>]*>.*?</a>', re.S), ""),
+    (re.compile(r"Outside calls need a plan\."), "Outside calls aren't available on your account."),
+    (re.compile(r"You've used all your outside call minutes this month\."), "Outside calls aren't available right now."),
+    (re.compile(r"You've used all your texts this month\."), "Sending texts isn't available right now."),
+    (re.compile(r"You have no texts left on your plan this month\."), "Sending texts isn't available right now."),
+    (re.compile(r"You've sent all the faxes your plan includes this month(?: \(resets on the 1st\))?\."),
+     "Sending faxes isn't available right now."),
+    (re.compile(r"It is included only when your plan has push-to-talk or your admin turns it on for you\."),
+     "Your administrator can turn it on for you."),
+    (re.compile(r"\s*\(through your plan or your admin\)"), ""),
+    (re.compile(r";\s*both count\s+toward your plan's monthly texts\."), "."),
+    (re.compile(r"Uses outside-call minutes from your plan\.\s*"), ""),
+    (re.compile(r"\s*Choose a plan with fax to send and receive faxes\."), ""),
+    (re.compile(r"\d[\d,]* (?:text|fax)(?:es|s)? left this month\.?\s?"), ""),
+    (re.compile(r"\b(is|are)n(?:'|&#x27;|&#39;)t included in your plan"), r"\1n't available on your account"),
+    (re.compile(r"on your plan(?: right now)?"), "on your account"),
+    (re.compile(r"\byour plan\b"), "your account"),
+]
+
+
+def web_neutral(page_html: str) -> str:
+    for rx, rep in _WEB_NEUTRAL:
+        page_html = rx.sub(rep, page_html)
+    return page_html
+
+
 def neutral(me, text, hidden=None):
     """Text for the app: plan/billing wording becomes a plain 'not available'."""
     if not text:

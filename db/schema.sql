@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS logins (
   user_wants_record INTEGER NOT NULL DEFAULT 0, -- user's own "record my calls" wish
   ptt_allowed INTEGER NOT NULL DEFAULT 0,  -- admin allow-flag for push-to-talk
   app_hide_billing INTEGER NOT NULL DEFAULT 0, -- My Phone app shows no plan/billing info (store builds)
+  web_hide_billing INTEGER NOT NULL DEFAULT 0, -- web My Phone portal also hides Billing + plan/usage
   ptt_enabled INTEGER NOT NULL DEFAULT 0,  -- user's own "receive push-to-talk" wish
   ptt_missed TEXT NOT NULL DEFAULT 'voicemail',  -- missed PTT: 'voicemail' | 'retry' (chirp again)
   app_version TEXT NOT NULL DEFAULT '',     -- last My Phone app version the phone reported (header)

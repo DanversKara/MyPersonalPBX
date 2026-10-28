@@ -185,6 +185,8 @@ def _migrate(c):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_allowed INTEGER NOT NULL DEFAULT 0")
     if "app_hide_billing" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN app_hide_billing INTEGER NOT NULL DEFAULT 0")
+    if "web_hide_billing" not in cols("logins"):
+        c.execute("ALTER TABLE logins ADD COLUMN web_hide_billing INTEGER NOT NULL DEFAULT 0")
     if "ptt_enabled" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN ptt_enabled INTEGER NOT NULL DEFAULT 0")
     if "ptt_missed" not in cols("logins"):
@@ -1172,6 +1174,8 @@ to use lawfully.</p>
 <span class="muted">Override: this user can place and receive push-to-talk calls (dial *88 + extension) even when their plan doesn't include push-to-talk. Without this tick, push-to-talk works only when the user's plan includes it (Billing → Plans) — a user with no plan, or a plan without push-to-talk, gets none. They must still turn on push-to-talk in their own Settings themselves to receive calls — this cannot enable it for them. Uncheck to go back to plan-only.</span><br>
 <label><input type="checkbox" name="app_hide_billing" {'checked' if t and t['app_hide_billing'] else ''}> Hide plans &amp; billing in the My Phone app</label>
 <span class="muted">For phones using the app from Google Play: the app shows no plan, usage, texts/minutes left or "not in your plan" wording; anything unavailable just says it isn't available on this account. Calls, texts and limits work exactly the same. (Billing &rarr; App store mode can turn this on for everyone.)</span><br>
+<label><input type="checkbox" name="web_hide_billing" {'checked' if t and t['web_hide_billing'] else ''}> Also hide plans &amp; billing in the web My Phone portal</label>
+<span class="muted">The web portal hides the Billing tab, "Your plan this month" and plan wording, and /ucp/billing sends them back to the Overview, so the account looks like a plain phone / push-to-talk service with nothing for sale (handy for a Google Play review account). Limits still apply. Admin pages are not affected.</span><br>
 <label>Account type<br><select name="account_type"><option value="normal" {'selected' if not (t and t['is_guest']) else ''}>Normal extension</option><option value="guest" {'selected' if t and t['is_guest'] else ''}>Guest extension</option></select></label>
 <span class="muted">A guest extension is a restricted account (a courtesy, lobby or visitor phone). Calling other extensions, feature codes and internal ring groups always works. Everything below is OFF for a guest unless you turn it on. Switching type takes effect immediately — the account, extension and history are kept; switch back any time.</span><br>
 <label><input type="checkbox" name="guest_outbound" {'checked' if t and t['guest_outbound'] else ''}> Guest: allow outside calling</label>
@@ -1209,6 +1213,7 @@ async def login_edit_save(request: Request, lid: str,
                     record_admin: str = Form(None), user_record: str = Form(None),
                     ptt_allowed: str = Form(None),
                     app_hide_billing: str = Form(None),
+                    web_hide_billing: str = Form(None),
                     account_type: str = Form("normal"),
                     guest_outbound: str = Form(None), guest_inbound: str = Form(None),
                     guest_sms_mode: str = Form(None), guest_sms: str = Form(None),
@@ -1249,6 +1254,8 @@ async def login_edit_save(request: Request, lid: str,
             new_id = cur.lastrowid
             if app_hide_billing:
                 c.execute("UPDATE logins SET app_hide_billing=1 WHERE id=?", (new_id,))
+            if web_hide_billing:
+                c.execute("UPDATE logins SET web_hide_billing=1 WHERE id=?", (new_id,))
             # Create their voicemail box
             if exten:
                 c.execute("INSERT OR IGNORE INTO voicemail_boxes (mailbox, login_id) VALUES (?,?)",
@@ -1270,6 +1277,7 @@ async def login_edit_save(request: Request, lid: str,
             sets.append("user_record=?"); vals.append(1 if user_record else 0)
             sets.append("ptt_allowed=?"); vals.append(1 if ptt_allowed else 0)
             sets.append("app_hide_billing=?"); vals.append(1 if app_hide_billing else 0)
+            sets.append("web_hide_billing=?"); vals.append(1 if web_hide_billing else 0)
             sets.append("is_guest=?"); vals.append(1 if account_type == "guest" else 0)
             sets.append("guest_outbound=?"); vals.append(1 if guest_outbound else 0)
             sets.append("guest_inbound=?"); vals.append(1 if guest_inbound else 0)

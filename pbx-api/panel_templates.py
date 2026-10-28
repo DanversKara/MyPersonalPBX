@@ -371,7 +371,8 @@ _PIN_ADMIN_JS = """<script>
 </script>"""
 
 
-def page(title, body, username="", role="", tab=""):
+def page(title, body, username="", role="", tab="", hide_tabs=()):
+    """hide_tabs: user-tab keys to leave out (e.g. {"ucp-bill"} in App store mode)."""
     tabs = ""
     hide_admin = HIDE_ADMIN.get()
     if role == "admin" and not hide_admin:
@@ -434,7 +435,7 @@ def page(title, body, username="", role="", tab=""):
                     ("ucp-app", "/ucp/app", "App")]
         tabs = '<div class="tabs">' + "".join(
             f'<a href="{h}" class="{"on" if k == tab else ""}">{label}</a>'
-            for k, h, label in ucp_tabs) + "</div>"
+            for k, h, label in ucp_tabs if k not in hide_tabs) + "</div>"
     import html as _html
     shown_role = role + (", office-only admin" if role == "admin" and hide_admin else "")
     nav_user = f'<span>{_html.escape(username, quote=True)} ({_html.escape(shown_role, quote=True)})</span> <a href="/logout">Logout</a>' if username else ""
