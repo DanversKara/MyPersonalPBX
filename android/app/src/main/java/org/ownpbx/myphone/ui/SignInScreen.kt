@@ -59,7 +59,7 @@ fun SignInScreen(model: AppModel) {
             } catch (e: ApiException) {
                 error = when (e.status) {
                     // Only an older own-pbx (no app sign-in at all) answers 404/405 here.
-                    404, 405 -> "Your PBX doesn't support the app yet. Update it (run pbx-update on the PBX) and try again."
+                    404, 405 -> "$base answered ${e.status} (not found). Check the address is just your PBX, like https://myaccount.example.com. If it is, update the PBX (pbx-update)."
                     429 -> e.message
                     401 -> e.message ?: "That code is wrong or expired. Get a new one in My Phone > App."
                     else -> "The PBX answered with an error (${e.status}). Check the address and try again."
