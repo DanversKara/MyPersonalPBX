@@ -191,7 +191,7 @@ def list_page(request: Request):
             f'<tr><td>{esc(r["did"] or "Any number")}</td><td><b>{esc(what)}</b>'
             f'{("<br><span class=muted>" + esc(r["note"]) + "</span>") if r["note"] else ""}</td>'
             f'<td>{esc(cf.describe_dest(cf.jload(r["dest"], {}), names))}</td>'
-            f'<td>{r["hits"]}{("<br><span class=muted>last " + esc(r["last_hit"]) + "</span>") if r["last_hit"] else ""}</td>'
+            f'<td>{r["hits"]}{("<br><span class=muted>last " + esc(M.fmt_ts(r["last_hit"])) + "</span>") if r["last_hit"] else ""}</td>'
             f'<td>{"on" if r["enabled"] else "<span class=muted>off</span>"}</td>'
             f'<td><a class="btn ghost" href="/callflow/rule/{r["id"]}/edit">Edit</a></td></tr>')
     body = f"""{flash}<h2>Call flow</h2>
