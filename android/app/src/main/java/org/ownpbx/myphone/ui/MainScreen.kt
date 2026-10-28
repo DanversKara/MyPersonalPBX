@@ -69,6 +69,26 @@ fun applySipOverrides(
     )
 }
 
+/**
+ * Save the PBX's phone login as this phone's login (Settings > Calling > Phone login), the same as
+ * tapping "Get from my PBX" and Save. Done by itself on first sign-in and kept current afterwards
+ * (new server address, new phone password). A login the user typed for a different account is left
+ * alone. Returns true when something changed.
+ */
+fun adoptPbxLogin(st: org.ownpbx.myphone.data.Store, pbx: org.ownpbx.myphone.data.SipInfo?): Boolean {
+    if (pbx == null || !pbx.enabled || pbx.username.isBlank() || pbx.domain.isBlank()) return false
+    val user = st.sipUserOverride.trim()
+    val mine = user.isBlank() || user == pbx.username || user == pbx.main_username
+    if (!mine) return false
+    val server = "${pbx.domain}:${pbx.port}"
+    if (st.sipServerOverride == server && user == pbx.username && st.sipPassOverride == pbx.password)
+        return false
+    st.sipServerOverride = server
+    st.sipUserOverride = pbx.username
+    st.sipPassOverride = pbx.password
+    return true
+}
+
 @Composable
 fun MainScreen(model: AppModel) {
     // Kept in the model so they survive the PIN lock (switching apps).
@@ -87,6 +107,11 @@ fun MainScreen(model: AppModel) {
         }
     LaunchedEffect(Unit) {
         Notifier.schedule(ctx)
+        // Phone login: fill it in from the PBX (first sign-in) or bring it up to date.
+        model.guardQuiet { it.sip() }?.let { pbx ->
+            model.sip = pbx
+            if (adoptPbxLogin(model.store, pbx)) model.notice = "Phone login set up from your PBX"
+        }
         org.ownpbx.myphone.LiveService.sync(ctx)
         if (
             Build.VERSION.SDK_INT >= 33 &&
@@ -113,6 +138,7 @@ fun MainScreen(model: AppModel) {
                 ?: (if (custom) model.guardQuiet { it.sip() } else model.guard { it.sip() })?.also {
                     model.sip = it
                 }
+        adoptPbxLogin(st, fromPbx)
         val sip = applySipOverrides(st, fromPbx)
         when {
             sip == null -> {} // guard already showed the error

@@ -31,7 +31,7 @@ check("signed in: back to connect", r.status_code == 302 and r.headers["location
 r = c.get(r.headers["location"])
 m = re.search(r'id="go" href="([^"]+)"', r.text)
 link = html.unescape(m.group(1)) if m else ""
-check("hands the app an intent link", link.startswith("intent://pair?") and "package=org.ownpbx.myphone" in link, link)
+check("hands the app an intent link", link.startswith("intent://pair?") and "package=org.ownpbx;" in link, link)
 q = dict(urllib.parse.parse_qsl(link.split("?", 1)[1].split("#", 1)[0]))
 check("link has server, code and the app's state", q.get("st") == ST and len(q.get("c", "")) == 8 and q.get("s", "").startswith("http"), q)
 check("the code pairs", c.post("/api/v1/app/pair", json={"code": q["c"], "device_name": "t"}).status_code == 200)

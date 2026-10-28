@@ -174,6 +174,7 @@ class LiveService : Service() {
             } catch (e: Exception) {
                 null
             }
+        org.ownpbx.myphone.ui.adoptPbxLogin(store, pbx)
         val sip = org.ownpbx.myphone.ui.applySipOverrides(store, pbx) ?: return
         if (sip.enabled)
             kotlinx.coroutines.withContext(Dispatchers.Main) {

@@ -682,9 +682,13 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         ClickRow(
             Icons.Filled.Call,
             "Phone login",
-            if (customSip)
-                "Custom: ${store.sipUserOverride.ifBlank { "(PBX's username)" }} @ ${store.sipServerOverride.ifBlank { "(PBX's server)" }}"
-            else "Automatic (your extension's login from the PBX)",
+            when {
+                !customSip -> "Automatic (your extension's login from the PBX)"
+                store.sipUserOverride.endsWith("-app") ->
+                    "From your PBX: ${store.sipUserOverride} @ ${store.sipServerOverride}"
+                else ->
+                    "Custom: ${store.sipUserOverride.ifBlank { "(PBX's username)" }} @ ${store.sipServerOverride.ifBlank { "(PBX's server)" }}"
+            },
         ) {
             edit = "sip"
         }

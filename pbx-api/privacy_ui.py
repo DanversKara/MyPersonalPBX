@@ -96,7 +96,7 @@ def _days_left(utc_text):
 
 
 def _base_url(request):
-    return (_kv("panel_url") or str(request.base_url)).rstrip("/")
+    return M.public_base(request)
 
 
 def _mail_cfg():

@@ -24,7 +24,7 @@ class Store(context: Context) {
 
     var server: String
         get() =
-            prefs.getString("server", null)?.takeIf { it.isNotBlank() }
+            prefs.getString("server", null)?.takeIf { it.isNotBlank() }?.let(::moved)
                 ?: org.ownpbx.BuildConfig.DEFAULT_SERVER
         set(v) = prefs.edit().putString("server", v).apply()
 
@@ -259,4 +259,12 @@ class Store(context: Context) {
         // Downloaded voicemail audio belongs to the signed-in user.
         java.io.File(cacheDir, "voicemail").deleteRecursively()
     }
+}
+
+/** Addresses the PBX moved away from, mapped to where it lives now. */
+private val MOVED = mapOf("myphone.dox.box" to "https://myaccount.ownpbx.org")
+
+private fun moved(server: String): String {
+    val host = server.trim().removePrefix("https://").removePrefix("http://").substringBefore('/').substringBefore(':')
+    return MOVED[host.lowercase()] ?: server
 }

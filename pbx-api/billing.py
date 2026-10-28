@@ -98,7 +98,7 @@ def _date(ts):
 
 def _base_url(request):
     u = _kv("billing_public_url").strip().rstrip("/")
-    return u or str(request.base_url).rstrip("/")
+    return u or M.public_base(request)
 
 
 def _plans(active_only=False):

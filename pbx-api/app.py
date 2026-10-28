@@ -1464,12 +1464,23 @@ def _invite_allocate(c):
     return None, None
 
 
-def _invite_base_url(request: Request) -> str:
+def public_base(request: Request) -> str:
+    """The panel's public address for links, QR codes and the app's server:
+    the Email page's "panel address" if set, else the address this request
+    came in on. A Cloudflare Worker in front (failover page) reaches us on a
+    private "origin-<name>" hostname; that prefix is never shown to users."""
     with db() as c:
         r = c.execute("SELECT value FROM kv_settings WHERE key='panel_url'").fetchone()
         if r and (r["value"] or "").strip():
             return r["value"].strip().rstrip("/")
-    return str(request.base_url).rstrip("/")
+    host = (request.headers.get("host") or request.url.netloc or "").strip()
+    if host.lower().startswith("origin-"):
+        host = host[len("origin-"):]
+    return f"{'https' if is_https(request) else 'http'}://{host}"
+
+
+def _invite_base_url(request: Request) -> str:
+    return public_base(request)
 
 
 def _invite_lookup(token: str):
@@ -2659,10 +2670,8 @@ def sms_routes_page(request: Request):
         f"<a class='btn ghost' href='/sms-routes/{esc(r['did'])}/delete' onclick=\"return confirm('Delete route for {esc(r['did'])}?')\">Delete</a></td></tr>"
         for r in routes)
     # webhook URL preview
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "your-pbx").split(",")[0].strip()
-    scheme = "https" if is_https(request) else "http"
     tok = cfg.get("voipms_webhook_token") or "<set-token-below>"
-    hook = f"{scheme}://{host}/hooks/voipms-sms?token={tok}&to={{TO}}&from={{FROM}}&message={{MESSAGE}}&id={{ID}}&date={{TIMESTAMP}}"
+    hook = f"{public_base(request)}/hooks/voipms-sms?token={tok}&to={{TO}}&from={{FROM}}&message={{MESSAGE}}&id={{ID}}&date={{TIMESTAMP}}"
     body = f"""<h2>SMS / MMS (voip.ms)</h2>
 <p class="muted">Inbound: voip.ms URL Callback -> this PBX -> Zoiper (SIP MESSAGE) + My Phone + ESP. Outbound: ext -> external number -> voip.ms API.</p>
 <h3>DID routes (all 4 DIDs)</h3>
