@@ -417,6 +417,8 @@ def user_page(request: Request):
     s, me = M.ucp._me(request)
     if not s:
         return RedirectResponse("/login")
+    if M.app_api.web_hide_billing(me):          # App store mode (web): no Billing page
+        return RedirectResponse("/ucp", status_code=303)
     sid = request.query_params.get("session_id")
     if sid and ready():
         msg = "pending"
@@ -547,6 +549,8 @@ async def _user_post(request):
     if not s:
         raise HTTPException(401)
     await M._check_csrf(request, s)
+    if M.app_api.web_hide_billing(me):          # App store mode (web): no buying, switching, cancelling
+        raise HTTPException(404)
     return s, me
 
 
@@ -740,33 +744,48 @@ def _onoff_select(name, value):
 
 
 def store_mode_section(s):
-    """App store mode: which users' My Phone app shows no plan/billing info."""
+    """App store mode: which users' My Phone app (and, separately, web
+    My Phone portal) shows no plan/billing info."""
     csrf = M._csrf_field(s)
     with M.db() as c:
-        r = c.execute("SELECT value FROM kv_settings WHERE key='app_hide_billing_all'").fetchone()
-        allon = bool(r and r[0] == "1")
+        kv = dict(c.execute("SELECT key, value FROM kv_settings WHERE key IN "
+                            "('app_hide_billing_all','web_hide_billing_all')").fetchall())
+        allon = kv.get("app_hide_billing_all") == "1"
+        web_allon = kv.get("web_hide_billing_all") == "1"
         site = M.app_api.account_site()
         users = [dict(x) for x in c.execute(
-            "SELECT id, username, exten, display_name, app_hide_billing FROM logins WHERE role='user'"
-            " ORDER BY exten, username")]
-    boxes = "".join(
-        f'<label class="inline-chk" style="display:inline-block;margin:4px 18px 4px 0"><input type="checkbox" '
-        f'name="ids" value="{u["id"]}" {"checked" if u["app_hide_billing"] else ""}> {esc(u["display_name"] or u["username"])}'
-        f' <span class="muted">{esc(u["exten"] or "")}</span></label>' for u in users) or '<span class="muted">No users</span>'
+            "SELECT id, username, exten, display_name, is_guest, app_hide_billing, web_hide_billing"
+            " FROM logins WHERE role='user' ORDER BY exten, username")]
+    chk = lambda v: "checked" if v else ""
+    guest_tag = ' <span class="pill">guest</span>'
+    rows = "".join(
+        f'<tr><td>{esc(u["display_name"] or u["username"])} <span class="muted">{esc(u["exten"] or "")}</span>'
+        f'{guest_tag if u["is_guest"] else ""}</td>'
+        f'<td style="text-align:center"><input type="checkbox" name="ids" value="{u["id"]}" {chk(u["app_hide_billing"])} '
+        f'aria-label="Hide in the app for {esc(u["username"])}"></td>'
+        f'<td style="text-align:center"><input type="checkbox" name="web_ids" value="{u["id"]}" {chk(u["web_hide_billing"])} '
+        f'aria-label="Hide in the web portal for {esc(u["username"])}"></td></tr>'
+        for u in users) or '<tr><td colspan="3" class="muted">No users</td></tr>'
     return f"""<h3 id="store-mode">App store mode</h3>
-<p class="muted">For people using the My Phone app from Google Play (or another store). Their app shows <b>no</b> plan,
-usage, texts/minutes left, prices or "not in your plan" wording; anything unavailable just says
-"This isn't available on your account." Limits, minutes and plans still apply exactly the same, and
-the web My Phone portal is unchanged.</p>
+<p class="muted">For people using the My Phone app from Google Play (or another store), and for the test account you
+give a store reviewer. <b>In the app</b>: no plan, usage, texts/minutes left, prices or "not in your plan" wording;
+anything unavailable just says "This isn't available on your account." <b>In the web portal</b> (second column): the
+Billing tab, "Your plan this month" and all plan wording are hidden too, and the Billing page sends them back to the
+Overview, so the account looks like a plain phone / push-to-talk service with nothing for sale.
+Limits, minutes and plans still apply exactly the same either way.</p>
 <form method="post" action="/billing/app-store-mode" class="panel">{csrf}
-<label class="switch"><input type="checkbox" name="all" value="1" {"checked" if allon else ""}> <span><b>All users</b> (every app, including new accounts)</span></label>
+<label class="switch"><input type="checkbox" name="all" value="1" {chk(allon)}> <span><b>All users: hide in the app</b> (every app, including new accounts)</span></label>
+<label class="switch"><input type="checkbox" name="web_all" value="1" {chk(web_allon)}> <span><b>All users: also hide in the web portal</b> (including new accounts)</span></label>
 <p style="margin:10px 0 4px"><b>Or only these users:</b></p>
-<div>{boxes}</div>
+<table style="max-width:560px"><tr><th>User</th><th style="text-align:center">Hide in app</th><th style="text-align:center">Hide in web portal</th></tr>
+{rows}</table>
 <label style="display:block;margin-top:10px">Where to send them for account details<br>
 <input name="site" value="{esc(site)}" maxlength="80" placeholder="myphone.example.com" style="max-width:340px"></label>
 <p class="muted">The app shows "For account details, visit &lt;this&gt;" (plain text, not a button) in Settings and wherever
 something isn't available. Empty: "contact your administrator".</p>
-<p class="muted">Also on each login's edit page: <em>Hide plans &amp; billing in the My Phone app</em>. Apps pick it up within a minute.</p>
+<p class="muted">Also on each login's edit page: <em>Hide plans &amp; billing in the My Phone app</em> and
+<em>Also hide plans &amp; billing in the web My Phone portal</em>. Apps pick it up within a minute; the web portal on the next page load.
+Admin accounts never see plans, so they aren't listed.</p>
 <button class="btn ghost">Save</button>
 </form>"""
 
@@ -777,15 +796,21 @@ async def admin_store_mode(request: Request):
         return M._panel_locked(s, "billing")
     f = await request.form()
     ids = {int(x) for x in f.getlist("ids") if str(x).isdigit()}
+    web_ids = {int(x) for x in f.getlist("web_ids") if str(x).isdigit()}
     with M.db() as c:
         c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('app_hide_billing_all', ?)",
                   ("1" if f.get("all") else "0",))
+        c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('web_hide_billing_all', ?)",
+                  ("1" if f.get("web_all") else "0",))
         site = "".join(ch for ch in (f.get("site") or "").strip() if ch.isprintable() and ch not in "<>\"\'")[:80]
         c.execute("INSERT OR REPLACE INTO kv_settings (key, value) VALUES ('app_account_site', ?)", (site,))
         for (lid,) in c.execute("SELECT id FROM logins WHERE role='user'").fetchall():
-            c.execute("UPDATE logins SET app_hide_billing=? WHERE id=?", (1 if lid in ids else 0, lid))
+            c.execute("UPDATE logins SET app_hide_billing=?, web_hide_billing=? WHERE id=?",
+                      (1 if lid in ids else 0, 1 if lid in web_ids else 0, lid))
         c.commit()
-    _audit(s["username"], "billing.app_store_mode", f"all={1 if f.get('all') else 0} users={sorted(ids)}")
+    _audit(s["username"], "billing.app_store_mode",
+           f"all={1 if f.get('all') else 0} users={sorted(ids)} "
+           f"web_all={1 if f.get('web_all') else 0} web_users={sorted(web_ids)}")
     return _admin_back(msg="App store mode saved.")
 
 

@@ -287,14 +287,20 @@ def _render(request, s, me, tab, title, body):
             tabs.insert(3, ("ucp-fax", "/ucp/faxes", "Faxes" + (f" ({n})" if n else "")))
     except Exception:
         pass        # never let the fax tab break a My Phone page
+    # App store mode, web switch: no Billing tab, no plan wording anywhere.
+    hidden = M.app_api.web_hide_billing(me)
+    hide = {"ucp-bill"} if hidden else set()
+    tabs = [t for t in tabs if t[0] not in hide]
     sub = '<div class="subtabs">' + "".join(
         f'<a href="{href}" class="{"on" if key == tab else ""}">{esc(label)}</a>'
         for key, href, label in tabs) + "</div>"
     head = (f'<div class="ucp-head"><div><h2>{esc(title)}</h2>'
             f'<div class="muted">{esc(me["display_name"] or me["username"])}'
             f'{" · ext " + esc(me["exten"]) if me["exten"] else ""}</div></div></div>')
-    return HTMLResponse(M.page(title, sub + _flash(request) + head + body,
-                               s["username"], s["role"], tab))
+    content = sub + _flash(request) + head + body
+    if hidden:
+        content = M.app_api.web_neutral(content)
+    return HTMLResponse(M.page(title, content, s["username"], s["role"], tab, hide_tabs=hide))
 
 
 def _device_status(me):
@@ -542,8 +548,7 @@ def overview(request: Request):
 </div>
 <h3>911</h3>
 {M.e911_ui.user_notice(me["id"])}
-<h3>Your plan this month</h3>
-{M.billing.usage_panel(me)}
+{"" if M.app_api.web_hide_billing(me) else "<h3>Your plan this month</h3>" + M.billing.usage_panel(me)}
 <h3>Recent calls</h3>
 <table><tr><th>Type</th><th>Number</th><th>Length</th><th>When</th></tr>{rows}</table>
 <p><a href="/ucp/calls">All calls →</a></p>
@@ -929,6 +934,8 @@ def messages_page(request: Request):
     csrf = M._csrf_field(s)
     dis = "" if can_send else "disabled"
     left_txt = ("Unlimited texts" if mleft is None else f"{mleft} text{'s' if mleft != 1 else ''} left this month")
+    if M.app_api.web_hide_billing(me):
+        left_txt = "To an extension or phone number"
     compose = f"""<form method="post" action="/ucp/messages/send" class="panel msg-compose">{csrf}
 <b>New message</b> <span class="muted">· {esc(left_txt) if can_send else 'Sending isn\'t available on your plan right now'}</span><br>
 <input name="to" value="{esc(sel)}" placeholder="Extension (e.g. 8801)" inputmode="numeric" size="12" required {dis}>
