@@ -877,7 +877,7 @@ def sip_link(server: str, user: str, password: str) -> str:
     return f"{PAIR_SCHEME}://sip?" + urllib.parse.urlencode({"s": server, "u": user, "p": password})
 
 
-APP_PACKAGE = "org.ownpbx.myphone"
+APP_PACKAGE = "org.ownpbx"   # android applicationId (build.gradle.kts)
 
 
 def android_link(link: str) -> str:
