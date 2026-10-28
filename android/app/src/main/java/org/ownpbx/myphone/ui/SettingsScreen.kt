@@ -724,6 +724,18 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                 model.signedOut()
             }
         }
+        ClickRow(
+            Icons.Filled.PersonRemove,
+            "Delete account or download my data",
+            "Opens your account page in the browser",
+        ) {
+            val url = org.ownpbx.myphone.data.Api.normalizeServer(store.server) + "/ucp/delete"
+            try {
+                ctx.startActivity(
+                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                )
+            } catch (_: Exception) {}
+        }
 
         Section("About")
         ListItem(

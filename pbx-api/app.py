@@ -9,6 +9,7 @@ with bcrypt (same login-page-only model as the current panel).
 import html
 import os
 import secrets
+import shutil
 import sqlite3
 import hmac
 import subprocess
@@ -57,6 +58,7 @@ import safety_ui
 import voipms_sms
 import contacts
 import app_api
+import privacy_ui
 
 
 def esc(x):
@@ -527,6 +529,7 @@ REMOTE_ALLOWED_PREFIXES = (
     "/stripe/webhook", "/healthz", "/api/vm-greeting", "/api/voicemail-audio/",
     "/api/recording-audio/", "/api/ivr-greeting/", "/api/v1/me", "/favicon",
     "/hooks/voipms-sms", "/invite/", "/api/v1/app/", "/store", "/api/fax/",
+    "/data-export/",
 )
 
 
@@ -1329,6 +1332,60 @@ async def login_edit_save(request: Request, lid: str,
     return RedirectResponse("/logins", status_code=302)
 
 
+def wipe_login(lid_i: int):
+    """Delete a login and everything tied to it (recordings, CDR, texts,
+    voicemail, faxes, contacts, app sign-ins...). Used by the Logins page and
+    by account-deletion requests. Returns (extension, {table: count})."""
+    with db() as c:
+        t = c.execute("SELECT exten FROM logins WHERE id=?", (lid_i,)).fetchone()
+    exten = ((t["exten"] if t else "") or "").strip()
+    # Privacy purge: extension-tied data (recordings+audio, CDR, SMS/MMS,
+    # voicemail boxes+audio), including the login's own voicemail box.
+    purged = ucp.purge_extension_data([exten], moving_login_id=lid_i) if exten else {}
+    with db() as c:
+        # Recordings started by this login that don't match the extension.
+        for r in c.execute("SELECT id, path FROM recordings WHERE login_id=?", (lid_i,)).fetchall():
+            ucp._safe_unlink(r["path"], ucp.REC_ROOT)
+        c.execute("DELETE FROM recordings WHERE login_id=?", (lid_i,))
+        # Any voicemail boxes still owned by this login (purge already took
+        # vm-<ext> and the login's own box; this is belt-and-braces).
+        for b in c.execute("SELECT mailbox, greeting_path FROM voicemail_boxes WHERE login_id=?",
+                           (lid_i,)).fetchall():
+            for m in c.execute("SELECT path FROM voicemail_messages WHERE mailbox=?",
+                               (b["mailbox"],)).fetchall():
+                ucp._safe_unlink(m["path"], ucp.VM_ROOT)
+            ucp._safe_unlink(b["greeting_path"], ucp.VMGREET_DIR)
+            c.execute("DELETE FROM voicemail_messages WHERE mailbox=?", (b["mailbox"],))
+        c.execute("DELETE FROM voicemail_boxes WHERE login_id=?", (lid_i,))
+        # Login-scoped rows (FK cascades are not enforced in sqlite here).
+        for tbl, col in [("login_feature_access", "login_id"), ("message_hidden", "login_id"),
+                         ("user_prefs", "login_id"), ("ivr_menus", "owner_login_id"),
+                         ("user_entitlements", "login_id"), ("billing_customers", "login_id"),
+                         ("api_keys", "login_id"), ("e911_users", "login_id"),
+                         ("blocked_numbers", "login_id"),
+                         ("contacts", "login_id"), ("contact_notes", "login_id"),
+                         ("app_devices", "login_id"), ("ptt_trusted", "login_id"),
+                         ("fax_branding", "login_id")]:
+            c.execute(f"DELETE FROM {tbl} WHERE {col}=?", (lid_i,))
+        # Faxes: their copy goes; the fax itself once nobody else has it.
+        for r in c.execute("SELECT fax_id FROM fax_recipients WHERE login_id=?", (lid_i,)).fetchall():
+            c.execute("DELETE FROM fax_recipients WHERE fax_id=? AND login_id=?", (r["fax_id"], lid_i))
+            if not c.execute("SELECT 1 FROM fax_recipients WHERE fax_id=?", (r["fax_id"],)).fetchone():
+                f = c.execute("SELECT path FROM faxes WHERE id=?", (r["fax_id"],)).fetchone()
+                if f and f["path"]:
+                    ucp._safe_unlink(f["path"], fax_ui.FAX_DIR)
+                c.execute("DELETE FROM faxes WHERE id=?", (r["fax_id"],))
+        for r in c.execute("SELECT tif_path FROM fax_outbox WHERE login_id=?", (lid_i,)).fetchall():
+            job = os.path.dirname(r["tif_path"] or "")
+            if job and os.path.realpath(job).startswith(os.path.realpath(fax_send.out_dir()) + os.sep):
+                shutil.rmtree(job, ignore_errors=True)
+        c.execute("DELETE FROM fax_outbox WHERE login_id=?", (lid_i,))
+        c.execute("UPDATE privacy_requests SET login_id=NULL WHERE login_id=?", (lid_i,))
+        c.execute("DELETE FROM logins WHERE id=?", (lid_i,))
+        c.commit()
+    return exten, purged or {}
+
+
 @app.post("/logins/{lid}/delete", response_class=HTMLResponse)
 async def login_delete(request: Request, lid: str):
     """Permanently delete a login, their SIP endpoint, and all their data."""
@@ -1359,36 +1416,8 @@ async def login_delete(request: Request, lid: str):
                             "Promote another login to admin first.</p>"
                             "<p><a class='btn ghost' href='/logins'>Back to logins</a></p>",
                             s["username"], s["role"], "logins")
-        exten = (t["exten"] or "").strip()
         uname = t["username"]
-    # Privacy purge: extension-tied data (recordings+audio, CDR, SMS/MMS,
-    # voicemail boxes+audio), including the login's own voicemail box.
-    purged = ucp.purge_extension_data([exten], moving_login_id=lid_i) if exten else {}
-    with db() as c:
-        # Recordings started by this login that don't match the extension.
-        for r in c.execute("SELECT id, path FROM recordings WHERE login_id=?", (lid_i,)).fetchall():
-            ucp._safe_unlink(r["path"], ucp.REC_ROOT)
-        c.execute("DELETE FROM recordings WHERE login_id=?", (lid_i,))
-        # Any voicemail boxes still owned by this login (purge already took
-        # vm-<ext> and the login's own box; this is belt-and-braces).
-        for b in c.execute("SELECT mailbox, greeting_path FROM voicemail_boxes WHERE login_id=?",
-                           (lid_i,)).fetchall():
-            for m in c.execute("SELECT path FROM voicemail_messages WHERE mailbox=?",
-                               (b["mailbox"],)).fetchall():
-                ucp._safe_unlink(m["path"], ucp.VM_ROOT)
-            ucp._safe_unlink(b["greeting_path"], ucp.VMGREET_DIR)
-            c.execute("DELETE FROM voicemail_messages WHERE mailbox=?", (b["mailbox"],))
-        c.execute("DELETE FROM voicemail_boxes WHERE login_id=?", (lid_i,))
-        # Login-scoped rows (FK cascades are not enforced in sqlite here).
-        for tbl, col in [("login_feature_access", "login_id"), ("message_hidden", "login_id"),
-                         ("user_prefs", "login_id"), ("ivr_menus", "owner_login_id"),
-                         ("user_entitlements", "login_id"), ("billing_customers", "login_id"),
-                         ("api_keys", "login_id"), ("e911_users", "login_id"),
-                         ("blocked_numbers", "login_id"),
-                         ("contacts", "login_id"), ("contact_notes", "login_id")]:
-            c.execute(f"DELETE FROM {tbl} WHERE {col}=?", (lid_i,))
-        c.execute("DELETE FROM logins WHERE id=?", (lid_i,))
-        c.commit()
+    exten, purged = wipe_login(lid_i)
     # Sign them out everywhere, drop the SIP endpoint, and audit.
     drop_sessions(lid_i)
     _best_effort_apply()
@@ -4337,3 +4366,4 @@ ring_groups_ui.install(_sys.modules[__name__])
 safety_ui.install(_sys.modules[__name__])
 contacts.install(_sys.modules[__name__])
 app_api.install(_sys.modules[__name__])
+privacy_ui.install(_sys.modules[__name__])

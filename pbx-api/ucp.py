@@ -1319,7 +1319,8 @@ def _settings_body(request, s, me, extra_top=""):
 </form>
 </section>
 {M.safety_ui.settings_section(me, csrf)}
-</div>"""
+</div>
+<p class="muted" style="margin-top:16px"><a href="/ucp/delete">Download my data or delete my account</a></p>"""
 
 
 def settings_page(request: Request):

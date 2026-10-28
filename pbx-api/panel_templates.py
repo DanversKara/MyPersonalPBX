@@ -399,6 +399,7 @@ def page(title, body, username="", role="", tab="", hide_tabs=()):
         <a href="/sso" class="{sso}">Sign-on</a>
         <a href="/e911" class="{e911}">E911</a>
         <a href="/reports" class="{rep}">Reports</a>
+        <a href="/privacy" class="{priv}">Privacy</a>
         <a href="/api-keys" class="{k}">API Keys</a>
         <a href="/branding" class="{brand}">Branding</a>
         <a href="/ucp" class="{me}">My Phone</a>
@@ -418,6 +419,7 @@ def page(title, body, username="", role="", tab="", hide_tabs=()):
             grp="on" if tab == "groups" else "",
             cf="on" if tab == "callflow" else "",
             rep="on" if tab == "reports" else "",
+            priv="on" if tab == "privacy" else "",
             d="on" if tab=="dash" else "", l="on" if tab=="logins" else "",
             inv="on" if tab=="invites" else "",
             t="on" if tab=="trunks" else "", r="on" if tab=="routes" else "",
