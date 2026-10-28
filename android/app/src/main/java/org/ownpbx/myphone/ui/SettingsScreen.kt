@@ -167,6 +167,11 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         return
     }
     var showUsage by remember { mutableStateOf(false) }
+    var showFeatures by remember { mutableStateOf(false) }
+    if (showFeatures) {
+        FeaturesScreen(model) { showFeatures = false }
+        return
+    }
     if (showUsage) {
         UsageScreen(model) { showUsage = false }
         return
@@ -206,7 +211,11 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
         // just where to find account details. Hidden until the PBX has said which.
         when {
             overview == null -> {}
-            overview.hide_billing ->
+            overview.hide_billing -> {
+                // Store-safe: which services are on, nothing about minutes, limits or money.
+                ClickRow(Icons.Filled.Apps, "Features", "What's turned on for your account") {
+                    showFeatures = true
+                }
                 ListItem(
                     leadingContent = { Icon(Icons.Filled.AccountCircle, null) },
                     headlineContent = { Text("Account") },
@@ -214,6 +223,7 @@ fun SettingsScreen(model: AppModel, overview: Overview?, modifier: Modifier) {
                         Text(overview.account_note.ifBlank { "For account details, contact your administrator." })
                     },
                 )
+            }
             else ->
                 ClickRow(
                     Icons.Filled.DataUsage,
