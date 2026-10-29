@@ -149,6 +149,24 @@ def _load(username):
     return rows[:LIMIT]
 
 
+def _summary(rows):
+    counts = {}
+    first = {}
+    for i, r in enumerate(rows):
+        t = r["title"]
+        if t not in counts:
+            counts[t] = 0
+            first[t] = i
+        counts[t] += 1
+    titles = sorted(counts, key=lambda t: (-counts[t], first[t]))
+    parts = []
+    for j, t in enumerate(titles):
+        n = counts[t]
+        label = t if j == 0 else (t[:1].lower() + t[1:] if t else t)
+        parts.append(f"{label} {n} time" + ("s" if n != 1 else ""))
+    return "; ".join(parts) + "." if parts else ""
+
+
 def _page_rows(rows):
     out = []
     for r in rows:
@@ -170,9 +188,14 @@ def activity_page(request: Request, lid: str):
     rows = _load(user["username"])
     who = esc(user["display_name"] or user["username"])
     ext = esc(user["exten"] or "-")
+    summary = _summary(rows)
+    summary_html = ("<p style='background:#1E293B;border:1px solid #334155;border-left:4px solid #FF8A3D;"
+                    "border-radius:8px;padding:12px 16px;line-height:1.6'>"
+                    f"What {who} did: {esc(summary)}</p>") if summary else ""
     body = f"""<h2>Activity: {who} <span class='muted' style='font-weight:400'>({esc(user['username'])} · ext {ext})</span></h2>
 <p><a class='btn' href='/logins/{user['id']}/activity/download'>Download report</a> <a class='btn ghost' href='/logins'>Back to Logins</a></p>
 <p><span class='pill'>{len(rows)} events</span> <span class='pill'>last 24 hours</span></p>
+{summary_html}
 <p class='muted'>Sign-in IPs come from the panel sign-in log; other change rows do not record an IP.</p>
 <table><tr><th>When</th><th>What happened</th><th>Details</th><th>IP</th></tr>{_page_rows(rows)}</table>"""
     return HTMLResponse(M.page("User activity", body, s["username"], s["role"], "logins"))
@@ -182,6 +205,8 @@ def _standalone_html(user, rows):
     who = esc(user["display_name"] or user["username"])
     uname = esc(user["username"])
     ext = esc(user["exten"] or "-")
+    summary = _summary(rows)
+    summary_div = f'<div class="summary">What {who} did: {esc(summary)}</div>' if summary else ""
     trs = []
     for r in rows:
         trs.append(
@@ -207,6 +232,7 @@ def _standalone_html(user, rows):
   .stats {{ display: flex; flex-wrap: wrap; gap: 10px; max-width: 1060px; margin: 18px auto 0; padding: 0 24px; }}
   .pill {{ background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; font-size: 14px; }}
   .pill b {{ color: var(--orange); }}
+  .summary {{ max-width: 1060px; margin: 18px auto 0; padding: 16px 20px; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--orange); border-radius: 8px; line-height: 1.6; }}
   main {{ max-width: 1060px; margin: 18px auto 0; padding: 0 24px 32px; }}
   table {{ width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; }}
   th {{ text-align: left; padding: 12px 14px; background: #0B1220; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }}
@@ -229,6 +255,7 @@ def _standalone_html(user, rows):
   <span class="pill"><b>{len(rows)}</b> events</span>
   <span class="pill">last 24 hours</span>
 </div>
+{summary_div}
 <main>
 <table>
   <tr><th>When</th><th>What happened</th><th>Details</th><th>IP</th></tr>
