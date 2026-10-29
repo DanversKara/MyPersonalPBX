@@ -74,6 +74,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.environ.get("PBX_DB", "/var/lib/pbx/pbx.db")
 SCHEMA = os.path.join(BASE, "..", "db", "schema.sql")
 GEN = os.path.join(BASE, "..", "config-gen", "gen.py")
+PROMPT_DIR = os.environ.get("PBX_PROMPT_DIR", "/var/lib/pbx/prompts")
 
 app = FastAPI(title="pbx-api", version="0.1.0")
 _sessions: dict[str, dict] = {}
@@ -1921,6 +1922,34 @@ softphones need no changes.</p>
 <button class="btn">Save</button></form>
 <p class="muted">"Required" means numbers dialed without the prefix (including callbacks from call history on
 some phones) won't connect. "Optional" is the safest way to introduce a prefix.</p>"""
+    cur = _get_setting("blocked_call_prompt_path")
+    cur = "" if cur in ("", "0") else cur
+    if cur and os.path.isfile(cur):
+        bstat = (f'Custom prompt set: <b>{esc(os.path.basename(cur))}</b> — callers blocked from dialing out '
+                 f'(no outside minutes left) hear this instead of the generic cannot-complete announcement. '
+                 f'<a href="/routes/blocked-prompt/audio">Listen</a>')
+        bremove = (f'<form method="post" action="/routes/blocked-prompt/remove" class="inline">{_csrf_field(s)}'
+                   f'<button class="btn ghost">Remove custom prompt</button></form>')
+    elif cur:
+        bstat = ('Custom prompt is set but its file is missing, so blocked callers hear the generic '
+                 'cannot-complete announcement. Upload again or remove it.')
+        bremove = (f'<form method="post" action="/routes/blocked-prompt/remove" class="inline">{_csrf_field(s)}'
+                   f'<button class="btn ghost">Remove custom prompt</button></form>')
+    else:
+        bstat = ('No custom prompt: callers blocked from dialing out (no outside minutes left) hear the '
+                 'generic cannot-complete announcement.')
+        bremove = ""
+    body += f"""<h2>Blocked call prompt</h2>
+<p class="muted">What a caller hears when an outbound call is blocked because they have no outside minutes
+left — for example "sorry, that's not a feature in your current plan". This only changes what a blocked
+caller hears; who is blocked stays exactly as it is. Uploading a new prompt replaces the old one.</p>
+<p>{bstat}</p>
+<form method="post" action="/routes/blocked-prompt" enctype="multipart/form-data" class="panel">{_csrf_field(s)}
+<label>Prompt audio (WAV or MP3, max 60 seconds)<br><input type="file" name="prompt" accept="audio/*,.wav,.mp3"></label>
+<p class="muted">Stored as 8 kHz mono 16-bit WAV, like IVR greetings. MP3 needs the 'sox' tool on the server;
+without it, upload a WAV that is already 8 kHz, mono, 16-bit.</p>
+<button class="btn">Upload prompt</button></form>
+<p>{bremove}</p>"""
     return page("Routes", body, s["username"], s["role"], "routes")
 
 
@@ -1994,6 +2023,76 @@ async def routes_prefix(request: Request):
                   (s["username"], "routes.prefix", f"mode={mode} digit={digit}"))
         c.commit()
     return RedirectResponse("/routes", status_code=303)
+
+
+def _drop_prompt_file(path):
+    """Delete a replaced/removed custom prompt, but only inside PROMPT_DIR."""
+    try:
+        if path and path != "0" and os.path.commonpath([os.path.abspath(path), PROMPT_DIR]) == PROMPT_DIR:
+            os.remove(path)
+    except Exception:
+        pass
+
+
+@app.post("/routes/blocked-prompt")
+async def routes_blocked_prompt(request: Request):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    if _get_setting("safety_lock") == "1":
+        return _panel_locked(s, "routes")
+    await _check_csrf(request, s)
+    f = await request.form()
+    up = f.get("prompt")
+    if up is None or not getattr(up, "filename", ""):
+        return RedirectResponse("/routes", status_code=303)
+    data = await up.read()
+    try:
+        path = ivr_ui._convert_greeting(data, up.filename, "call", directory=PROMPT_DIR,
+                                        prefix="blocked", max_sec=60)
+    except ValueError as e:
+        msg = str(e).replace("Greeting", "Prompt").replace("greeting", "prompt")
+        return HTMLResponse(page("Routes",
+                                 f"<p style='color:red'>{esc(msg)}</p>"
+                                 f"<p><a href='/routes' class='btn'>Back to Routes</a></p>",
+                                 s["username"], s["role"], "routes"), status_code=400)
+    old = _get_setting("blocked_call_prompt_path")
+    _set_setting("blocked_call_prompt_path", path)
+    _drop_prompt_file(old)
+    with db() as c:
+        c.execute("INSERT INTO audit (actor, action, detail) VALUES (?,?,?)",
+                  (s["username"], "routes.blocked_prompt", f"path={path}"))
+        c.commit()
+    return RedirectResponse("/routes", status_code=303)
+
+
+@app.post("/routes/blocked-prompt/remove")
+async def routes_blocked_prompt_remove(request: Request):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    if _get_setting("safety_lock") == "1":
+        return _panel_locked(s, "routes")
+    await _check_csrf(request, s)
+    old = _get_setting("blocked_call_prompt_path")
+    _set_setting("blocked_call_prompt_path", "")
+    _drop_prompt_file(old)
+    with db() as c:
+        c.execute("INSERT INTO audit (actor, action, detail) VALUES (?,?,?)",
+                  (s["username"], "routes.blocked_prompt", "removed"))
+        c.commit()
+    return RedirectResponse("/routes", status_code=303)
+
+
+@app.get("/routes/blocked-prompt/audio")
+def routes_blocked_prompt_audio(request: Request):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        raise HTTPException(401)
+    p = _get_setting("blocked_call_prompt_path")
+    if not p or p == "0" or not os.path.isfile(p):
+        raise HTTPException(404)
+    return FileResponse(p, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/routes/inbound/{rid}/delete")

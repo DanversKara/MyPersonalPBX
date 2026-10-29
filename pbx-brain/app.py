@@ -329,10 +329,10 @@ def handle_internal(channel, dialed):
                 deny_and_hangup(channel, why="outside prefix %s required" % pfx)
                 return
         if not guest_can(me, "outbound"):
-            deny_and_hangup(channel, why="guest extension: outside calling is turned off")
+            deny_and_hangup(channel, blocked_call_prompt(), why="guest extension: outside calling is turned off")
             return
         if not can_call_outside(me["id"]):
-            deny_and_hangup(channel, why="%s has no outside minutes left" % me["exten"])
+            deny_and_hangup(channel, blocked_call_prompt(), why="%s has no outside minutes left" % me["exten"])
             return
         if handle_outbound(channel, me, dialed):
             return
@@ -2821,6 +2821,27 @@ DENIED_PROMPT = "sound:cannot-complete-as-dialed"
 # What a blocked caller hears: "The number you have dialed is not in service."
 DISCONNECTED_PROMPT = "sound:ss-noservice"
 UNAVAILABLE_PROMPT = "sound:vm-nobodyavail"
+# Custom prompt for outbound calls blocked for lack of outside minutes,
+# uploaded on the panel Routes page. The file path lives in kv_settings, so
+# a panel change takes effect without a brain restart. Any problem (unset,
+# missing file) falls back to the stock announcement, so a bad upload can
+# never silence the deny path.
+PROMPT_DIR = os.environ.get("PBX_PROMPT_DIR", "/var/lib/pbx/prompts")
+BLOCKED_PROMPT_KEY = "blocked_call_prompt_path"
+
+
+def blocked_call_prompt():
+    """Media for an outbound call blocked for lack of outside minutes.
+    A custom prompt uploaded on the Routes page wins; otherwise the stock
+    cannot-complete announcement."""
+    try:
+        r = q1("SELECT value FROM kv_settings WHERE key=?", (BLOCKED_PROMPT_KEY,))
+        p = (r["value"] or "").strip() if r else ""
+        if p and os.path.isfile(p):
+            return _media_for(p)
+    except Exception:
+        pass
+    return DENIED_PROMPT
 
 
 def _is_admin(login_id):
