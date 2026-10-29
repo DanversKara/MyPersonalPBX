@@ -59,6 +59,7 @@ import voipms_sms
 import contacts
 import app_api
 import privacy_ui
+import user_activity_ui
 
 
 def esc(x):
@@ -1128,7 +1129,7 @@ def logins_page(request: Request):
         f"<tr><td>{esc(r['username'])}</td><td>{esc(r['role'])}</td><td>{'<span class=\"pill warn\">guest</span>' if r['is_guest'] else 'normal'}</td><td>{esc(r['exten'])}</td>"
         f"<td>{esc(r['sip_username'])}</td><td>{esc(r['display_name'])}</td>"
         f"<td>{('<span class=\"pill\">App v' + esc(r['app_version']) + '</span>') if r['app_version'] else '<span class=\"muted\">—</span>'}</td><td>{'yes' if r['enabled'] else 'no'}</td>"
-        f"<td><a class='btn ghost' href='/logins/{r['id']}/edit'>Edit</a>"
+        f"<td><a class='btn ghost' href='/logins/{r['id']}/edit'>Edit</a> <a class='btn ghost' href='/logins/{r['id']}/activity'>Activity</a>"
         + ("" if r['id'] == s.get('id') else
            f" <form method='post' action='/logins/{r['id']}/delete' style='display:inline' "
            f"onsubmit=\"return confirm('Permanently delete login \\'{esc(r['username'])}\\' (ext {esc(r['exten']) or '-'}) "
@@ -4485,3 +4486,4 @@ safety_ui.install(_sys.modules[__name__])
 contacts.install(_sys.modules[__name__])
 app_api.install(_sys.modules[__name__])
 privacy_ui.install(_sys.modules[__name__])
+user_activity_ui.install(_sys.modules[__name__])

@@ -1,0 +1,233 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Per-user activity page (/logins/<id>/activity).
+
+Shows one login's Activity-feed rows (audit changes + security events)
+for the last 24 hours, in the same plain-language layout as a standalone
+activity report, with a download link for the standalone HTML file.
+
+Admin-only: both the page and the download require the admin role.
+A user's activity is keyed by their session username, which is what the
+audit and security tables record as actor.
+"""
+
+import re
+from datetime import datetime, timezone
+
+from fastapi import Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+
+M = None
+
+LIMIT = 200
+WINDOW = "-1 day"
+
+try:
+    from zoneinfo import ZoneInfo
+    _TZ = ZoneInfo("America/Los_Angeles")
+except Exception:
+    _TZ = None
+
+_MEANS = {
+    "app.signin": "Signed into the app",
+    "app.pair_code": "Browser sign-in pairing",
+    "app.signout": "Signed out of the app",
+    "app.sip_qr": "Viewed SIP QR code",
+    "ucp.calls": "Changed call settings",
+    "ucp.block.add": "Blocked a contact",
+    "ucp.block.remove": "Unblocked a contact",
+    "ucp.contact.save": "Saved a contact",
+    "ucp.contact.delete": "Deleted a contact",
+    "ucp.contact.delete_all": "Deleted all contacts",
+    "ucp.note.save": "Saved a note",
+    "ucp.note.delete": "Deleted a note",
+    "ucp.messages.delete": "Deleted messages",
+    "ucp.report": "Reported a message",
+    "ringgroup.save": "Saved a ring group",
+    "routes.blocked_prompt": "Changed blocked-call prompt",
+    "logins.guest_change": "Changed guest settings",
+    "logins.delete": "Deleted a login",
+    "logins.exten_purge": "Extension purged",
+    "billing.access.user": "Viewed billing",
+    "billing.app_store_mode": "Changed store mode",
+    "fax.branding": "Saved fax branding",
+    "faxes.delete": "Deleted faxes",
+    "cdr.delete": "Deleted call logs",
+    "signins.delete": "Deleted sign-ins",
+    "voicemail.delete": "Deleted voicemail",
+    "email.settings": "Changed email settings",
+    "network.settings": "Changed network settings",
+    "network.ddns_check": "Checked DDNS",
+}
+
+
+def esc(x):
+    return M.esc(x)
+
+
+def _admin(request):
+    s = M._sess(request)
+    return s if s and s["role"] == "admin" else None
+
+
+def _mean(code):
+    if code in _MEANS:
+        return _MEANS[code]
+    return (code or "").replace(".", " ").replace("_", " ").title() or code
+
+
+def _fmt(at):
+    try:
+        dt = datetime.strptime(at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        if _TZ is not None:
+            dt = dt.astimezone(_TZ)
+        return dt.strftime("%b %d, %H:%M:%S %Z")
+    except Exception:
+        return at or ""
+
+
+def _login(lid):
+    try:
+        lid = int(lid)
+    except (TypeError, ValueError):
+        return None
+    with M.db() as c:
+        r = c.execute("SELECT id, username, display_name, exten FROM logins WHERE id=?", (lid,)).fetchone()
+    return dict(r) if r else None
+
+
+def _load(username):
+    with M.db() as c:
+        au = c.execute(
+            "SELECT at, action, detail FROM audit WHERE actor=? AND at >= datetime('now', ?) "
+            "ORDER BY id DESC LIMIT ?", (username, WINDOW, LIMIT)).fetchall()
+        ev = c.execute(
+            "SELECT at, kind, ip, jail, detail FROM security_events WHERE actor=? AND at >= datetime('now', ?) "
+            "ORDER BY id DESC LIMIT ?", (username, WINDOW, LIMIT)).fetchall()
+    sec = getattr(M, "security", None)
+    kinds = getattr(sec, "KINDS", {}) if sec is not None else {}
+    jails = getattr(sec, "JAIL_NAMES", {}) if sec is not None else {}
+    rows = []
+    for r in au:
+        a = r["action"] or ""
+        rows.append({"at": r["at"], "code": a, "title": _mean(a),
+                     "detail": r["detail"] or "", "ip": ""})
+    for r in ev:
+        k = r["kind"] or ""
+        detail = " · ".join(x for x in ((jails.get(r["jail"], r["jail"]) if r["jail"] else ""),
+                                        r["detail"] or "") if x)
+        rows.append({"at": r["at"], "code": k, "title": kinds.get(k, k),
+                     "detail": detail, "ip": r["ip"] or ""})
+    rows.sort(key=lambda x: x["at"] or "", reverse=True)
+    return rows[:LIMIT]
+
+
+def _page_rows(rows):
+    out = []
+    for r in rows:
+        out.append(
+            f"<tr><td class='muted' style='white-space:nowrap'>{esc(_fmt(r['at']))}</td>"
+            f"<td>{esc(r['title'])}<span class='muted' style='display:block;font-size:12.5px'>{esc(r['code'])}</span></td>"
+            f"<td style='font-family:monospace;font-size:13.5px;word-break:break-word'>{esc(r['detail'])}</td>"
+            f"<td class='muted'>{esc(r['ip']) if r['ip'] else '—'}</td></tr>")
+    return "".join(out) or "<tr><td colspan='4' class='muted'>No activity in the last 24 hours.</td></tr>"
+
+
+def activity_page(request: Request, lid: str):
+    s = _admin(request)
+    if not s:
+        return RedirectResponse("/login")
+    user = _login(lid)
+    if not user:
+        return RedirectResponse("/logins")
+    rows = _load(user["username"])
+    who = esc(user["display_name"] or user["username"])
+    ext = esc(user["exten"] or "-")
+    body = f"""<h2>Activity: {who} <span class='muted' style='font-weight:400'>({esc(user['username'])} · ext {ext})</span></h2>
+<p><a class='btn' href='/logins/{user['id']}/activity/download'>Download report</a> <a class='btn ghost' href='/logins'>Back to Logins</a></p>
+<p><span class='pill'>{len(rows)} events</span> <span class='pill'>last 24 hours</span></p>
+<table><tr><th>When</th><th>What happened</th><th>Details</th><th>IP</th></tr>{_page_rows(rows)}</table>"""
+    return HTMLResponse(M.page("User activity", body, s["username"], s["role"], "logins"))
+
+
+def _standalone_html(user, rows):
+    who = esc(user["display_name"] or user["username"])
+    uname = esc(user["username"])
+    ext = esc(user["exten"] or "-")
+    trs = []
+    for r in rows:
+        trs.append(
+            f"<tr><td class='when'>{esc(_fmt(r['at']))}</td>"
+            f"<td>{esc(r['title'])}<span class='code'>{esc(r['code'])}</span></td>"
+            f"<td class='detail'>{esc(r['detail'])}</td>"
+            f"<td class='when'>{esc(r['ip']) if r['ip'] else '—'}</td></tr>")
+    rows_html = "".join(trs) or "<tr><td colspan='4' class='muted'>No activity in the last 24 hours.</td></tr>"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Activity — {uname} — own-pbx</title>
+<style>
+  :root {{ --navy: #0F172A; --panel: #1E293B; --line: #334155; --orange: #FF8A3D; --text: #E2E8F0; --muted: #94A3B8; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; background: var(--navy); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
+  header {{ padding: 28px 24px 8px; max-width: 1060px; margin: 0 auto; }}
+  h1 {{ margin: 0; font-size: 28px; }}
+  h1 span {{ color: var(--orange); }}
+  .sub {{ color: var(--muted); margin: 8px 0 0; line-height: 1.5; }}
+  .stats {{ display: flex; flex-wrap: wrap; gap: 10px; max-width: 1060px; margin: 18px auto 0; padding: 0 24px; }}
+  .pill {{ background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; font-size: 14px; }}
+  .pill b {{ color: var(--orange); }}
+  main {{ max-width: 1060px; margin: 18px auto 0; padding: 0 24px 32px; }}
+  table {{ width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; }}
+  th {{ text-align: left; padding: 12px 14px; background: #0B1220; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }}
+  td {{ padding: 11px 14px; border-top: 1px solid var(--line); vertical-align: top; font-size: 15px; }}
+  tr:nth-child(even) td {{ background: rgba(255,255,255,0.02); }}
+  .when {{ white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }}
+  .code {{ display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }}
+  .detail {{ font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; line-height: 1.5; word-break: break-word; }}
+  .muted {{ color: var(--muted); }}
+  footer {{ max-width: 1060px; margin: 0 auto; padding: 0 24px 32px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }}
+</style>
+</head>
+<body>
+<header>
+  <h1>Activity <span>— {who}</span></h1>
+  <p class="sub">User <b>{uname}</b> · ext {ext} · own-pbx Activity feed, last 24 hours.<br>
+  Times converted from stored UTC to America/Los_Angeles.</p>
+</header>
+<div class="stats">
+  <span class="pill"><b>{len(rows)}</b> events</span>
+  <span class="pill">last 24 hours</span>
+</div>
+<main>
+<table>
+  <tr><th>When</th><th>What happened</th><th>Details</th><th>IP</th></tr>
+  {rows_html}
+</table>
+</main>
+<footer>Exported from the own-pbx admin panel (Logins → Activity → Download report). Security-event rows carry IPs; change rows do not.</footer>
+</body>
+</html>"""
+
+
+def activity_download(request: Request, lid: str):
+    s = _admin(request)
+    if not s:
+        return RedirectResponse("/login")
+    user = _login(lid)
+    if not user:
+        return RedirectResponse("/logins")
+    rows = _load(user["username"])
+    fname = re.sub(r"[^A-Za-z0-9_.-]", "_", user["username"])
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return Response(content=_standalone_html(user, rows), media_type="text/html",
+                    headers={"Content-Disposition": f'attachment; filename="activity-{fname}-{stamp}.html"'})
+
+
+def install(app_module):
+    global M
+    M = app_module
+    app = M.app
+    app.get("/logins/{lid}/activity", response_class=HTMLResponse)(activity_page)
+    app.get("/logins/{lid}/activity/download")(activity_download)
