@@ -93,24 +93,22 @@ class AppModel(val store: Store, context: android.content.Context) {
         updateOffer = null
     }
 
-    /** Download the offered update and hand it to the system installer. */
+    /**
+     * Open the offered update's .apk in the browser: it downloads there and the browser hands it to
+     * the system installer. (The app itself can't install packages: Google Play doesn't allow that
+     * permission, so the Play build and the GitHub build share one manifest without it.)
+     */
     fun startUpdate(ctx: android.content.Context) {
         val offer = updateOffer ?: return
-        if (!org.ownpbx.myphone.data.Updates.canInstall(ctx)) {
-            notice = "Allow installs from My Phone, then tap Update again"
-            org.ownpbx.myphone.data.Updates.openInstallSettings(ctx)
-            return
-        }
-        updateWorking = true
-        bg.launch {
-            val file = org.ownpbx.myphone.data.Updates.download(ctx, offer)
-            updateWorking = false
-            if (file == null) {
-                notice = "The update couldn't be downloaded — check your connection"
-            } else {
-                updateOffer = null
-                org.ownpbx.myphone.data.Updates.install(ctx, file)
-            }
+        try {
+            ctx.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(offer.apkUrl))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            updateOffer = null
+            notice = "Downloading ${offer.version} in your browser. Open it when it's done to install."
+        } catch (e: Exception) {
+            notice = "No web browser found to download the update."
         }
     }
 
