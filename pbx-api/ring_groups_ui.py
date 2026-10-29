@@ -19,7 +19,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 M = None
-EXT_RE = re.compile(r"^\d{2,8}$")
+EXT_RE = re.compile(r"^\d{1,8}$")
 VM_MODES = (("member", "Voicemail: one member's box"), ("all", "Voicemail: every member gets a copy"),
             ("ext", "Send to another extension"), ("group", "Send to another ring group"),
             ("ivr", "Send to an IVR menu"), ("number", "Send to an outside number"),
@@ -223,7 +223,7 @@ async def save(request: Request, gid: str):
         return _back(err="Give the group a name.", gid=back_id)
     exten = (f.get("exten") or "").strip()
     if exten and not EXT_RE.match(exten):
-        return _back(err="Internal number must be 2-8 digits.", gid=back_id)
+        return _back(err="Internal number must be 1-8 digits.", gid=back_id)
     try:
         secs = max(5, min(int(f.get("ring_seconds") or 30), 300))
     except ValueError:
