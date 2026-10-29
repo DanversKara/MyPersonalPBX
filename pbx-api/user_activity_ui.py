@@ -4,6 +4,7 @@
 Shows one login's Activity-feed rows (audit changes + security events)
 for the last 24 hours, in the same plain-language layout as a standalone
 activity report, with a download link for the standalone HTML file.
+Sign-in rows also show the IP from the panel sign-in log.
 
 Admin-only: both the page and the download require the admin role.
 A user's activity is keyed by their session username, which is what the
@@ -75,14 +76,20 @@ def _mean(code):
     return (code or "").replace(".", " ").replace("_", " ").title() or code
 
 
-def _fmt(at):
+def _parse(at):
     try:
-        dt = datetime.strptime(at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        if _TZ is not None:
-            dt = dt.astimezone(_TZ)
-        return dt.strftime("%b %d, %H:%M:%S %Z")
+        return datetime.strptime(at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     except Exception:
+        return None
+
+
+def _fmt(at):
+    dt = _parse(at)
+    if dt is None:
         return at or ""
+    if _TZ is not None:
+        dt = dt.astimezone(_TZ)
+    return dt.strftime("%b %d, %H:%M:%S %Z")
 
 
 def _login(lid):
@@ -103,14 +110,35 @@ def _load(username):
         ev = c.execute(
             "SELECT at, kind, ip, jail, detail FROM security_events WHERE actor=? AND at >= datetime('now', ?) "
             "ORDER BY id DESC LIMIT ?", (username, WINDOW, LIMIT)).fetchall()
+        si = c.execute(
+            "SELECT at, ip FROM signins WHERE login=? AND ok=1 AND at >= datetime('now', ?) "
+            "ORDER BY at DESC LIMIT ?", (username, WINDOW, LIMIT)).fetchall()
     sec = getattr(M, "security", None)
     kinds = getattr(sec, "KINDS", {}) if sec is not None else {}
     jails = getattr(sec, "JAIL_NAMES", {}) if sec is not None else {}
+    signins = []
+    for r in si:
+        dt = _parse(r["at"])
+        if dt is not None and r["ip"]:
+            signins.append((dt, r["ip"]))
+
+    def _signin_ip(at):
+        dt = _parse(at)
+        if dt is None:
+            return ""
+        best = None
+        for sdt, ip in signins:
+            diff = (sdt - dt).total_seconds()
+            if -600 <= diff <= 120 and (best is None or abs(diff) < abs(best[0])):
+                best = (diff, ip)
+        return best[1] if best else ""
+
     rows = []
     for r in au:
         a = r["action"] or ""
+        ip = _signin_ip(r["at"]) if a in ("app.signin", "app.pair_code") else ""
         rows.append({"at": r["at"], "code": a, "title": _mean(a),
-                     "detail": r["detail"] or "", "ip": ""})
+                     "detail": r["detail"] or "", "ip": ip})
     for r in ev:
         k = r["kind"] or ""
         detail = " · ".join(x for x in ((jails.get(r["jail"], r["jail"]) if r["jail"] else ""),
@@ -145,6 +173,7 @@ def activity_page(request: Request, lid: str):
     body = f"""<h2>Activity: {who} <span class='muted' style='font-weight:400'>({esc(user['username'])} · ext {ext})</span></h2>
 <p><a class='btn' href='/logins/{user['id']}/activity/download'>Download report</a> <a class='btn ghost' href='/logins'>Back to Logins</a></p>
 <p><span class='pill'>{len(rows)} events</span> <span class='pill'>last 24 hours</span></p>
+<p class='muted'>Sign-in IPs come from the panel sign-in log; other change rows do not record an IP.</p>
 <table><tr><th>When</th><th>What happened</th><th>Details</th><th>IP</th></tr>{_page_rows(rows)}</table>"""
     return HTMLResponse(M.page("User activity", body, s["username"], s["role"], "logins"))
 
@@ -206,7 +235,7 @@ def _standalone_html(user, rows):
   {rows_html}
 </table>
 </main>
-<footer>Exported from the own-pbx admin panel (Logins → Activity → Download report). Security-event rows carry IPs; change rows do not.</footer>
+<footer>Exported from the own-pbx admin panel (Logins → Activity → Download report). Security-event rows carry their own IPs; sign-in rows show the IP from the panel sign-in log; other change rows do not record an IP.</footer>
 </body>
 </html>"""
 
