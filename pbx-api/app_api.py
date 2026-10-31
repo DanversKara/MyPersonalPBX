@@ -355,7 +355,17 @@ def me_threads(request: Request):
 def me_thread(request: Request, peer: str, before: int = 0, limit: int = 100):
     me = _need(request)
     rows = [m for m in M.ucp._my_messages(me, limit=5000) if _peer(me, m) == peer]
-    return {"peer": peer, "messages": [_msg(me, m) for m in _paged(rows, before, limit)]}
+    out = {"peer": peer, "messages": [_msg(me, m) for m in _paged(rows, before, limit)],
+           "from_numbers": [], "from_did": ""}
+    # "Send from" for texts to phone numbers: the user's numbers, and the one a
+    # reply would use (the number this contact texted, else their default).
+    if me.get("exten") and M.voipms_sms.is_external_number(peer):
+        with M.db() as c:
+            nums = M.voipms_sms.numbers_for_exten(c, me["exten"])
+            out["from_numbers"] = nums
+            out["from_did"] = (M.voipms_sms.lookup_conversation_did(c, me["exten"], M.voipms_sms.e164(peer))
+                               or M.voipms_sms.lookup_sender_did(c, me["exten"])) if nums else ""
+    return out
 
 
 def me_messages_since(request: Request, after: int = 0):

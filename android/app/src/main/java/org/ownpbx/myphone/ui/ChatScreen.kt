@@ -34,6 +34,11 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
     var sending by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<Long>()) }
     var menu by remember { mutableStateOf(false) }
+    // "From": the user's numbers for texts to phone numbers (shown when there's a choice).
+    var fromNumbers by remember { mutableStateOf<List<String>>(emptyList()) }
+    var fromDid by remember { mutableStateOf("") }
+    var fromPicked by remember { mutableStateOf(false) }   // the user chose; stop following the PBX
+    var fromMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
     val clip = LocalClipboardManager.current
@@ -42,6 +47,8 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
     suspend fun refresh() {
         model.guard { it.thread(peer) }?.let {
             msgs = it.messages
+            fromNumbers = it.from_numbers
+            if (!fromPicked || fromDid !in it.from_numbers) fromDid = it.from_did
             it.messages.firstOrNull()?.let { m -> model.store.markSeen(peer, m.id) }
         }
     }
@@ -52,7 +59,8 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
         if (body.isEmpty() || sending) return
         sending = true
         scope.launch {
-            if (model.change { it.send(peer, body) }) { text = ""; refresh(); list.animateScrollToItem(0) }
+            val from = if (fromNumbers.size > 1) fromDid else ""
+            if (model.change { it.send(peer, body, from) }) { text = ""; refresh(); list.animateScrollToItem(0) }
             sending = false
         }
     }
@@ -96,7 +104,27 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
             )
         },
         bottomBar = {
-            Row(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(8.dp),
+          Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding()) {
+            if (fromNumbers.size > 1) {
+                Box(Modifier.padding(start = 12.dp, top = 4.dp)) {
+                    AssistChip(
+                        onClick = { fromMenu = true },
+                        label = { Text("From ${prettyNumber(fromDid)}") },
+                        leadingIcon = { Icon(Icons.Filled.SimCard, null, Modifier.size(18.dp)) },
+                        trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },
+                    )
+                    DropdownMenu(fromMenu, { fromMenu = false }) {
+                        fromNumbers.forEach { d ->
+                            DropdownMenuItem(
+                                { Text(prettyNumber(d)) },
+                                onClick = { fromDid = d; fromPicked = true; fromMenu = false },
+                                trailingIcon = { if (d == fromDid) Icon(Icons.Filled.Check, null) },
+                            )
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(text, { text = it.take(1000) }, Modifier.weight(1f), maxLines = 5,
                     placeholder = { Text("Text message") }, shape = RoundedCornerShape(24.dp))
@@ -105,6 +133,7 @@ fun ChatScreen(model: AppModel, peer: String, snack: SnackbarHostState, back: ()
                     Icon(Icons.AutoMirrored.Filled.Send, "Send")
                 }
             }
+          }
         },
     ) { pad ->
         LazyColumn(Modifier.padding(pad).fillMaxSize(), state = list, reverseLayout = true,

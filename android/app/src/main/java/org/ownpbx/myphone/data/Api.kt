@@ -46,7 +46,15 @@ data class ChatThread(
 
 @Serializable data class Threads(val threads: List<ChatThread> = emptyList())
 
-@Serializable data class ThreadResp(val peer: String, val messages: List<Msg> = emptyList())
+@Serializable
+data class ThreadResp(
+    val peer: String,
+    val messages: List<Msg> = emptyList(),
+    /** Texts to phone numbers: the user's numbers to send from (empty = not offered). */
+    val from_numbers: List<String> = emptyList(),
+    /** The number a reply would go out from (the one this contact texted, else the default). */
+    val from_did: String = "",
+)
 
 @Serializable data class Since(val messages: List<Msg> = emptyList())
 
@@ -587,8 +595,11 @@ class Api(base: String, private val token: String?) {
         get("/me/timeline", mapOf("limit" to limit))
 
     // ---- changes
-    suspend fun send(to: String, body: String) =
-        form("/me/messages/send", listOf("to" to to, "body" to body))
+    suspend fun send(to: String, body: String, fromDid: String = "") =
+        form(
+            "/me/messages/send",
+            listOf("to" to to, "body" to body) + if (fromDid.isNotEmpty()) listOf("from_did" to fromDid) else emptyList(),
+        )
 
     suspend fun deleteMessages(ids: List<Long> = emptyList(), peers: List<String> = emptyList()) =
         form(

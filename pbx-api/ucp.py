@@ -936,9 +936,20 @@ def messages_page(request: Request):
     left_txt = ("Unlimited texts" if mleft is None else f"{mleft} text{'s' if mleft != 1 else ''} left this month")
     if M.app_api.web_hide_billing(me):
         left_txt = "To an extension or phone number"
+    from_html = ""
+    with M.db() as c:
+        nums = voipms_sms.numbers_for_exten(c, ex) if ex else []
+        if len(nums) > 1:
+            cur = ((voipms_sms.lookup_conversation_did(c, ex, voipms_sms.e164(sel))
+                    if sel and voipms_sms.is_external_number(sel) else "")
+                   or voipms_sms.lookup_sender_did(c, ex))
+            opts = "".join(f'<option value="{esc(d)}" {"selected" if d == cur else ""}>{esc(voipms_sms.e164(d))}</option>'
+                           for d in nums)
+            from_html = (f' <label class="muted" style="white-space:nowrap">From <select name="from_did" {dis}>{opts}</select></label>'
+                         ' <span class="muted" style="font-size:12px">(for texts to phone numbers)</span>')
     compose = f"""<form method="post" action="/ucp/messages/send" class="panel msg-compose">{csrf}
 <b>New message</b> <span class="muted">· {esc(left_txt) if can_send else 'Sending isn\'t available on your plan right now'}</span><br>
-<input name="to" value="{esc(sel)}" placeholder="Extension (e.g. 8801)" inputmode="numeric" size="12" required {dis}>
+<input name="to" value="{esc(sel)}" placeholder="Extension (e.g. 8801)" inputmode="numeric" size="12" required {dis}>{from_html}
 <textarea name="body" rows="2" maxlength="1000" placeholder="Type a message" required {dis} style="width:100%;margin-top:6px"></textarea>
 <button class="btn" {dis}>Send</button></form>"""
     mnote = ""
@@ -1049,7 +1060,10 @@ async def msg_send(request: Request):
             # Reply from the number this conversation is on (the DID the
             # contact texted), like Zoiper replies; else the extension's route,
             # then the default DID.
-            sender_did = (voipms_sms.lookup_conversation_did(c, me["exten"], dest_e164)
+            # A number the user picked ("Send from"), if it's one of theirs.
+            picked = voipms_sms.normalize_did((f.get("from_did") or "").strip())
+            sender_did = (picked if picked and picked in voipms_sms.numbers_for_exten(c, me["exten"]) else
+                          voipms_sms.lookup_conversation_did(c, me["exten"], dest_e164)
                           or voipms_sms.lookup_sender_did(c, me["exten"]))
             if not sender_did or not cfg.get("voipms_api_username") or not cfg.get("voipms_api_password"):
                 return RedirectResponse(back + "msg=msgto", status_code=303)
