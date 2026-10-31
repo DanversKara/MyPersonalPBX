@@ -1054,7 +1054,7 @@ document.getElementById('signins').addEventListener('change', e => {
 });
 async function deleteSignins(all) {
   const n = all ? STATS.total : SI_SEL.size;
-  if (!confirm((all ? 'Clear all ' + n + ' sign-in entries from this list?' : 'Clear ' + n + ' selected sign-in entr' + (n === 1 ? 'y' : 'ies') + ' from this list?') + '\n\nThey stay in the database for 90 days and still show on each user\'s Activity page.')) return;
+  if (!confirm((all ? 'Clear all ' + n + ' sign-in entries from this list?' : 'Clear ' + n + ' selected sign-in entr' + (n === 1 ? 'y' : 'ies') + ' from this list?') + '\\n\\nThey stay in the database for 90 days and still show on each user\\'s Activity page.')) return;
   const r = await fetch('/api/v1/signins/delete', {method: 'POST', credentials: 'same-origin',
     headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
     body: JSON.stringify(all ? {all: true} : {ids: [...SI_SEL]})});
