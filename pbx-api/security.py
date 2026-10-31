@@ -27,7 +27,12 @@ from pydantic import BaseModel
 import mailer
 
 M = None
-RETENTION = "-1 day"   # security events auto-delete after 24 hours
+RETENTION = "-1 day"   # the Activity feed shows the last 24 hours
+KEEP = "-90 days"      # security events and the change log stay in the database this long
+# Kept longer: records of privacy requests (California asks for 24 months)
+# and recording-consent acknowledgements.
+KEEP_LONG = "-730 days"
+LONG_ACTIONS = ("privacy.%", "ucp.recording_consent%")
 ALERT_MAX_PER_HOUR = 20
 KINDS = {
     "ban": "IP blocked",
@@ -201,8 +206,7 @@ def activity(request: Request, limit: int = 60):
         purge()
         ev = c.execute("SELECT id, at, source, kind, ip, jail, detail, actor FROM security_events "
                        "WHERE at >= datetime('now', ?) ORDER BY id DESC LIMIT ?", (RETENTION, limit)).fetchall()
-        # The change log itself is kept (it holds recording-consent records);
-        # the feed only shows its last 24 hours.
+        # Both are kept KEEP in the database (purge()); the feed shows 24 hours.
         au = c.execute("SELECT id, at, actor, action, detail FROM audit WHERE at >= datetime('now', ?) "
                        "ORDER BY id DESC LIMIT ?", (RETENTION, limit)).fetchall()
         blocked = c.execute(
@@ -295,7 +299,11 @@ async def save_alerts(request: Request):
 def purge():
     try:
         with M.db() as c:
-            c.execute("DELETE FROM security_events WHERE at < datetime('now', ?)", (RETENTION,))
+            c.execute("DELETE FROM security_events WHERE at < datetime('now', ?)", (KEEP,))
+            long_q = " OR ".join("action LIKE ?" for _ in LONG_ACTIONS)
+            c.execute(f"DELETE FROM audit WHERE at < datetime('now', ?) AND NOT ({long_q})",
+                      (KEEP, *LONG_ACTIONS))
+            c.execute("DELETE FROM audit WHERE at < datetime('now', ?)", (KEEP_LONG,))
             c.commit()
     except Exception:
         pass

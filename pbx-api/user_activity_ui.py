@@ -2,7 +2,8 @@
 """Per-user activity page (/logins/<id>/activity).
 
 Shows one login's Activity-feed rows (audit changes + security events)
-for the last 24 hours, in the same plain-language layout as a standalone
+for the last 24 hours, or 7 / 30 / 90 days (?days=), since these records
+are kept 90 days in the database while the dashboard shows only 24 hours, in the same plain-language layout as a standalone
 activity report, with a download link for the standalone HTML file.
 Sign-in rows also show the IP from the panel sign-in log.
 
@@ -19,8 +20,16 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 M = None
 
-LIMIT = 200
-WINDOW = "-1 day"
+LIMIT = 5000
+RANGES = {90: "last 90 days", 30: "last 30 days", 7: "last 7 days", 1: "last 24 hours"}
+
+
+def _days(request):
+    try:
+        d = int(request.query_params.get("days") or 90)
+    except ValueError:
+        d = 90
+    return d if d in RANGES else 90
 
 try:
     from zoneinfo import ZoneInfo
@@ -34,6 +43,12 @@ _MEANS = {
     "app.signout": "Signed out of the app",
     "app.sip_qr": "Viewed SIP QR code",
     "ucp.calls": "Changed call settings",
+    "ucp.prefs": "Changed preferences",
+    "ucp.password": "Changed password",
+    "ucp.sip_secret": "New SIP password",
+    "ucp.recording_consent": "Accepted recording-law notice",
+    "privacy.request": "Privacy request",
+    "privacy.cancel": "Cancelled deletion request",
     "ucp.block.add": "Blocked a contact",
     "ucp.block.remove": "Unblocked a contact",
     "ucp.contact.save": "Saved a contact",
@@ -54,6 +69,7 @@ _MEANS = {
     "faxes.delete": "Deleted faxes",
     "cdr.delete": "Deleted call logs",
     "signins.delete": "Deleted sign-ins",
+    "signins.clear": "Cleared sign-ins from the panel",
     "voicemail.delete": "Deleted voicemail",
     "email.settings": "Changed email settings",
     "network.settings": "Changed network settings",
@@ -102,17 +118,21 @@ def _login(lid):
     return dict(r) if r else None
 
 
-def _load(username):
+def _load(username, days=1):
+    window = f"-{int(days)} days"
     with M.db() as c:
         au = c.execute(
             "SELECT at, action, detail FROM audit WHERE actor=? AND at >= datetime('now', ?) "
-            "ORDER BY id DESC LIMIT ?", (username, WINDOW, LIMIT)).fetchall()
+            "ORDER BY id DESC LIMIT ?", (username, window, LIMIT)).fetchall()
         ev = c.execute(
             "SELECT at, kind, ip, jail, detail FROM security_events WHERE actor=? AND at >= datetime('now', ?) "
-            "ORDER BY id DESC LIMIT ?", (username, WINDOW, LIMIT)).fetchall()
-        si = c.execute(
-            "SELECT at, ip FROM signins WHERE login=? AND ok=1 AND at >= datetime('now', ?) "
-            "ORDER BY at DESC LIMIT ?", (username, WINDOW, LIMIT)).fetchall()
+            "ORDER BY id DESC LIMIT ?", (username, window, LIMIT)).fetchall()
+        # Every sign-in, including ones cleared from the dashboard list
+        # (clearing only hides them there; they're kept 90 days).
+        si_all = c.execute(
+            "SELECT at, ip, ok FROM signins WHERE login=? AND at >= datetime('now', ?) "
+            "ORDER BY at DESC LIMIT ?", (username, window, LIMIT)).fetchall()
+        si = [r for r in si_all if r["ok"]]
     sec = getattr(M, "security", None)
     kinds = getattr(sec, "KINDS", {}) if sec is not None else {}
     jails = getattr(sec, "JAIL_NAMES", {}) if sec is not None else {}
@@ -145,6 +165,10 @@ def _load(username):
                                         r["detail"] or "") if x)
         rows.append({"at": r["at"], "code": k, "title": kinds.get(k, k),
                      "detail": detail, "ip": r["ip"] or ""})
+    for r in si_all:
+        rows.append({"at": r["at"], "code": "signin" if r["ok"] else "signin.failed",
+                     "title": "Signed in (web panel)" if r["ok"] else "Failed sign-in (wrong password)",
+                     "detail": "", "ip": r["ip"] or ""})
     rows.sort(key=lambda x: x["at"] or "", reverse=True)
     return rows[:LIMIT]
 
@@ -167,7 +191,7 @@ def _summary(rows):
     return "; ".join(parts) + "." if parts else ""
 
 
-def _page_rows(rows):
+def _page_rows(rows, days=1):
     out = []
     for r in rows:
         out.append(
@@ -175,7 +199,7 @@ def _page_rows(rows):
             f"<td>{esc(r['title'])}<span class='muted' style='display:block;font-size:12.5px'>{esc(r['code'])}</span></td>"
             f"<td style='font-family:monospace;font-size:13.5px;word-break:break-word'>{esc(r['detail'])}</td>"
             f"<td class='muted'>{esc(r['ip']) if r['ip'] else '—'}</td></tr>")
-    return "".join(out) or "<tr><td colspan='4' class='muted'>No activity in the last 24 hours.</td></tr>"
+    return "".join(out) or f"<tr><td colspan='4' class='muted'>No activity in the {RANGES[days]}.</td></tr>"
 
 
 def activity_page(request: Request, lid: str):
@@ -185,23 +209,29 @@ def activity_page(request: Request, lid: str):
     user = _login(lid)
     if not user:
         return RedirectResponse("/logins")
-    rows = _load(user["username"])
+    days = _days(request)
+    rows = _load(user["username"], days)
     who = esc(user["display_name"] or user["username"])
     ext = esc(user["exten"] or "-")
     summary = _summary(rows)
+    picks = " ".join(
+        f"<a class='btn{'' if d == days else ' ghost'}' href='/logins/{user['id']}/activity?days={d}'>{esc(t.replace('last ', '').capitalize())}</a>"
+        for d, t in RANGES.items())
     summary_html = ("<p style='background:#1E293B;border:1px solid #334155;border-left:4px solid #FF8A3D;"
                     "border-radius:8px;padding:12px 16px;line-height:1.6'>"
                     f"What {who} did: {esc(summary)}</p>") if summary else ""
     body = f"""<h2>Activity: {who} <span class='muted' style='font-weight:400'>({esc(user['username'])} · ext {ext})</span></h2>
-<p><a class='btn' href='/logins/{user['id']}/activity/download'>Download report</a> <a class='btn ghost' href='/logins'>Back to Logins</a></p>
-<p><span class='pill'>{len(rows)} events</span> <span class='pill'>last 24 hours</span></p>
+<p>{picks}</p>
+<p><a class='btn' href='/logins/{user['id']}/activity/download?days={days}'>Download report ({RANGES[days]})</a> <a class='btn ghost' href='/logins'>Back to Logins</a></p>
+<p><span class='pill'>{len(rows)} events</span> <span class='pill'>{RANGES[days]}</span></p>
 {summary_html}
-<p class='muted'>Sign-in IPs come from the panel sign-in log; other change rows do not record an IP.</p>
-<table><tr><th>When</th><th>What happened</th><th>Details</th><th>IP</th></tr>{_page_rows(rows)}</table>"""
+<p class='muted'>Sign-in IPs come from the panel sign-in log; other change rows do not record an IP. Records are kept 90 days, then deleted automatically.</p>
+<table><tr><th>When</th><th>What happened</th><th>Details</th><th>IP</th></tr>{_page_rows(rows, days)}</table>"""
     return HTMLResponse(M.page("User activity", body, s["username"], s["role"], "logins"))
 
 
-def _standalone_html(user, rows):
+def _standalone_html(user, rows, days=1):
+    span = RANGES[days]
     who = esc(user["display_name"] or user["username"])
     uname = esc(user["username"])
     ext = esc(user["exten"] or "-")
@@ -214,7 +244,7 @@ def _standalone_html(user, rows):
             f"<td>{esc(r['title'])}<span class='code'>{esc(r['code'])}</span></td>"
             f"<td class='detail'>{esc(r['detail'])}</td>"
             f"<td class='when'>{esc(r['ip']) if r['ip'] else '—'}</td></tr>")
-    rows_html = "".join(trs) or "<tr><td colspan='4' class='muted'>No activity in the last 24 hours.</td></tr>"
+    rows_html = "".join(trs) or f"<tr><td colspan='4' class='muted'>No activity in the {span}.</td></tr>"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -248,12 +278,12 @@ def _standalone_html(user, rows):
 <body>
 <header>
   <h1>Activity <span>— {who}</span></h1>
-  <p class="sub">User <b>{uname}</b> · ext {ext} · own-pbx Activity feed, last 24 hours.<br>
+  <p class="sub">User <b>{uname}</b> · ext {ext} · own-pbx Activity feed, {span}.<br>
   Times converted from stored UTC to America/Los_Angeles.</p>
 </header>
 <div class="stats">
   <span class="pill"><b>{len(rows)}</b> events</span>
-  <span class="pill">last 24 hours</span>
+  <span class="pill">{span}</span>
 </div>
 {summary_div}
 <main>
@@ -274,11 +304,12 @@ def activity_download(request: Request, lid: str):
     user = _login(lid)
     if not user:
         return RedirectResponse("/logins")
-    rows = _load(user["username"])
+    days = _days(request)
+    rows = _load(user["username"], days)
     fname = re.sub(r"[^A-Za-z0-9_.-]", "_", user["username"])
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return Response(content=_standalone_html(user, rows), media_type="text/html",
-                    headers={"Content-Disposition": f'attachment; filename="activity-{fname}-{stamp}.html"'})
+    return Response(content=_standalone_html(user, rows, days), media_type="text/html",
+                    headers={"Content-Disposition": f'attachment; filename="activity-{fname}-{days}d-{stamp}.html"'})
 
 
 def install(app_module):
