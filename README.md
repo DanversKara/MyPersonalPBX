@@ -1166,11 +1166,13 @@ voip.ms API from the mapped DID.
 `getMMS` API (webhook) or picked up by the poller. Pictures arrive as
 `[MMS: <link>]` entries — tappable in Zoiper, My Phone and ESP.
 
-**Sender DID selection** (outbound): replies go out from the DID the
-conversation is already on (each message records its DID), so a thread stays
-on one number even when several DIDs route to the same extension. For a
-brand-new conversation: the DID whose route points at your extension, else
-the configured default DID, else the first route.
+**Which number texts go out from:**
+- **Replies** go out from the number the contact texted (each message records
+  its DID), so a thread stays on one number, from Zoiper, My Phone or the app.
+- **New texts** go out from the number set for the sender's extension under
+  **SMS → Texts go out from**.
+- **Automatic** (no number set): the DID routed to that extension, else the
+  **Default DID**, else the first route.
 
 ### Setup
 

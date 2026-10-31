@@ -2772,7 +2772,23 @@ def sms_routes_page(request: Request):
     with db() as c:
         routes = c.execute("SELECT did, dest_exten, label FROM did_sms_routes ORDER BY did").fetchall()
         cfg = voipms_sms.get_voipms_config(c)
-        exts = [r["exten"] for r in c.execute("SELECT exten FROM logins WHERE enabled=1 ORDER BY exten")]
+        users = c.execute("SELECT exten, display_name FROM logins WHERE enabled=1 AND exten!=''"
+                          " ORDER BY CAST(exten AS INTEGER), exten").fetchall()
+        try:
+            chosen = {r["exten"]: r["did"] for r in c.execute("SELECT exten, did FROM sms_sender_did")}
+        except Exception:
+            chosen = {}
+        auto = {u["exten"]: voipms_sms.lookup_sender_did_auto(c, u["exten"]) for u in users}
+    did_list = [r["did"] for r in routes]
+    def _sender_row(u):
+        cur = chosen.get(u["exten"], "")
+        a = auto.get(u["exten"]) or ""
+        opts = (f"<option value=''>Automatic ({esc(voipms_sms.e164(a)) if a else 'none'})</option>"
+                + "".join(f"<option value='{esc(d)}' {'selected' if d == cur else ''}>{esc(voipms_sms.e164(d))}</option>"
+                          for d in did_list))
+        return (f"<tr><td>{esc(u['exten'])}</td><td>{esc(u['display_name'])}</td>"
+                f"<td><select name='did_{esc(u['exten'])}'>{opts}</select></td></tr>")
+    senders = "".join(_sender_row(u) for u in users)
     tr = "".join(
         f"<tr><td>{esc(voipms_sms.e164(r['did']))}</td><td>{esc(r['dest_exten']).replace(',', ', ')}</td>"
         f"<td>{esc(r['label'])}</td>"
@@ -2783,10 +2799,17 @@ def sms_routes_page(request: Request):
     tok = cfg.get("voipms_webhook_token") or "<set-token-below>"
     hook = f"{public_base(request)}/hooks/voipms-sms?token={tok}&to={{TO}}&from={{FROM}}&message={{MESSAGE}}&id={{ID}}&date={{TIMESTAMP}}"
     body = f"""<h2>SMS / MMS (voip.ms)</h2>
-<p class="muted">Inbound: voip.ms URL Callback -> this PBX -> Zoiper (SIP MESSAGE) + My Phone + ESP. Outbound: ext -> external number -> voip.ms API.</p>
-<h3>DID routes (all 4 DIDs)</h3>
-<table><tr><th>DID</th><th>To extension</th><th>Label</th><th></th></tr>{tr or '<tr><td colspan=4 class=muted>No routes yet — add your 4 DIDs below.</td></tr>'}</table>
+<p class="muted">Inbound: voip.ms URL Callback and/or "Link the SMS to a SIP account" (picked up every 60 s) -> this PBX -> Zoiper + My Phone + ESP. Outbound: ext -> external number -> voip.ms API.</p>
+<h3>DID routes (incoming texts)</h3>
+<table><tr><th>DID</th><th>To extension</th><th>Label</th><th></th></tr>{tr or '<tr><td colspan=4 class=muted>No routes yet — add your DIDs below.</td></tr>'}</table>
 <p><a class="btn" href="/sms-routes/new/edit">Add DID route</a></p>
+<h3>Texts go out from (outgoing texts)</h3>
+<p class="muted">Replies always go out from the number the contact texted. A <b>new</b> text goes out from the number chosen here for the sender's extension. <i>Automatic</i> = the number routed to that extension, else the default DID below.</p>
+<form method="post" action="/sms-routes/senders">
+{_csrf_field(s)}
+<table><tr><th>Extension</th><th>Name</th><th>New texts go out from</th></tr>{senders or '<tr><td colspan=3 class=muted>No extensions yet.</td></tr>'}</table>
+<button class="btn" type="submit" {'disabled' if not did_list else ''}>Save</button>
+</form>
 <h3>Webhook URL (paste into voip.ms per DID)</h3>
 <p><code style="word-break:break-all">{esc(hook)}</code></p>
 <p class="muted">In voip.ms: DID Numbers &gt; Manage DIDs &gt; Edit &gt; Message Service (SMS/MMS) &gt; enable, paste URL, choose E.164, Apply.</p>
@@ -2796,7 +2819,7 @@ def sms_routes_page(request: Request):
 <label>API username (voip.ms login email)<br><input name="voipms_api_username" value="{esc(cfg.get('voipms_api_username',''))}" size="40"></label><br>
 <label>API password<br><input name="voipms_api_password" type="password" value="" placeholder="{'(set)' if cfg.get('voipms_api_password') else ''}"></label><br>
 <label>Webhook token (random string in URL)<br><input name="voipms_webhook_token" value="{esc(cfg.get('voipms_webhook_token',''))}" size="40"></label><br>
-<label>Default DID for outbound (digits)<br><input name="voipms_default_did" value="{esc(cfg.get('voipms_default_did',''))}" size="20"></label><br>
+<label>Default DID for outbound (digits) — only used when neither the conversation nor the extension's setting above decides<br><input name="voipms_default_did" value="{esc(cfg.get('voipms_default_did',''))}" size="20"></label><br>
 <button class="btn" type="submit">Save</button>
 </form>
 <p class="muted">API password is the voip.ms <b>API Password</b> (Main Menu &gt; SOAP and REST/JSON API), not your login password. Stored in kv_settings.</p>
@@ -2870,6 +2893,32 @@ async def sms_route_delete(request: Request, did: str):
     with db() as c:
         c.execute("DELETE FROM did_sms_routes WHERE did=?", (voipms_sms.normalize_did(did),))
         c.commit()
+    return RedirectResponse("/sms-routes", status_code=303)
+
+
+@app.post("/sms-routes/senders")
+async def sms_senders_save(request: Request):
+    s = _sess(request)
+    if not s or s["role"] != "admin":
+        return RedirectResponse("/login")
+    if _admin_locked():
+        return _panel_locked(s, "msgs")
+    await _check_csrf(request, s)
+    f = await request.form()
+    with db() as c:
+        dids = {r["did"] for r in c.execute("SELECT did FROM did_sms_routes")}
+        exts = [r["exten"] for r in c.execute("SELECT exten FROM logins WHERE enabled=1 AND exten!=''")]
+        changes = []
+        for e in exts:
+            v = voipms_sms.normalize_did((f.get(f"did_{e}") or "").strip())
+            if v and v in dids:
+                c.execute("INSERT INTO sms_sender_did (exten, did) VALUES (?,?)"
+                          " ON CONFLICT(exten) DO UPDATE SET did=excluded.did", (e, v))
+                changes.append(f"{e}={v}")
+            else:
+                c.execute("DELETE FROM sms_sender_did WHERE exten=?", (e,))
+        c.commit()
+    _audit_log(s["username"], "sms-routes.senders", ", ".join(changes) or "all automatic")
     return RedirectResponse("/sms-routes", status_code=303)
 
 

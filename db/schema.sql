@@ -632,3 +632,11 @@ CREATE TABLE IF NOT EXISTS privacy_requests (
   token_expires TEXT DEFAULT NULL,           -- UTC
   downloads INTEGER NOT NULL DEFAULT 0
 );
+
+-- Which number an extension's new outgoing texts (SMS/MMS) are sent from.
+-- Replies still go out from the number the contact texted. No row = the
+-- number routed to the extension, else the default DID.
+CREATE TABLE IF NOT EXISTS sms_sender_did (
+  exten TEXT PRIMARY KEY,
+  did TEXT NOT NULL                          -- digits, a DID in did_sms_routes
+);

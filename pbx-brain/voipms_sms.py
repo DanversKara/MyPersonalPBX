@@ -176,11 +176,22 @@ def lookup_sms_route(c, did: str):
 def lookup_sender_did(c, from_exten: str):
     """Pick which DID to use when exten sends an outbound SMS.
 
-    1. DID whose dest_exten == from_exten (inbound route reversed)
-    2. voipms_default_did kv_setting
-    3. First did_sms_routes row
+    1. The number the admin chose for this extension (SMS page, "Texts go
+       out from"), if that DID still has a route
+    2. DID whose dest_exten == from_exten (inbound route reversed)
+    3. voipms_default_did kv_setting
+    4. First did_sms_routes row
+    (Replies use lookup_conversation_did first, so they go out from the
+    number the contact texted.)
     """
     digits = "".join(ch for ch in (from_exten or "") if ch.isdigit())
+    try:
+        r = c.execute("SELECT s.did FROM sms_sender_did s JOIN did_sms_routes d ON d.did=s.did"
+                      " WHERE s.exten=?", (digits,)).fetchone()
+        if r and r[0]:
+            return r[0]
+    except Exception:
+        pass  # table not created yet (older DB): fall through
     r = c.execute("SELECT did FROM did_sms_routes WHERE (',' || dest_exten || ',') LIKE ? "
                   "ORDER BY did LIMIT 1",
                   ("%,{},%".format(digits),)).fetchone()
