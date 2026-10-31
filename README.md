@@ -768,7 +768,7 @@ the Notifications and Calling settings.*
 
 | Screen | What it does |
 |---|---|
-| **Messages** | inbox with search and unread dots, swipe or multi-select delete with Undo, Start chat to any extension or number, copy, block, call |
+| **Messages** | inbox with search and unread dots, swipe or multi-select delete with Undo, Start chat to any extension or number, copy, block, call; **From** chip to pick the sending number when you have several |
 | **Calls** | All / Missed / **Hidden** (hide calls instead of deleting; they go after 90 days with the rest), call back, text, block, **dial pad**; the missed-call badge clears when you look |
 | **Voicemail** | New / Old, player with seek bar and 1x / 1.5x / 2x, call back, text, move, block, delete |
 | **Settings** | the same switches as My Phone, plus **Notifications**, **Calling** and **App security** |
@@ -1173,6 +1173,10 @@ voip.ms API from the mapped DID.
   **SMS → Texts go out from**.
 - **Automatic** (no number set): the DID routed to that extension, else the
   **Default DID**, else the first route.
+- **Users with more than one number** get a **From** choice when texting a
+  phone number (a chip above the message box in the app, a dropdown in My
+  Phone). It starts on the number above; only their own numbers are offered,
+  and a conversation keeps the number they last used.
 
 ### Setup
 
