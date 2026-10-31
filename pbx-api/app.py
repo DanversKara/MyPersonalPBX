@@ -167,6 +167,10 @@ def _migrate(c):
     c.execute("CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(login_id, contact_id)")
     if "group_id" not in cols("inbound_routes"):
         c.execute("ALTER TABLE inbound_routes ADD COLUMN group_id INTEGER DEFAULT NULL")
+    # Sign-in log: "cleared" rows are hidden from the panel but kept for the
+    # security-log retention period (see LOG_KEEP).
+    if "hidden" not in cols("signins"):
+        c.execute("ALTER TABLE signins ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
     if "exten_since" not in cols("logins"):
         c.execute("ALTER TABLE logins ADD COLUMN exten_since TEXT DEFAULT NULL")
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_logins_exten_new AFTER INSERT ON logins
@@ -825,15 +829,15 @@ def dashboard(request: Request):
 <h3>Signed in now <span class="muted" style="font-weight:400" id="dev-note"></span></h3>
 <div class="scrollbox"><table><tr><th>Device</th><th>Ext</th><th>IP address</th><th>Where</th><th>Connection</th><th>Status</th><th>RTT</th></tr>
 <tbody id="devices"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div>
-<h3>Recent sign-ins <span class="muted" style="font-weight:400">last 24 hours, older entries are removed automatically</span></h3>
+<h3>Recent sign-ins <span class="muted" style="font-weight:400">last 24 hours (kept 90 days as security records, then deleted)</span></h3>
 <div class="bulkbar">
-<button class="btn ghost" id="si-delsel" disabled onclick="deleteSignins(false)">Delete selected</button>
-<button class="btn ghost danger" id="si-delall" onclick="deleteSignins(true)">Delete all</button>
+<button class="btn ghost" id="si-delsel" disabled onclick="deleteSignins(false)" title="Hides them here; the records stay in the database for 90 days">Clear selected from view</button>
+<button class="btn ghost" id="si-delall" onclick="deleteSignins(true)" title="Hides them here; the records stay in the database for 90 days">Clear all from view</button>
 <span class="muted" id="si-note"></span>
 </div>
 <div class="scrollbox"><table><tr><th><input type="checkbox" id="si-all" aria-label="Select all"></th><th>Login</th><th>IP</th><th>Result</th><th>When</th></tr>
 <tbody id="signins"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody></table></div>
-<h3>Activity <span class="muted" style="font-weight:400">security events and changes, last 24 hours (older entries are removed automatically)</span></h3>
+<h3>Activity <span class="muted" style="font-weight:400">security events and changes, last 24 hours (kept 90 days as security records, then deleted)</span></h3>
 <div class="bulkbar">
 <label class="muted"><input type="checkbox" id="act-sec"> Security events only</label>
 <span class="muted" id="act-note"></span>
@@ -1036,7 +1040,7 @@ function siSync() {
   SI_IDS.forEach(id => { const b = document.querySelector('input.si[value="' + id + '"]'); if (b) b.checked = SI_SEL.has(id); });
   const n = SI_SEL.size, all = document.getElementById('si-all');
   const btn = document.getElementById('si-delsel');
-  btn.disabled = !n; btn.textContent = n ? 'Delete selected (' + n + ')' : 'Delete selected';
+  btn.disabled = !n; btn.textContent = n ? 'Clear selected from view (' + n + ')' : 'Clear selected from view';
   all.checked = n > 0 && SI_IDS.length > 0 && SI_IDS.every(id => SI_SEL.has(id));
   all.indeterminate = n > 0 && !all.checked;
   document.getElementById('si-delall').disabled = !SI_IDS.length;
@@ -1050,12 +1054,12 @@ document.getElementById('signins').addEventListener('change', e => {
 });
 async function deleteSignins(all) {
   const n = all ? STATS.total : SI_SEL.size;
-  if (!confirm(all ? 'Delete ALL sign-in entries (' + n + ')?' : 'Delete ' + n + ' selected sign-in entr' + (n === 1 ? 'y' : 'ies') + '?')) return;
+  if (!confirm((all ? 'Clear all ' + n + ' sign-in entries from this list?' : 'Clear ' + n + ' selected sign-in entr' + (n === 1 ? 'y' : 'ies') + ' from this list?') + '\n\nThey stay in the database for 90 days and still show on each user\'s Activity page.')) return;
   const r = await fetch('/api/v1/signins/delete', {method: 'POST', credentials: 'same-origin',
     headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
     body: JSON.stringify(all ? {all: true} : {ids: [...SI_SEL]})});
   let msg = 'Failed: HTTP ' + r.status;
-  if (r.ok) { msg = 'Deleted ' + (await r.json()).deleted + '.'; SI_SEL.clear(); }
+  if (r.ok) { msg = 'Cleared ' + (await r.json()).deleted + ' from the list (kept 90 days as security records).'; SI_SEL.clear(); }
   else { try { const j = await r.json(); if (j.detail) msg += ' ' + j.detail; } catch (_) {} }
   document.getElementById('si-note').textContent = msg;
   await loadSignins(); renderStats();
@@ -4065,27 +4069,35 @@ def _party_label(v: str, by_ext: dict):
 
 @app.get("/api/v1/signins")
 def v1_signins(request: Request, limit: int = 50, failed_only: int = 0):
-    """Panel sign-in history (admin). Only the last 24 hours are kept."""
+    """Panel sign-in history (admin): the last 24 hours. Older rows stay in
+    the database for LOG_KEEP (security records), but the panel doesn't show them."""
     _v1_admin(request)
     _purge_signins()
     limit = max(1, min(limit, 200))
-    q = "SELECT id, login, at, ip, ok FROM signins"
+    shown = "hidden=0 AND at >= datetime('now', '%s')" % LOG_SHOW
+    q = "SELECT id, login, at, ip, ok FROM signins WHERE " + shown
     if failed_only:
-        q += " WHERE ok = 0"
+        q += " AND ok = 0"
     q += " ORDER BY id DESC LIMIT ?"
     with db() as c:
         rows = c.execute(q, (limit,)).fetchall()
-        ok24, fail24 = c.execute("SELECT COALESCE(SUM(ok=1),0), COALESCE(SUM(ok=0),0) FROM signins").fetchone()
+        ok24, fail24 = c.execute("SELECT COALESCE(SUM(ok=1),0), COALESCE(SUM(ok=0),0) FROM signins WHERE "
+                                 + shown).fetchone()
     return {"signins": [dict(r) for r in rows],
             "counts": {"ok_24h": ok24, "failed_24h": fail24, "total": ok24 + fail24},
             "retention_hours": 24}
 
 
 # ---------------------------------------------------------------- log housekeeping
-# Sign-in log: rolling 24 hours (older rows are deleted automatically).
-# Admins can also delete selected rows or everything, for sign-ins and CDRs.
+# Security records (sign-in log, security events, change log): the panel
+# shows the last 24 hours (LOG_SHOW); the database keeps them for 90 days
+# (LOG_KEEP), long enough to answer a records request or a preservation
+# letter, then deletes them. Clearing sign-ins in the panel only hides them.
+# CDRs: 90 days; admins can delete them.
 
-SIGNIN_RETENTION = "-1 day"
+LOG_SHOW = "-1 day"
+LOG_KEEP = "-90 days"
+SIGNIN_RETENTION = LOG_KEEP
 CDR_RETENTION = "-90 days"     # call history (started_at is server local time)
 
 
@@ -4164,8 +4176,19 @@ def v1_signins_delete(request: Request, body: DeleteIn):
     actor = _v1_admin(request)
     _check_csrf_v1(request)
     _safety_allows_mutation()
-    n = _delete_rows("signins", body.ids, body.all)
-    _audit_log(actor["username"], "signins.delete", "all" if body.all else f"{n} rows")
+    # Hidden from the panel, not deleted: security records are kept LOG_KEEP.
+    with db() as c:
+        if body.all:
+            n = c.execute("UPDATE signins SET hidden=1 WHERE hidden=0").rowcount
+        else:
+            ids = [int(i) for i in (body.ids or [])][:5000]
+            n = 0
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                n += c.execute(f"UPDATE signins SET hidden=1 WHERE id IN ({','.join('?' * len(chunk))})",
+                               chunk).rowcount
+        c.commit()
+    _audit_log(actor["username"], "signins.clear", "all" if body.all else f"{n} rows")
     return {"deleted": n}
 
 

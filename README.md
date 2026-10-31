@@ -1042,8 +1042,8 @@ often need the matching PBX side.
 
 | Data | Kept for |
 |---|---|
-| Sign-in log | 24 hours |
-| Security events in the Activity feed | 24 hours (the change log itself is kept, including recording-consent records) |
+| Sign-in log, security events, change log | shown for 24 hours on the dashboard; kept **90 days** in the database, then deleted. **Logins → Activity** shows a user's full 90 days (sign-ins with IPs, changes, security events; or 30 / 7 days / 24 hours) and downloads a report. "Clear from view" on the dashboard only hides rows |
+| Privacy-request and recording-consent records | 24 months |
 | Call history | 90 days (users can't delete it) |
 | Voicemail, recordings, texts | until deleted |
 

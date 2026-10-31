@@ -177,6 +177,10 @@ def build_export(login_id):
         fax_in = [dict(r) for r in c.execute(
             "SELECT f.* FROM faxes f JOIN fax_recipients r ON r.fax_id=f.id WHERE r.login_id=? ORDER BY f.id",
             (login_id,))]
+        activity = [dict(r) for r in c.execute(
+            "SELECT at, action, detail FROM audit WHERE actor=? ORDER BY id", (me["username"],))]
+        sign_ins = [dict(r) for r in c.execute(
+            "SELECT at, ip, ok FROM signins WHERE login=? ORDER BY id", (me["username"],))]
         fax_out = [dict(r) for r in c.execute(
             "SELECT * FROM fax_outbox WHERE login_id=? AND status!='deleted' ORDER BY id", (login_id,))]
     calls = ucp._my_calls(me, limit=10 ** 7)
@@ -208,6 +212,9 @@ def build_export(login_id):
         z.writestr("messages.csv", _csv(
             [dict(r, contact=r.get("peer_name", "")) for r in msgs],
             ["sent_at", "from_ext", "to_ext", "contact", "via_did", "body"]))
+        z.writestr("sign_ins.csv", _csv([dict(r, result="signed in" if r["ok"] else "failed") for r in sign_ins],
+                                        ["at", "ip", "result"]))
+        z.writestr("activity.csv", _csv(activity, ["at", "action", "detail"]))
         z.writestr("contacts.csv", _csv(contacts, ["name", "number", "org", "email", "created_at", "updated_at"]))
         z.writestr("contact_notes.csv", _csv(notes, ["contact_id", "item_type", "item_at", "body", "created_at"]))
 
@@ -268,6 +275,8 @@ messages.csv         text messages, SMS/MMS and internal ({counts['messages']});
 voicemail.csv        voicemail list; audio files in voicemail/ ({counts['voicemail']})
 recordings.csv       call recordings you made; audio in recordings/ ({counts['recordings']})
 faxes_received.csv   faxes you received, faxes_sent.csv faxes you sent; files in faxes/
+sign_ins.csv         panel and app sign-ins (time, IP address), kept 90 days
+activity.csv         changes you made on your account (settings, deletions...), kept 90 days
 contacts.csv         your contacts ({counts['contacts']}), contact_notes.csv your notes
 
 CSV files open in any spreadsheet app. Times are as stored by the phone system.
