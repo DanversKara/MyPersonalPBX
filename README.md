@@ -94,6 +94,15 @@ It’s a work in progress, and I’m looking forward to seeing where it goes.
 
 ## 1. What you get
 
+**Free on its own; real phone numbers need a VoIP provider.** Without a
+provider, own-pbx is internal only: calls, messages, voicemail and
+push-to-talk between everyone on your PBX are free, wherever they are, as long
+as they have the My Phone app (or any SIP app) and an internet connection to
+your PBX. Calls to and from regular phone numbers, SMS/MMS, 911/E911 and fax
+need a SIP trunk provider; own-pbx is built and tested with
+[voip.ms](https://voip.ms/en/invite/MjM2MjQ4) (referral link: voip.ms adds a
+bonus credit when you deposit $15 or more, and we may get a credit too).
+
 **Calling**
 - Extensions (phones) with their own voicemail, call forwarding, Do Not
   Disturb and ring time.
@@ -117,7 +126,8 @@ It’s a work in progress, and I’m looking forward to seeing where it goes.
 
 **Panels**
 - **Admin panel**: users, trunks, routes, ring groups, IVR, call records,
-  recordings, voicemail, , billing, email, network, E911, reports, API keys.
+  recordings, voicemail, faxes, call flow (time conditions, caller ID rules),
+  billing, email, network, E911, reports, privacy requests, API keys.
 - **My Phone** for every user: calls, voicemail, recordings, texts, IVR,
   billing and settings, also on a phone screen.
 - **My Phone app for Android**: texts, calls, voicemail and settings with
@@ -127,8 +137,9 @@ It’s a work in progress, and I’m looking forward to seeing where it goes.
 - Extension-to-extension texts from phones and from My Phone, emailed to the
   recipient if they want; block list, reports and on/off switches.
 - **Two-way SMS/MMS with the outside world through voip.ms** (see section 21):
-  each DID routes to an extension — inbound via URL callback plus a polling
-  safety net, outbound via the voip.ms API from Zoiper, My Phone or ESP/HA devices.
+  each DID routes to an extension — inbound via the voip.ms URL callback, the
+  "link to a SIP account" option, or both (a 60-second poller picks texts up
+  either way); replies go out from the number the contact texted, outbound via the voip.ms API from Zoiper, My Phone or ESP/HA devices.
 
 **Safety and security**
 - Kill switch (stop every call at once) and safety lock (freeze admin changes only, or everything including My Phone).
@@ -662,6 +673,18 @@ See section 12.
 Calls and texts that users reported from My Phone. Mark them resolved,
 reopen or delete them. To stop someone, disable their login.
 
+### Privacy
+Users ask for a copy of their data or for their account to be deleted at
+`/ucp/delete` (linked from My Phone → Settings and the app's Settings → Account;
+also the account-deletion link for app store listings). The **Privacy** page
+lists open requests with their deadlines (data copies 30 days, deletions 90),
+and lets you **Build & email download** (a zip of account details, calls,
+texts, voicemail, recordings, faxes and contacts, emailed as a 7-day link that
+needs no sign-in), **Delete account now** (the same wipe as Logins → Delete)
+or **Decline** with a reason. Users get email receipts and confirmations; you
+get an email for each new request. Settings: a contact address shown to people
+who can't sign in, and optional automatic data downloads. Needs Email set up.
+
 ### API Keys
 ![API keys](docs/screenshots/19-api-keys.png)
 Bearer tokens for the REST API (`docs/API.md`) and for the edge's security
@@ -698,6 +721,7 @@ see section 16) with their panel username and password.
 | **IVR** | personal menus (if their plan allows) |
 | **Billing** | choose, switch or cancel a plan (Stripe) |
 | **App** | pair the Android app: **Get a pairing code** shows a QR code, tap-to-copy code and server, and an *Open in the My Phone app* button; **Show phone login QR** gives the app its phone login; see and sign out signed-in phones |
+| **Delete account** | `/ucp/delete`: ask for a copy of your data (emailed as a download link) or for the account to be deleted within 90 days; cancel until it's done |
 | **Settings** | DND, forwarding, ring time, answer with IVR, "Record my calls" (with legal acknowledgement), notification email, text emails on/off, receive/send texts on/off, call filtering (block list: per number choose "not in service", straight to voicemail, or forward to another number), 911 notice, phone setup, SIP password, panel password |
 
 ![Overview](docs/screenshots/20-myphone-overview.png)
@@ -749,8 +773,11 @@ the Notifications and Calling settings.*
 | **Voicemail** | New / Old, player with seek bar and 1x / 1.5x / 2x, call back, text, move, block, delete |
 | **Settings** | the same switches as My Phone, plus **Notifications**, **Calling** and **App security** |
 
-**Get it:** GitHub **Actions → Android app** → latest green run →
-**Artifacts → my-phone-debug-apk**, unzip, and open the `.apk` on the phone.
+**Get it:** download the latest `my-phone-<version>.apk` from
+[Releases](https://github.com/DanversKara/OwnPBX.org/releases/latest) and open
+it on the phone (Google Play listing coming soon). The GitHub version tells
+you when there's an update; **Update** downloads it in the browser, then tap it
+to install. Play installs update through Play.
 
 **Connect:** the easiest way is **Sign in with my browser** in the app: it
 opens My Phone in an in-app browser tab, you sign in there (password or single
@@ -761,8 +788,10 @@ app tap **Scan QR code** (or scan with the phone's camera, tap *Open in the My
 Phone app* on the phone itself, or type the code). The app never sees the
 panel password; each phone stays signed in for 60 days after it was last used.
 
-**Calls:** in the app, **Settings → Calling → Phone login → Get from my PBX →
-Save**. Calls go through the edge like a remote Zoiper (TLS 5061, SRTP). For
+**Calls:** nothing to set up: on first sign-in the app gets its phone login
+from the PBX by itself (and keeps it current if the PBX's address or the
+extension's phone password changes). **Settings → Calling → Phone login** is
+only for typing a different login by hand. Calls go through the edge like a remote Zoiper (TLS 5061, SRTP). For
 incoming calls the app signs in on the extension's app line,
 `<sip_username>-app` (created for every extension, same password and caller
 ID), never on the main line, so desk phones and Zoiper stay signed in; the PBX
@@ -999,8 +1028,9 @@ or replace `/root/own-pbx` with the new version and run
 config (`pjsip.conf`) are applied automatically, and your data and settings
 stay.
 
-**Android app:** install the newest APK from **Actions → Android app** over
-the old one. After an app update, run `pbx-update` too: new app features
+**Android app:** tap **Update** when the app offers one (or install the newest
+APK from [Releases](https://github.com/DanversKara/OwnPBX.org/releases/latest)
+over the old one); Play installs update through Play. After an app update, run `pbx-update` too: new app features
 often need the matching PBX side.
 
 **Edge:** copy the new `kamailio/` folder to `/root/kamailio`, then run
@@ -1095,8 +1125,11 @@ docs/           API.md (REST API), SCREENSHOTS.md (all screenshots), screenshots
 
 ## 21. SMS/MMS with voip.ms
 
-> Need a VoIP provider? Here is a [voip.ms referral link](https://voip.ms/en/invite/MjM2MjQ4)
-> to get your own account — reasonable plans that work with this project.
+> Texts between extensions are free and need no provider. Texting regular
+> phone numbers needs one: sign up with our
+> [voip.ms referral link](https://voip.ms/en/invite/MjM2MjQ4) and voip.ms adds
+> a bonus credit when you deposit $15 or more (check voip.ms for the current
+> offer; we may get a credit too).
 
 Your voip.ms DIDs can send and receive real SMS/MMS, routed to your
 extensions. Each DID maps to one extension: inbound texts go to that
@@ -1106,12 +1139,13 @@ voip.ms API from the mapped DID.
 
 ### How it works
 
-**Inbound — two paths, no lost messages:**
+**Inbound — two paths, no lost messages.** Use either one or both:
 - **URL callback (instant):** voip.ms fires a GET/POST to
   `https://<your-panel>/hooks/voipms-sms` with `to, from, message, id, date`.
   The PBX checks the token, dedupes by message ID, looks up the DID route,
   stores the message, and pushes it to Zoiper via SIP MESSAGE.
-- **Poller (safety net, every 60s):** callbacks can misfire (tunnel hiccup,
+- **Poller (every 60s, always on):** works with or without the callback.
+  Callbacks can misfire (tunnel hiccup,
   timeout). A background thread polls voip.ms `getSMS`/`getMMS` per routed
   DID and ingests anything the webhook missed. Same dedupe table, so nothing
   is ever delivered twice. Webhook = instant, poll = source of truth.
@@ -1144,12 +1178,24 @@ the configured default DID, else the first route.
    and set an **API password** (separate from your portal login password).
    The API username is your **portal login email** — not the account number.
 2. **DID Numbers → Manage DIDs → edit each DID → Message Service (SMS/MMS):**
-   enable it, paste the webhook URL from the PBX's **SMS** page
-   (`https://<panel>/hooks/voipms-sms?token=...&to={TO}&from={FROM}&message={MESSAGE}&id={ID}&date={TIMESTAMP}`),
-   choose E.164 number format, turn on callback retry, Apply.
+   enable it, choose **E.164** for *Dialing Mode for SMS*, then tick **one or
+   both**:
+   - **SMS/MMS URL Callback** (instant): paste the webhook URL from the PBX's
+     **SMS** page
+     (`https://<panel>/hooks/voipms-sms?token=...&to={TO}&from={FROM}&message={MESSAGE}&id={ID}&date={TIMESTAMP}`)
+     and turn on *URL Callback and Webhook URL Retrying*. Needs the panel
+     reachable from the internet.
+   - **Link the SMS received to this DID to a SIP Account**: pick the
+     sub-account your PBX trunk signs in with. Texts arrive within about a
+     minute through the poller; no public webhook needed.
+
+   With both, texts arrive instantly and the poller is the backup; nothing is
+   delivered twice. Apply changes.
 3. **PBX → SMS page:** add one route per DID (DID → extension), fill in the
-   API username/password. The page shows the exact webhook URL to paste.
-4. Test: text the DID from your mobile → Zoiper should pop within seconds.
+   API username/password (the poller needs them, whichever option you use).
+   The page shows the exact webhook URL to paste.
+4. Test: text the DID from your mobile → Zoiper should pop within seconds
+   (about a minute with the SIP account link only).
    Reply from Zoiper → your mobile gets it from the DID.
 
 Details, troubleshooting and the ESP API shapes: `docs/VOIPMS_SMS_SETUP.md`.

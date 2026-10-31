@@ -1045,17 +1045,21 @@ async def msg_send(request: Request):
             if sent_month >= int(me["max_messages"] or 0):
                 return RedirectResponse(back + "msg=msgquota", status_code=303)
             cfg = voipms_sms.get_voipms_config(c)
-            sender_did = voipms_sms.lookup_sender_did(c, me["exten"])
+            dest_e164 = voipms_sms.e164(to)
+            # Reply from the number this conversation is on (the DID the
+            # contact texted), like Zoiper replies; else the extension's route,
+            # then the default DID.
+            sender_did = (voipms_sms.lookup_conversation_did(c, me["exten"], dest_e164)
+                          or voipms_sms.lookup_sender_did(c, me["exten"]))
             if not sender_did or not cfg.get("voipms_api_username") or not cfg.get("voipms_api_password"):
                 return RedirectResponse(back + "msg=msgto", status_code=303)
-            dest_e164 = voipms_sms.e164(to)
             now = _t.time()
             recent = [x for x in _send_times.get(me["id"], []) if now - x < 60]
             if len(recent) >= MSG_RATE:
                 return RedirectResponse(back + "msg=msgrate", status_code=303)
             _send_times[me["id"]] = recent + [now]
-            c.execute("INSERT INTO messages (from_ext, to_ext, body, login_id) VALUES (?,?,?,?)",
-                      (me["exten"], dest_e164, body, me["id"]))
+            c.execute("INSERT INTO messages (from_ext, to_ext, body, login_id, via_did) VALUES (?,?,?,?,?)",
+                      (me["exten"], dest_e164, body, me["id"], voipms_sms.normalize_did(sender_did)))
             c.commit()
             # Send via voip.ms API (outside DB lock)
             try:

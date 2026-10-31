@@ -12,7 +12,11 @@ PortSIP does the same thing with a built-in webhook; here we built that webhook 
 1. Main Menu > SOAP and REST/JSON API > Enable API. Set an **API Password** (shown once, save it). This is different from your login password.
 2. For each of your 4 DIDs: DID Numbers > Manage DIDs > Edit (pencil)
    - Message Service (SMS/MMS): Enable
-   - SMS URL Callback: paste the webhook URL from the PBX (see below)
+   - Tick one or both (either works):
+     - **SMS URL Callback** (instant): paste the webhook URL from the PBX (see below)
+     - **Link the SMS received to this DID to a SIP Account**: pick your PBX's sub-account.
+       Texts arrive within about a minute via the PBX's poller (needs the API
+       username/password on the PBX's SMS page); no public webhook needed.
    - Number format: **E.164** (e.g. +15551234567)
    - Apply changes
 3. Optional but recommended: enable **URL Callback Retry** - the PBX returns plain `ok` so voip.ms won't retry forever.
@@ -28,7 +32,7 @@ PortSIP does the same thing with a built-in webhook; here we built that webhook 
      ```
      https://<your-pbx>/hooks/voipms-sms?token=<token>&to={TO}&from={FROM}&message={MESSAGE}&id={ID}&date={TIMESTAMP}
      ```
-3. Make the webhook reachable from the internet:
+3. Only if you use the URL Callback, make the webhook reachable from the internet:
    - Via Cloudflare Tunnel / Nginx Proxy Manager to `http://<pbx-ip>:8001`
    - `/hooks/voipms-sms` is in `REMOTE_ALLOWED_PREFIXES`, so it works through the tunnel even when admin pages are LAN-only.
    - Test: `curl "https://<your-pbx>/hooks/voipms-sms?token=<token>"` should return `ok`.
