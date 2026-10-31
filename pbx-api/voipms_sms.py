@@ -299,6 +299,25 @@ def mms_row_to_body(row) -> str:
     return "\n".join(parts)[:1600]
 
 
+def numbers_for_exten(c, exten: str) -> list:
+    """DIDs an extension may text from: those routed to it, plus the number
+    the admin chose for it on the SMS page. Ordered, no duplicates."""
+    digits = "".join(ch for ch in (exten or "") if ch.isdigit())
+    if not digits:
+        return []
+    out = [r["did"] for r in c.execute(
+        "SELECT did FROM did_sms_routes WHERE (',' || dest_exten || ',') LIKE ? ORDER BY did",
+        ("%,{},%".format(digits),))]
+    try:
+        r = c.execute("SELECT s.did FROM sms_sender_did s JOIN did_sms_routes d ON d.did=s.did"
+                      " WHERE s.exten=?", (digits,)).fetchone()
+        if r and r[0] and r[0] not in out:
+            out.insert(0, r[0])
+    except Exception:
+        pass
+    return out
+
+
 def lookup_sender_did_auto(c, from_exten: str) -> str:
     """What "Automatic" means for an extension (lookup_sender_did without the
     admin's per-extension choice), for the SMS page."""
